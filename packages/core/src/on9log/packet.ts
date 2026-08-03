@@ -205,6 +205,15 @@ export function parseOn9logHeader(packet: Uint8Array): On9logPacketHeader {
  */
 export function parseOn9logPacket(packet: Uint8Array): On9logPacket {
   const header = parseOn9logHeader(packet);
+  if (header.payloadLen !== ON9LOG_PAYLOAD_LEN_STREAMING) {
+    // non-streaming packets must match the declared payload length exactly
+    const expected = ON9LOG_HEADER_SIZE + header.payloadLen;
+    if (packet.length !== expected) {
+      throw new On9logParseError(
+        `on9log packet length ${packet.length} does not match declared payload length ${header.payloadLen}`,
+      );
+    }
+  }
   const payload = packet.subarray(ON9LOG_HEADER_SIZE);
 
   switch (header.type) {

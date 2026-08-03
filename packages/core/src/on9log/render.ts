@@ -219,7 +219,8 @@ export function renderFormat(
       case "G": {
         const arg = nextArg(args, state.argIndex++, `%${conv}`);
         const value = doubleArgValue(arg, `%${conv}`);
-        const rendered = value.toExponential(precision ?? 6);
+        let rendered = value.toExponential(precision ?? 6);
+        if (conv === "E" || conv === "G") rendered = rendered.toUpperCase();
         out.push(padString(rendered, width, flags));
         break;
       }

@@ -238,3 +238,25 @@ describe("security guards", () => {
     expect(() => parseOn9logPacket(bytes)).toThrow(/exceeds limit/);
   });
 });
+
+describe("printf float paths", () => {
+  test("%e and %g conversions", () => {
+    // printf %e: 6 fractional digits by default
+    expect(renderFormat("%e", [FLOAT(3.14159)])).toBe("3.141590e+0");
+    expect(renderFormat("%E", [FLOAT(3.14159)])).toBe("3.141590E+0");
+    // %g is simplified to exponential form (documented deviation)
+    expect(renderFormat("%g", [FLOAT(3.14159)])).toBe("3.141590e+0");
+    expect(renderFormat("%.2e", [FLOAT(3.14159)])).toBe("3.14e+0");
+  });
+
+  test("float precision and width", () => {
+    expect(renderFormat("%8.2f", [FLOAT(3.14159)])).toBe("    3.14");
+    expect(renderFormat("%08.2f", [FLOAT(3.14159)])).toBe("00003.14");
+    expect(renderFormat("%.0f", [FLOAT(3.7)])).toBe("4");
+    expect(renderFormat("%f", [FLOAT(-2.5)])).toBe("-2.500000");
+  });
+
+  test("64-bit negative floats", () => {
+    expect(renderFormat("%.1f", [FLOAT(-3.5)])).toBe("-3.5");
+  });
+});

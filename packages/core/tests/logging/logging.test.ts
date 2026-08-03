@@ -234,3 +234,31 @@ async function ingestWithoutArtifact() {
     });
   }
 }
+
+describe("summarizeArgs", () => {
+  const { summarizeArgs } = require("@soulcloud/core") as typeof import("@soulcloud/core");
+
+  test("summarizes log packets", () => {
+    const packet = demoLogPackets().find((p) => {
+      try {
+        return parseOn9logPacket(p).kind === "log";
+      } catch {
+        return false;
+      }
+    })!;
+    const summary = summarizeArgs(packet);
+    expect(summary).not.toBeNull();
+    expect(summary!.argCount).toBeGreaterThanOrEqual(0);
+    expect(typeof summary!.hasStrings).toBe("boolean");
+  });
+
+  test("returns null for invalid input and non-log packets", () => {
+    expect(summarizeArgs(new Uint8Array([0x00]))).toBeNull();
+    // DROPPED packet
+    const dropped = new Uint8Array([
+      0x9a, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x2a, 0x00, 0x00, 0x00,
+    ]);
+    expect(summarizeArgs(dropped)).toBeNull();
+  });
+});

@@ -8,6 +8,7 @@ import { pollOnce } from "../../src/mqtt/publish";
 import {
   decodeDeviceCommandExecution,
   encodeDeviceCommandResult,
+  encodeDeviceStat,
 } from "@soulcloud/core";
 
 // Integration tests for the embedded Aedes broker.
@@ -299,6 +300,115 @@ describe("command delivery loop", () => {
     expect(completed.resultCode).toBe(0);
     expect(completed.resultPacket).toEqual(resultPacket);
 
+    device.end(true);
+  });
+});
+
+describe("log/stat uplink ingestion", () => {
+  test("device log packets are stored as raw events", async () => {
+    // a minimal valid on9log LOG packet (streaming, no args)
+    const packet = new Uint8Array([
+      0x9a, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00,
+    ]);
+    const device = connectDevice();
+    await waitForConnect(device);
+    await new Promise<void>((resolve, reject) => {
+      device.publish(`soulcloud/v1/devices/${DEVICE_UID}/log`, Buffer.from(packet), { qos: 1 }, (e) =>
+        e ? reject(e) : resolve(),
+      );
+      setTimeout(() => reject(new Error("log publish timeout")), 5000);
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    const events = await prisma.rawLogEvent.findMany({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events[0]!.packetType).toBe(0);
+    expect(events[0]!.rawPacket).toEqual(Buffer.from(packet));
+    expect(events[0]!.decodeState).toBe("unknown_fw"); // no firmware state yet
+
+    // cleanup this test's events
+    await prisma.rawLogEvent.deleteMany({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    device.end(true);
+  });
+
+  test("invalid log packets are dropped without storage", async () => {
+    const before = await prisma.rawLogEvent.count({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    const device = connectDevice();
+    await waitForConnect(device);
+    await new Promise<void>((resolve) => {
+      device.publish(`soulcloud/v1/devices/${DEVICE_UID}/log`, Buffer.from([0x00, 0x01]), { qos: 0 }, () =>
+        resolve(),
+      );
+      setTimeout(resolve, 1000);
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const after = await prisma.rawLogEvent.count({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    expect(after).toBe(before);
+    device.end(true);
+  });
+
+  test("stat updates the device firmware state", async () => {
+    const fw = new Uint8Array([0xaa, 0xbb, 0xcc]);
+    const device = connectDevice();
+    await waitForConnect(device);
+    await new Promise<void>((resolve, reject) => {
+      device.publish(
+        `soulcloud/v1/devices/${DEVICE_UID}/stat`,
+        Buffer.from(
+          encodeDeviceStat({
+            sn: new Uint8Array(4),
+            fw,
+            up: 5n,
+            rst: "watchdog",
+          }),
+        ),
+        { qos: 1 },
+        (e) => (e ? reject(e) : resolve()),
+      );
+      setTimeout(() => reject(new Error("stat publish timeout")), 5000);
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    const state = await prisma.deviceFirmwareState.findFirstOrThrow({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    expect(state.fwHash).toBe("aabbcc");
+
+    // second stat updates the hash
+    await new Promise<void>((resolve, reject) => {
+      device.publish(
+        `soulcloud/v1/devices/${DEVICE_UID}/stat`,
+        Buffer.from(
+          encodeDeviceStat({
+            sn: new Uint8Array(4),
+            fw: new Uint8Array([0x01]),
+            up: 6n,
+            rst: "power-on",
+          }),
+        ),
+        { qos: 1 },
+        (e) => (e ? reject(e) : resolve()),
+      );
+      setTimeout(() => reject(new Error("stat publish timeout")), 5000);
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const updated = await prisma.deviceFirmwareState.findFirstOrThrow({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    expect(updated.fwHash).toBe("01");
+
+    await prisma.deviceFirmwareState.deleteMany({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
     device.end(true);
   });
 });

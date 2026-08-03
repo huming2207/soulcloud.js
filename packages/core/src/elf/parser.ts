@@ -332,6 +332,7 @@ export function readStringAtVaddr(
   }
   for (const sec of elf.sections) {
     if (sec.type === SHT_NOBITS || sec.size === 0n) continue;
+    if ((sec.flags & 2n) === 0n) continue; // only allocated sections have runtime addresses
     if (target >= sec.addr && target < sec.addr + sec.size) {
       return readBounded(data, sec.offset + (target - sec.addr), sec.offset + sec.size, maxLen);
     }
