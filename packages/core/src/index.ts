@@ -14,6 +14,7 @@ export * from "./queue/enqueue";
 export * from "./queue/lease";
 export * from "./queue/acknowledge";
 export * from "./queue/result";
+export * from "./queue/notify";
 export { prisma, ping } from "./db";
 export { SharedEnv, loadEnv } from "./config";
 export type { Config } from "./config";

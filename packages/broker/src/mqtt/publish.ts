@@ -35,33 +35,55 @@ export interface PollerLog {
   debug: (msg: string, fields?: Record<string, unknown>) => void;
 }
 
+export interface CommandPoller {
+  /** Stops the poller. */
+  stop: () => void;
+  /** Triggers an immediate poll cycle (lossy wake-up hint). */
+  wake: () => void;
+}
+
 /**
  * Starts the command publication poller.
  *
- * @returns a function that stops the poller.
+ * Polls on a fixed interval, and also immediately when `wake()` is called
+ * (used by the LISTEN/NOTIFY wake-up). A cycle already in progress is not
+ * restarted: it re-polls on its own afterwards.
  */
 export function startCommandPoller(
   aedes: Aedes,
   prisma: PrismaClient,
   options: PollerOptions,
   log: PollerLog,
-): () => void {
+): CommandPoller {
   let running = false;
   let stopped = false;
 
-  const timer = setInterval(async () => {
+  const poll = async () => {
     if (running || stopped) return;
     running = true;
     try {
       await pollOnce(aedes, prisma, options, log);
+    } catch (error) {
+      // pollOnce handles expected errors; this guards against unexpected
+      // failures so a bad cycle never becomes an unhandled rejection.
+      log.warn("command poll cycle failed", {
+        error: (error as Error).message,
+      });
     } finally {
       running = false;
     }
-  }, options.pollIntervalMs);
+  };
 
-  return () => {
-    stopped = true;
-    clearInterval(timer);
+  const timer = setInterval(poll, options.pollIntervalMs);
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+    wake: () => {
+      void poll();
+    },
   };
 }
 

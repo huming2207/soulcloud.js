@@ -11,10 +11,12 @@
   "dependencies": {
     "@soulcloud/core": "workspace:*",
     "aedes": "^1.1.1",
+    "pg": "^8.22.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/pg": "^8.20.3",
     "mqtt": "^5.15.2",
     "typescript": "^5"
   }

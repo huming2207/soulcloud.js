@@ -11,6 +11,7 @@ import { prisma } from "@soulcloud/core";
 import { startBroker } from "./mqtt/broker";
 import { attachDispatch } from "./mqtt/dispatch";
 import { startCommandPoller } from "./mqtt/publish";
+import { startCommandNotifier } from "./mqtt/notify";
 import { loadBrokerConfig } from "./config";
 
 const config = loadBrokerConfig();
@@ -29,7 +30,7 @@ const logger = {
 
 const { aedes, close: closeBroker } = await startBroker(prisma, config.MQTT_BROKER_PORT);
 attachDispatch(aedes, prisma, logger);
-const stopPoller = startCommandPoller(
+const poller = startCommandPoller(
   aedes,
   prisma,
   {
@@ -39,13 +40,17 @@ const stopPoller = startCommandPoller(
   },
   logger,
 );
+// Wake the poller immediately when the API process enqueues commands
+// (lossy hint; the poll interval remains the correctness fallback).
+const notifier = await startCommandNotifier(config.DATABASE_URL, () => poller.wake(), logger);
 console.log(
   `[soulcloud-broker] MQTT broker listening on tcp://0.0.0.0:${config.MQTT_BROKER_PORT}`,
 );
 
 async function shutdown(signal: string) {
   console.log(`[soulcloud-broker] received ${signal}, shutting down`);
-  stopPoller();
+  poller.stop();
+  await notifier.close();
   await closeBroker();
   await prisma.$disconnect();
   process.exit(0);

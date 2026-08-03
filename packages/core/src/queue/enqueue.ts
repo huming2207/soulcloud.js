@@ -14,6 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { CommandQueueError } from "./errors";
+import { COMMAND_NOTIFY_CHANNEL } from "./notify";
 import type { DeviceCommand } from "../protocol/command";
 import { encodeDeviceCommandExecution } from "../protocol/command";
 import { commandExecution } from "../protocol/topic";
@@ -129,6 +130,11 @@ export async function enqueueBatch(
     });
 
     await tx.deviceCommand.createMany({ data: rows });
+
+    // Wake up broker processes (lossy hint only; pg_notify inside a
+    // transaction is delivered only after commit). If no broker is
+    // listening, the poller picks the row up on its next interval.
+    await tx.$executeRaw`SELECT pg_notify(${COMMAND_NOTIFY_CHANNEL}, ${batchId})`;
 
     return { id: batchId, deviceCount };
   });
