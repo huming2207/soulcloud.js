@@ -1,0 +1,21 @@
+name: soulcloudjs
+
+services:
+  postgres:
+    image: postgres:18.3-alpine
+    environment:
+      POSTGRES_DB: soulcloud
+      POSTGRES_USER: soulcloud
+      POSTGRES_PASSWORD: soulcloud
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soulcloud -d soulcloud"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - postgres-data:/var/lib/postgresql
+
+volumes:
+  postgres-data:

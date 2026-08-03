@@ -1,0 +1,128 @@
+// SoulcloudJS database schema.
+//
+// PostgreSQL CHECK constraints that Prisma cannot represent are documented
+// beside each field and enforced via raw SQL in the initial migration.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String              @id @default(uuid()) @db.Uuid
+  /// CHECK users_username_not_blank: btrim(username) <> ''
+  username     String              @unique @db.VarChar(64)
+  /// CHECK users_password_hash_not_blank: btrim(password_hash) <> ''
+  passwordHash String              @map("password_hash") @db.Text
+  /// CHECK users_email_not_blank: btrim(email) <> ''
+  email        String              @unique @db.VarChar(254)
+  memberships  OrganisationUser[]
+
+  @@map("users")
+}
+
+model Organisation {
+  id           String                @id @default(uuid()) @db.Uuid
+  /// CHECK organisations_name_not_blank: btrim(name) <> ''
+  name         String                @db.VarChar(255)
+  /// CHECK organisations_website_url_not_blank: btrim(website_url) <> ''
+  websiteUrl   String                @map("website_url") @db.Text
+  userMembers  OrganisationUser[]
+  projectLinks OrganisationProject[]
+
+  @@map("organisations")
+}
+
+model Project {
+  id           String                @id @default(uuid()) @db.Uuid
+  /// CHECK projects_name_not_blank: btrim(name) <> ''
+  name         String                @db.VarChar(255)
+  orgLinks     OrganisationProject[]
+  devices      Device[]
+
+  @@map("projects")
+}
+
+model Device {
+  id               String           @id @default(uuid()) @db.Uuid
+  /// Hardware-reported identifier; globally unique.
+  /// CHECK devices_device_uid_not_blank: btrim(device_uid) <> ''
+  deviceUid        String           @unique @map("device_uid") @db.VarChar(128)
+  /// Human-assigned identifier; unique within one project.
+  /// CHECK devices_assigned_id_not_blank: btrim(assigned_id) <> ''
+  assignedId       String           @map("assigned_id") @db.VarChar(128)
+  /// CHECK devices_password_hash_not_blank: btrim(password_hash) <> ''
+  passwordHash     String           @map("password_hash") @db.Text
+  projectId        String           @map("project_id") @db.Uuid
+  project          Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  /// CHECK devices_next_command_sequence_positive: next_command_sequence > 0
+  nextCommandSeq   BigInt           @default(1) @map("next_command_sequence")
+  commands         DeviceCommand[]
+
+  @@unique([projectId, assignedId], map: "devices_project_assigned_id_unique")
+  @@map("devices")
+}
+
+model OrganisationUser {
+  organisationId String       @map("organisation_id") @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([organisationId, userId], map: "organisation_users_pkey")
+  @@index([userId], map: "organisation_users_user_id_idx")
+  @@map("organisation_users")
+}
+
+model OrganisationProject {
+  organisationId String       @map("organisation_id") @db.Uuid
+  projectId      String       @map("project_id") @db.Uuid
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([organisationId, projectId], map: "organisation_projects_pkey")
+  @@index([projectId], map: "organisation_projects_project_id_idx")
+  @@map("organisation_projects")
+}
+
+model CommandBatch {
+  id          String           @id @db.Uuid
+  /// CHECK command_batches_device_count_positive: device_count > 0
+  deviceCount Int              @map("device_count")
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz()
+  commands    DeviceCommand[]
+
+  @@map("command_batches")
+}
+
+model DeviceCommand {
+  id                String       @id @db.Uuid
+  batchId           String       @map("batch_id") @db.Uuid
+  batch             CommandBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  deviceId          String       @map("device_id") @db.Uuid
+  device            Device       @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  /// CHECK device_commands_sequence_positive: sequence > 0
+  sequence          BigInt
+  /// MessagePack-encoded DeviceCommandExecution
+  payload           Bytes
+  /// State: queued | leased | broker_accepted | device_completed
+  state             String       @default("queued") @db.VarChar(32)
+  /// CHECK device_commands_attempt_count_nonnegative: attempt_count >= 0
+  attemptCount      Int          @default(0) @map("attempt_count")
+  availableAt       DateTime     @default(now()) @map("available_at") @db.Timestamptz()
+  leaseExpiresAt    DateTime?    @map("lease_expires_at") @db.Timestamptz()
+  brokerAcceptedAt  DateTime?    @map("broker_accepted_at") @db.Timestamptz()
+  resultCode        Int?         @map("result_code")
+  /// MessagePack-encoded DeviceCommandResult
+  resultPacket      Bytes?       @map("result_packet")
+  deviceCompletedAt DateTime?    @map("device_completed_at") @db.Timestamptz()
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@unique([batchId, deviceId], map: "device_commands_batch_device_unique")
+  @@unique([deviceId, sequence], map: "device_commands_device_sequence_unique")
+  @@map("device_commands")
+}
