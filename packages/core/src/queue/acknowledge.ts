@@ -3,7 +3,7 @@
  * (mirrors Rust `command_queue::mark_broker_accepted` / `release_lease`).
  */
 
-import type { PrismaClient } from "../../generated/prisma/client";
+import type { PrismaClient } from "../db";
 import { CommandQueueError } from "./errors";
 
 /**

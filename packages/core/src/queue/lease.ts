@@ -7,7 +7,7 @@
  * acceptance or a terminal device result.
  */
 
-import type { PrismaClient } from "../../generated/prisma/client";
+import type { PrismaClient } from "../db";
 import { CommandQueueError } from "./errors";
 
 export interface LeasedCommand {

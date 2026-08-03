@@ -8,7 +8,7 @@
  * eligible only after this transition.
  */
 
-import type { PrismaClient } from "../../generated/prisma/client";
+import type { PrismaClient } from "../db";
 import { CommandQueueError } from "./errors";
 import type { DeviceCommandResult } from "../protocol/command";
 import { decodeDeviceCommandResult } from "../protocol/command";

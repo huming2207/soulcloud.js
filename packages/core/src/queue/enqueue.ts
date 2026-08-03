@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { Prisma, type PrismaClient } from "../../generated/prisma/client";
+import { Prisma, type PrismaClient } from "../db";
 import { CommandQueueError } from "./errors";
 import { COMMAND_NOTIFY_CHANNEL } from "./notify";
 import type { DeviceCommand } from "../protocol/command";
