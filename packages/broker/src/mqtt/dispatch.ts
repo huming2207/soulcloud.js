@@ -18,6 +18,8 @@ import {
   type CommandQueueErrorKind,
   decodeDeviceCommandResult,
   decodeDeviceStat,
+  ingestLogPacket,
+  LogIngestError,
   parseDeviceTopic,
   PerDeviceLimiter,
   recordDeviceResult,
@@ -110,13 +112,10 @@ async function handleUplink(
       await handleCommandResult(prisma, deviceUid, payload, log);
       break;
     case "stat":
-      handleStat(deviceUid, payload, log);
+      await handleStat(prisma, deviceUid, payload, log);
       break;
     case "log":
-      log.debug("received device log message", {
-        deviceUid,
-        payloadBytes: payload.length,
-      });
+      await handleLog(prisma, deviceUid, payload, log);
       break;
   }
 }
@@ -164,23 +163,89 @@ async function handleCommandResult(
   }
 }
 
-function handleStat(
+/**
+ * Ingests a raw on9log packet from the device `log` topic.
+ *
+ * The packet is validated strictly and stored in `raw_log_events` with its
+ * envelope metadata; decoding happens at query time, never here.
+ */
+async function handleLog(
+  prisma: PrismaClient,
   deviceUid: string,
   payload: Uint8Array,
   log: DispatchLog,
-): void {
+): Promise<void> {
   try {
-    const stat = decodeDeviceStat(payload);
-    log.debug("received device status", {
-      deviceUid,
-      uptime: stat.up.toString(),
-      payloadBytes: payload.length,
+    const device = await prisma.device.findUnique({
+      where: { deviceUid },
+      select: { id: true },
     });
-    // Persistence belongs here once status storage semantics are agreed.
+    if (!device) {
+      log.warn("ignored log from unknown device", { deviceUid });
+      return;
+    }
+    const outcome = await ingestLogPacket(prisma, device.id, payload);
+    log.debug("stored device log packet", {
+      deviceUid,
+      eventId: outcome.eventId?.toString(),
+      packetType: outcome.packetType,
+    });
+  } catch (error) {
+    const kind = (error as LogIngestError).kind as string | undefined;
+    log.warn("ignored device log packet", {
+      deviceUid,
+      payloadBytes: payload.length,
+      reason: kind ?? "database",
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Validates a device status report and persists the latest firmware state
+ * (stat.fw -> device_firmware_state), which associates log packets with
+ * their decoding artifact.
+ */
+async function handleStat(
+  prisma: PrismaClient,
+  deviceUid: string,
+  payload: Uint8Array,
+  log: DispatchLog,
+): Promise<void> {
+  let stat;
+  try {
+    stat = decodeDeviceStat(payload);
   } catch (error) {
     log.warn("ignored invalid device status", {
       deviceUid,
       payloadBytes: payload.length,
+      error: (error as Error).message,
+    });
+    return;
+  }
+
+  const fwHash = Buffer.from(stat.fw).toString("hex");
+  try {
+    const device = await prisma.device.findUnique({
+      where: { deviceUid },
+      select: { id: true },
+    });
+    if (!device) {
+      log.warn("ignored stat from unknown device", { deviceUid });
+      return;
+    }
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId: device.id },
+      update: { fwHash, reportedAt: new Date() },
+      create: { deviceId: device.id, fwHash },
+    });
+    log.debug("recorded device firmware state", {
+      deviceUid,
+      fwHash,
+    });
+  } catch (error) {
+    log.warn("failed to record device firmware state", {
+      deviceUid,
       error: (error as Error).message,
     });
   }

@@ -43,6 +43,7 @@ model Project {
   name         String                @db.VarChar(255)
   orgLinks     OrganisationProject[]
   devices      Device[]
+  artifacts    FirmwareArtifact[]
 
   @@map("projects")
 }
@@ -62,6 +63,8 @@ model Device {
   /// CHECK devices_next_command_sequence_positive: next_command_sequence > 0
   nextCommandSeq   BigInt           @default(1) @map("next_command_sequence")
   commands         DeviceCommand[]
+  firmwareState    DeviceFirmwareState?
+  logEvents        RawLogEvent[]
 
   @@unique([projectId, assignedId], map: "devices_project_assigned_id_unique")
   @@map("devices")
@@ -125,4 +128,86 @@ model DeviceCommand {
   @@unique([batchId, deviceId], map: "device_commands_batch_device_unique")
   @@unique([deviceId, sequence], map: "device_commands_device_sequence_unique")
   @@map("device_commands")
+}
+
+// --- on9log ingestion (see llm-docs/soulcloudjs/15-log-ingestion-proposal.md) ---
+
+/// Firmware build artifact (ELF uploaded once per build).
+model FirmwareArtifact {
+  id          String   @id @default(uuid()) @db.Uuid
+  projectId   String   @map("project_id") @db.Uuid
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  /// ELF SHA-256 (exact build identity)
+  buildId     String   @unique @db.VarChar(64)
+  /// Human-readable version label (reference only, never identity)
+  version     String?  @db.VarChar(255)
+  /// ELF binary (DB storage for the initial stage)
+  elfBytes    Bytes    @map("elf_bytes")
+  elfSize     Int      @map("elf_size")
+  /// pending | imported | failed
+  importState String   @default("pending") @map("import_state") @db.VarChar(32)
+  /// Failure reason (internal; not exposed to clients)
+  importError String?  @map("import_error") @db.Text
+  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz()
+  logStrings  FirmwareLogString[]
+  logEvents   RawLogEvent[]
+
+  @@index([projectId, uploadedAt])
+  @@map("firmware_artifacts")
+}
+
+/// ELF address -> string dictionary for one artifact (tag/format resolution).
+model FirmwareLogString {
+  id         String           @id @default(uuid()) @db.Uuid
+  artifactId String           @map("artifact_id") @db.Uuid
+  artifact   FirmwareArtifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  /// 32-bit ELF virtual address (tag_id / fmt_id)
+  address    Int
+  /// tag | format
+  kind       String           @db.VarChar(16)
+  value      String           @db.Text
+
+  @@unique([artifactId, address, kind], map: "firmware_log_strings_unique")
+  @@index([artifactId, kind])
+  @@map("firmware_log_strings")
+}
+
+/// Immutable raw log events (source of truth; one row per packet).
+model RawLogEvent {
+  id           BigInt            @id @default(autoincrement())
+  deviceId     String            @map("device_id") @db.Uuid
+  device       Device            @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  /// Decoding firmware; null when unknown (raw is kept and can be backfilled)
+  artifactId   String?           @map("artifact_id") @db.Uuid
+  artifact     FirmwareArtifact? @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  /// Server UTC receive time (cross-device query baseline)
+  receivedAt   DateTime          @default(now()) @map("received_at") @db.Timestamptz()
+  /// Boot-relative milliseconds from the packet (in-session ordering)
+  deviceTimeMs Int               @map("device_time_ms")
+  /// 16-bit sequence (wrap detection)
+  sequence     Int
+  packetType   Int               @map("packet_type")
+  /// 0..5 for LOG packets, null otherwise
+  level        Int?
+  tagId        Int?              @map("tag_id")
+  fmtId        Int?              @map("fmt_id")
+  /// Complete raw packet (header + payload)
+  rawPacket    Bytes             @map("raw_packet")
+  /// unknown_fw | decodable
+  decodeState  String            @default("unknown_fw") @map("decode_state") @db.VarChar(32)
+
+  @@index([deviceId, id], map: "raw_log_events_device_idx")
+  @@index([artifactId, tagId, id], map: "raw_log_events_artifact_idx")
+  @@index([receivedAt], map: "raw_log_events_time_idx")
+  @@map("raw_log_events")
+}
+
+/// Latest reported firmware per device (from stat.fw).
+model DeviceFirmwareState {
+  deviceId   String   @id @map("device_id") @db.Uuid
+  device     Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// stat.fw as hex
+  fwHash     String   @map("fw_hash") @db.VarChar(64)
+  reportedAt DateTime @default(now()) @map("reported_at") @db.Timestamptz()
+  @@map("device_firmware_state")
 }

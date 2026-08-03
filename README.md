@@ -111,7 +111,29 @@ bun scripts/e2e.ts    # full-loop smoke test (needs both processes running)
 
 ## Status
 
-Core loop implemented: enqueue commands via HTTP, broker delivers them over
-MQTT QoS 1, terminal results are recorded idempotently. Auth (user/org/tenant),
-OTA, log ingestion, stat persistence and fleet selectors remain open (same
-scope as the Rust version).
+Implemented:
+
+- **Command loop**: enqueue commands via HTTP, broker delivers them over
+  MQTT QoS 1, terminal results recorded idempotently
+- **on9log binary log ingestion**: strict packet parsing, raw event storage,
+  ELF artifact upload with SHA-256 build identity, dictionary extraction,
+  on-demand decoding at query time (see `docs`)
+- **Uplink protection**: per-device rate limits and packet-size caps
+
+Open (same scope as the Rust version): user/org/tenant auth, OTA,
+full-text log search, object storage archive, retention policies,
+fleet selectors.
+
+## Log ingestion quick tour
+
+```sh
+# upload a firmware ELF (extracts the on9log string dictionary)
+curl -F "project_id=<uuid>" -F "file=@firmware.elf" \
+     http://localhost:8080/v1/firmware-artifacts
+
+# devices publish raw on9log packets to soulcloud/v1/devices/{uid}/log;
+# a stat message with fw=<firmware hash> links logs to the artifact
+
+# query logs (decoded on demand)
+curl "http://localhost:8080/v1/devices/<uuid>/logs?limit=100"
+```

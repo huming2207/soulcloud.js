@@ -23,6 +23,7 @@ import {
   enqueueBatch,
   type PrismaClient,
 } from "@soulcloud/core";
+import { createLoggingRoutes } from "./logging";
 
 const CreateCommandBatchBody = z
   .object({
@@ -63,7 +64,8 @@ export function createApp(prisma: PrismaClient) {
       } catch (error) {
         return mapQueueError(error, set);
       }
-    });
+    })
+    .use(createLoggingRoutes(prisma));
 }
 
 function formatZodIssues(
