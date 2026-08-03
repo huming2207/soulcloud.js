@@ -1,15 +1,17 @@
 /**
  * End-to-end smoke test: HTTP API -> command queue -> MQTT broker -> device.
  *
- * Prerequisites: PostgreSQL running, migrations applied, and the server
- * started with `bun run src/index.ts` (API on :8080, MQTT on :1883).
+ * Prerequisites: PostgreSQL running, migrations applied, and BOTH processes
+ * started (API on :8080, MQTT broker on :1883):
+ *   bun run start:api
+ *   bun run start:broker
  *
  * Run with: bun scripts/e2e.ts
  */
 
 import { randomUUID } from "node:crypto";
 import mqtt from "mqtt";
-import { prisma } from "../src/db";
+import { prisma } from "@soulcloud/core";
 
 const API = "http://localhost:8080";
 const MQTT_URL = "mqtt://127.0.0.1:1883";
@@ -90,9 +92,8 @@ try {
   const payload = await received;
   check("device received command via MQTT", payload.length > 0);
 
-  // decode and reply
   const { decodeDeviceCommandExecution, encodeDeviceCommandResult } = await import(
-    "../src/protocol/command"
+    "@soulcloud/core"
   );
   const exec = decodeDeviceCommandExecution(payload);
   check("command decoded (cmd=setLogging)", exec.cmd === "setLogging");

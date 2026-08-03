@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { prisma } from "../../src/db";
+import { prisma, type PrismaClient } from "@soulcloud/core";
 import { createApp } from "../../src/api/app";
-import type { PrismaClient } from "../../generated/prisma/client";
 
 // API integration tests against the local development PostgreSQL.
 // Requires: docker compose up -d postgres && bunx prisma migrate deploy

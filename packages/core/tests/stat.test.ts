@@ -3,7 +3,7 @@ import {
   DeviceStatPayloadError,
   decodeDeviceStat,
   encodeDeviceStat,
-} from "../../src/protocol/stat";
+} from "../src/protocol/stat";
 
 describe("device stat codec", () => {
   test("decodes and encodes the documented status shape", () => {

@@ -16,8 +16,8 @@
 
 import { Aedes, type Client } from "aedes";
 import { createServer, type Server } from "node:net";
-import type { PrismaClient } from "../../generated/prisma/client";
-import { parseDeviceTopic, TOPIC_PREFIX } from "../protocol/topic";
+import type { PrismaClient } from "@soulcloud/core";
+import { parseDeviceTopic, TOPIC_PREFIX } from "@soulcloud/core";
 export interface BrokerHandle {
   /** The raw Aedes instance (for aedes.publish and event listeners). */
   aedes: Aedes;

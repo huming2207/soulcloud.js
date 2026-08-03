@@ -8,7 +8,7 @@ import {
   encodeDeviceCommandResult,
   decodeDeviceCommandExecution,
   decodeDeviceCommandResult,
-} from "../../src/protocol/command";
+} from "../src/protocol/command";
 
 // A 16-byte command ID
 const ID = new Uint8Array(16).fill(0x5a);

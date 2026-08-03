@@ -13,12 +13,15 @@
  */
 
 import type { Aedes } from "aedes";
-import type { PrismaClient } from "../../generated/prisma/client";
-import { parseDeviceTopic } from "../protocol/topic";
-import { decodeDeviceCommandResult } from "../protocol/command";
-import { decodeDeviceStat } from "../protocol/stat";
-import { CommandQueueError, type CommandQueueErrorKind } from "../queue/errors";
-import { recordDeviceResult } from "../queue/result";
+import {
+  CommandQueueError,
+  type CommandQueueErrorKind,
+  decodeDeviceCommandResult,
+  decodeDeviceStat,
+  parseDeviceTopic,
+  recordDeviceResult,
+  type PrismaClient,
+} from "@soulcloud/core";
 
 export interface DispatchLog {
   info: (msg: string, fields?: Record<string, unknown>) => void;

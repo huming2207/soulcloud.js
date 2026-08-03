@@ -6,7 +6,7 @@ import {
   isValidDeviceUid,
   otaCommand,
   parseDeviceTopic,
-} from "../../src/protocol/topic";
+} from "../src/protocol/topic";
 
 describe("parseDeviceTopic", () => {
   test("parses device-to-platform topics", () => {

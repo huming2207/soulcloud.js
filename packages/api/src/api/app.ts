@@ -17,10 +17,12 @@
 
 import { Elysia } from "elysia";
 import { z } from "zod";
-import type { PrismaClient } from "../../generated/prisma/client";
-import { enqueueBatch } from "../queue/enqueue";
-import { CommandQueueError } from "../queue/errors";
-import { DeviceCommandSchema } from "../protocol/command";
+import {
+  CommandQueueError,
+  DeviceCommandSchema,
+  enqueueBatch,
+  type PrismaClient,
+} from "@soulcloud/core";
 
 const CreateCommandBatchBody = z
   .object({

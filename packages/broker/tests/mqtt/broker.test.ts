@@ -1,15 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import mqtt, { type MqttClient } from "mqtt";
-import { prisma } from "../../src/db";
+import { enqueueBatch, prisma } from "@soulcloud/core";
 import { startBroker, type BrokerHandle } from "../../src/mqtt/broker";
 import { attachDispatch } from "../../src/mqtt/dispatch";
 import { pollOnce } from "../../src/mqtt/publish";
-import { enqueueBatch } from "../../src/queue/enqueue";
 import {
   decodeDeviceCommandExecution,
   encodeDeviceCommandResult,
-} from "../../src/protocol/command";
+} from "@soulcloud/core";
 
 // Integration tests for the embedded Aedes broker.
 // Requires: docker compose up -d postgres && bunx prisma migrate deploy

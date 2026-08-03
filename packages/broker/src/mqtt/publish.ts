@@ -12,11 +12,13 @@
  */
 
 import type { Aedes } from "aedes";
-import type { PrismaClient } from "../../generated/prisma/client";
-import { commandExecution } from "../protocol/topic";
-import { leaseNext } from "../queue/lease";
-import { markBrokerAccepted } from "../queue/acknowledge";
-import { releaseLease } from "../queue/acknowledge";
+import {
+  commandExecution,
+  leaseNext,
+  markBrokerAccepted,
+  releaseLease,
+  type PrismaClient,
+} from "@soulcloud/core";
 
 export interface PollerOptions {
   /** Poll interval in milliseconds. */
