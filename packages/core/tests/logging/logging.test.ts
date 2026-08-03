@@ -187,9 +187,12 @@ describe("decoding", () => {
       orderBy: { id: "asc" },
     });
     const decoded = await decodeRawEvent(prisma, {
-      ...event,
+      id: event.id,
       artifactId: null,
-      decodeState: "unknown_fw",
+      packetType: event.packetType,
+      tagId: event.tagId,
+      fmtId: event.fmtId,
+      rawPacket: event.rawPacket,
     });
     expect(decoded.message).toBeNull();
     expect(decoded.tag).toBeNull();
