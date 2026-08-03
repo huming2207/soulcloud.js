@@ -1,6 +1,6 @@
-import { Elysia } from "elysia";
 import { loadConfig } from "./config";
-import { prisma, ping } from "./db";
+import { prisma } from "./db";
+import { createApp } from "./api/app";
 import { startBroker } from "./mqtt/broker";
 import { attachDispatch } from "./mqtt/dispatch";
 import { startCommandPoller } from "./mqtt/publish";
@@ -30,7 +30,7 @@ const logger = {
 
 // --- Embedded MQTT broker ---------------------------------------------------
 
-const { aedes, server: brokerServer, close: closeBroker } = await startBroker(
+const { aedes, server: _brokerServer, close: closeBroker } = await startBroker(
   prisma,
   config.MQTT_BROKER_PORT,
 );
@@ -51,17 +51,7 @@ console.log(
 
 // --- REST API ----------------------------------------------------------------
 
-const app = new Elysia()
-  .get("/health/live", () => ({ status: "ok" }))
-  .get("/health/ready", async ({ set }) => {
-    const ok = await ping();
-    if (!ok) {
-      set.status = 503;
-      return { status: "not_ready" };
-    }
-    return { status: "ready" };
-  });
-
+const app = createApp(prisma);
 app.listen({ hostname, port: Number(port) });
 console.log(
   `[soulcloudjs] API server listening on ${config.API_BIND_ADDRESS}`,
