@@ -29,7 +29,11 @@ const logger = {
 };
 
 const { aedes, close: closeBroker } = await startBroker(prisma, config.MQTT_BROKER_PORT);
-attachDispatch(aedes, prisma, logger);
+attachDispatch(aedes, prisma, logger, {
+  maxPacketBytes: config.UPLINK_MAX_PACKET_BYTES,
+  ratePerSecond: config.UPLINK_RATE_PER_SECOND,
+  rateBurst: config.UPLINK_RATE_BURST,
+});
 const poller = startCommandPoller(
   aedes,
   prisma,

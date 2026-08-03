@@ -10,6 +10,10 @@ const envSchema = z.object({
     .default(false),
   COMMAND_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   COMMAND_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
+  // Uplink ingestion protection (DDoS / misbehaving devices):
+  UPLINK_MAX_PACKET_BYTES: z.coerce.number().int().positive().default(65536),
+  UPLINK_RATE_PER_SECOND: z.coerce.number().int().positive().default(20),
+  UPLINK_RATE_BURST: z.coerce.number().int().positive().default(100),
 });
 
 export type BrokerConfig = BaseConfig & z.infer<typeof envSchema>;

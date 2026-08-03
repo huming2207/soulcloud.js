@@ -19,9 +19,20 @@ import {
   decodeDeviceCommandResult,
   decodeDeviceStat,
   parseDeviceTopic,
+  PerDeviceLimiter,
   recordDeviceResult,
   type PrismaClient,
 } from "@soulcloud/core";
+
+/** Uplink ingestion protection options (DDoS / misbehaving devices). */
+export interface DispatchGuardOptions {
+  /** Maximum accepted uplink packet size in bytes. */
+  maxPacketBytes: number;
+  /** Per-device sustained rate (packets per second). */
+  ratePerSecond: number;
+  /** Per-device burst allowance. */
+  rateBurst: number;
+}
 
 export interface DispatchLog {
   info: (msg: string, fields?: Record<string, unknown>) => void;
@@ -31,18 +42,46 @@ export interface DispatchLog {
 
 /**
  * Attaches the uplink message handler to an Aedes broker.
+ *
+ * `guards` enables per-device packet-size and rate limits. When a device
+ * exceeds them its messages are dropped (logged) — never buffered — so a
+ * faulty or hostile device cannot fill memory or storage.
  */
 export function attachDispatch(
   aedes: Aedes,
   prisma: PrismaClient,
   log: DispatchLog,
+  guards?: DispatchGuardOptions,
 ): void {
+  const limiter = guards
+    ? new PerDeviceLimiter({
+        capacity: guards.rateBurst,
+        refillPerSecond: guards.ratePerSecond,
+      })
+    : null;
+
   aedes.on("publish", (packet, client) => {
     if (!client) return; // server-side or internal publishes
     const payload =
       typeof packet.payload === "string"
         ? Buffer.from(packet.payload)
         : packet.payload;
+
+    if (guards && payload.length > guards.maxPacketBytes) {
+      log.warn("dropped oversized uplink packet", {
+        deviceUid: client.id,
+        payloadBytes: payload.length,
+        maxBytes: guards.maxPacketBytes,
+      });
+      return;
+    }
+    if (limiter && !limiter.tryConsume(client.id)) {
+      log.warn("dropped uplink packet over rate limit", {
+        deviceUid: client.id,
+      });
+      return;
+    }
+
     void handleUplink(prisma, client.id, packet.topic, payload, log);
   });
 }
