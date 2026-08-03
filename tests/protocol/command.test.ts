@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   CommandPayloadError,
-  DeviceCommand,
+  type CommandArgument,
+  type DeviceCommand,
   encodeDeviceCommand,
   encodeDeviceCommandExecution,
   encodeDeviceCommandResult,
@@ -28,12 +29,11 @@ describe("encode/decode command execution envelope", () => {
   });
 
   test("round-trips a result envelope", () => {
-    const result = {
-      id: ID,
-      seq: 43n,
-      code: 0,
-      payload: [{ "logging.level": 3 }, { certificate: new Uint8Array([0, 1, 255]) }],
-    };
+    const payload: CommandArgument[] = [
+      { "logging.level": 3 },
+      { certificate: new Uint8Array([0, 1, 255]) },
+    ];
+    const result = { id: ID, seq: 43n, code: 0, payload };
     const encoded = encodeDeviceCommandResult(result);
     expect(decodeDeviceCommandResult(encoded)).toEqual(result);
   });

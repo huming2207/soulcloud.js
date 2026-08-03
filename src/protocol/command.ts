@@ -55,11 +55,7 @@ export const CommandArgumentSchema = z
   });
 
 /** Command arguments may be omitted or MessagePack nil (both mean "none"). */
-const ArgumentsSchema = z
-  .array(CommandArgumentSchema)
-  .nullable()
-  .optional()
-  .transform((v) => v ?? undefined);
+const ArgumentsSchema = z.array(CommandArgumentSchema).nullable().optional();
 
 /** The command name and optional arguments accepted by the human API. */
 export const DeviceCommandSchema = z

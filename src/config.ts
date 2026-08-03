@@ -7,7 +7,7 @@ const envSchema = z.object({
   MQTT_COMMAND_RETAIN: z
     .string()
     .transform((v) => v === "true")
-    .default("false"),
+    .default(false),
   COMMAND_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   COMMAND_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
   LOG_LEVEL: z

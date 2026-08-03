@@ -64,7 +64,7 @@ const enum Type {
 }
 
 class Reader {
-  constructor(private readonly buf: Uint8Array, public pos = 0) {}
+  constructor(public readonly buf: Uint8Array, public pos = 0) {}
 
   take(n: number): Uint8Array {
     if (this.pos + n > this.buf.length) {
