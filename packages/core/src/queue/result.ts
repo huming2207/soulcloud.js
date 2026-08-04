@@ -172,9 +172,12 @@ function valueEqual(a: unknown, b: unknown): boolean {
   if (typeof a === "number" && typeof b === "number" && Number.isNaN(a) && Number.isNaN(b)) {
     return true;
   }
-  // the same integer may decode as number (small) or bigint (64-bit)
+  // the same integer may decode as number (small) or bigint (64-bit);
+  // non-integer numbers must not reach BigInt() (RangeError)
   if ((typeof a === "number" && typeof b === "bigint") ||
       (typeof a === "bigint" && typeof b === "number")) {
+    if (typeof a === "number" && !Number.isInteger(a)) return false;
+    if (typeof b === "number" && !Number.isInteger(b)) return false;
     return Number(a) === Number(b) || BigInt(a) === BigInt(b);
   }
   return a === b;

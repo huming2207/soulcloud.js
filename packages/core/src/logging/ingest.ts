@@ -20,7 +20,7 @@ const DEVICE_CACHE_TTL_MS = 60_000;
 /** Small in-process cache to cut the per-packet device lookup (M12). */
 const deviceIdCache = new Map<string, { id: string; expiresAt: number }>();
 
-async function resolveDeviceId(
+export async function resolveDeviceId(
   prisma: PrismaClient,
   deviceUid: string,
 ): Promise<string | null> {

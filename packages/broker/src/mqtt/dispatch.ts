@@ -23,6 +23,7 @@ import {
   parseDeviceTopic,
   PerDeviceLimiter,
   recordDeviceResult,
+  resolveDeviceId,
   type PrismaClient,
 } from "@soulcloud/core";
 
@@ -226,18 +227,15 @@ async function handleStat(
 
   const fwHash = Buffer.from(stat.fw).toString("hex");
   try {
-    const device = await prisma.device.findUnique({
-      where: { deviceUid },
-      select: { id: true },
-    });
-    if (!device) {
+    const deviceId = await resolveDeviceId(prisma, deviceUid);
+    if (!deviceId) {
       log.warn("ignored stat from unknown device", { deviceUid });
       return;
     }
     await prisma.deviceFirmwareState.upsert({
-      where: { deviceId: device.id },
+      where: { deviceId },
       update: { fwHash, reportedAt: new Date() },
-      create: { deviceId: device.id, fwHash },
+      create: { deviceId, fwHash },
     });
     log.debug("recorded device firmware state", {
       deviceUid,

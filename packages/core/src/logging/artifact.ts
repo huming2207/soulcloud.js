@@ -257,8 +257,15 @@ export async function backfillDecodeState(
   artifactId: string,
   buildId: string,
 ): Promise<number> {
+  const artifact = await prisma.firmwareArtifact.findUnique({
+    where: { id: artifactId },
+    select: { projectId: true },
+  });
+  if (!artifact) return 0;
+  // M3: only devices in the artifact's project can be linked (a buildId is
+  // unique per project, so a cross-project match must not happen)
   const devices = await prisma.deviceFirmwareState.findMany({
-    where: { fwHash: buildId },
+    where: { fwHash: buildId, device: { projectId: artifact.projectId } },
     select: { deviceId: true },
   });
   if (devices.length === 0) return 0;

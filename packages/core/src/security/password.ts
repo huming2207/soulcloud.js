@@ -62,6 +62,9 @@ export async function verifyDevicePassword(
     if (!Number.isInteger(n) || !Number.isInteger(r) || !Number.isInteger(p) || n <= 0 || r <= 0 || p <= 0) {
       return false;
     }
+    // scrypt requires N to be a power of two (and > 1); a tampered stored
+    // hash must never make scrypt throw (docstring: "never throws")
+    if ((n & (n - 1)) !== 0 || n <= 1) return false;
     let salt: Buffer;
     let expected: Buffer;
     try {

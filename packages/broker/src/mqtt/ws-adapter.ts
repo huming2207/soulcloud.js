@@ -145,10 +145,17 @@ function createWsDuplex(ws: ServerWebSocket): Duplex {
     },
     write(chunk, _encoding, callback) {
       try {
-        framer.push(Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array), (frame) => {
-          ws.send(frame);
+        const data = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array);
+        let sendError: Error | null = null;
+        framer.push(data, (frame) => {
+          // backpressure: Bun's ws.send returns -1 when the socket buffer is
+          // full (frame dropped) - report it so aedes does not believe the
+          // QoS1 packet was delivered
+          if (sendError === null && ws.send(frame) < 0) {
+            sendError = new Error("websocket send buffer full; frame dropped");
+          }
         });
-        callback();
+        callback(sendError);
       } catch (error) {
         callback(error as Error);
       }

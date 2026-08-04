@@ -36,6 +36,16 @@ export function createLoggingRoutes(prisma: PrismaClient) {
 
     .post("/firmware-artifacts", async ({ request, set }) => {
       try {
+        // S5: reject oversized uploads by declared length BEFORE reading the
+        // body (formData() buffers the whole request in memory)
+        const declared = request.headers.get("content-length");
+        if (declared && Number(declared) > MAX_ELF_BYTES + 64 * 1024) {
+          set.status = 413;
+          return {
+            error: "payload_too_large",
+            message: `ELF exceeds ${MAX_ELF_BYTES} bytes`,
+          };
+        }
         const form = await request.formData().catch(() => null);
         if (!form) {
           set.status = 400;
@@ -53,16 +63,6 @@ export function createLoggingRoutes(prisma: PrismaClient) {
         if (typeof file !== "object" || file === null || !("arrayBuffer" in file)) {
           set.status = 400;
           return { error: "invalid_request", message: "file is required" };
-        }
-
-        // S5: reject oversized uploads before reading the body
-        const declared = request.headers.get("content-length");
-        if (declared && Number(declared) > MAX_ELF_BYTES + 64 * 1024) {
-          set.status = 413;
-          return {
-            error: "payload_too_large",
-            message: `ELF exceeds ${MAX_ELF_BYTES} bytes`,
-          };
         }
 
         const project = await prisma.project.findUnique({
@@ -277,13 +277,28 @@ export function createLoggingRoutes(prisma: PrismaClient) {
           set.status = 400;
           return { error: "invalid_request", message: "artifact_id (uuid) is required" };
         }
-        const artifact = await prisma.firmwareArtifact.findUnique({
-          where: { id: parsed.data.artifact_id },
-          select: { id: true, buildId: true },
-        });
+        const [device, artifact] = await Promise.all([
+          prisma.device.findUnique({
+            where: { id: deviceId.data },
+            select: { projectId: true },
+          }),
+          prisma.firmwareArtifact.findUnique({
+            where: { id: parsed.data.artifact_id },
+            select: { id: true, buildId: true, projectId: true },
+          }),
+        ]);
+        if (!device) {
+          set.status = 404;
+          return { error: "device_not_found", message: "device does not exist" };
+        }
         if (!artifact) {
           set.status = 404;
           return { error: "artifact_not_found", message: "artifact does not exist" };
+        }
+        // M3: an artifact may only be bound to devices in its own project
+        if (artifact.projectId !== device.projectId) {
+          set.status = 403;
+          return { error: "artifact_project_mismatch", message: "artifact belongs to a different project" };
         }
         await prisma.deviceFirmwareState.upsert({
           where: { deviceId: deviceId.data },

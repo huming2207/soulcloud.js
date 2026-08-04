@@ -338,3 +338,56 @@ describe("device firmware state", () => {
     expect(await res.json()).toMatchObject({ error: "invalid_request" });
   });
 });
+
+describe("audit regressions", () => {
+  test("cursor=abc -> 400 (no internal error leak)", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/devices/${deviceId}/logs?cursor=abc`),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("invalid_request");
+  });
+
+  test("concurrent uploads of the same ELF create one artifact", async () => {
+    const results = await Promise.allSettled([
+      app.handle(new Request("http://localhost/v1/firmware-artifacts", { method: "POST", body: uploadForm() })),
+      app.handle(new Request("http://localhost/v1/firmware-artifacts", { method: "POST", body: uploadForm() })),
+      app.handle(new Request("http://localhost/v1/firmware-artifacts", { method: "POST", body: uploadForm() })),
+    ]);
+    const statuses = results.map((r) => (r.status === "fulfilled" ? r.value.status : -1));
+    // at least one 201/200 and no 500s
+    expect(statuses.every((s) => s === 200 || s === 201)).toBe(true);
+    const count = await prisma.firmwareArtifact.count({
+      where: { projectId },
+    });
+    expect(count).toBe(1);
+  });
+
+  test("POST firmware-state with cross-project artifact -> 403", async () => {
+    const otherProject = randomUUID();
+    await prisma.project.create({ data: { id: otherProject, name: "other-project" } });
+    const otherElf = buildNoloadElf(["x=%d"], ["other"], 32, true);
+    const otherForm = new FormData();
+    otherForm.append("project_id", otherProject);
+    otherForm.append("file", new Blob([otherElf]), "f.elf");
+    const up = await app.handle(
+      new Request("http://localhost/v1/firmware-artifacts", { method: "POST", body: otherForm }),
+    );
+    const upBody = (await up.json()) as { artifact_id: string };
+
+    const res = await app.handle(
+      new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ artifact_id: upBody.artifact_id }),
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "artifact_project_mismatch" });
+
+    await prisma.firmwareLogString.deleteMany({ where: { artifactId: upBody.artifact_id } });
+    await prisma.firmwareArtifact.deleteMany({ where: { id: upBody.artifact_id } });
+    await prisma.project.delete({ where: { id: otherProject } });
+  });
+});

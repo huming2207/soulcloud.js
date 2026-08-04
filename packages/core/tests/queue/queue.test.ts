@@ -6,6 +6,7 @@ import { expireDelayedCommands, leaseNext } from "../../src/queue/lease";
 import { markBrokerAccepted, releaseLease } from "../../src/queue/acknowledge";
 import { recordDeviceResult } from "../../src/queue/result";
 import { CommandQueueError } from "../../src/queue/errors";
+import type { PrismaClient } from "../../src/db";
 import { decodeDeviceCommandExecution, encodeDeviceCommandResult } from "../../src/protocol/command";
 
 // Integration tests against the local development PostgreSQL.
@@ -37,16 +38,26 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await prisma.$executeRaw`DELETE FROM command_batches`; // cascades device_commands
+  await prisma.deviceCommand.deleteMany({ where: { deviceId: { in: deviceIds } } });
+  await prisma.commandBatch.deleteMany({ where: { commands: { none: {} } } });
   await prisma.device.deleteMany({ where: { projectId } });
   await prisma.project.delete({ where: { id: projectId } });
 });
 
-// Each test starts with an empty command queue and fresh device sequences so
-// tests are independent of each other.
+// Each test starts with an empty command queue for THIS test's devices and
+// fresh sequences, so tests are independent of each other and never touch
+// rows created by other test files (bun test runs files in parallel).
 beforeEach(async () => {
-  await prisma.$executeRaw`DELETE FROM command_batches`;
-  await prisma.$executeRaw`UPDATE devices SET next_command_sequence = 1`;
+  await prisma.deviceCommand.deleteMany({
+    where: { deviceId: { in: deviceIds } },
+  });
+  await prisma.commandBatch.deleteMany({
+    where: { commands: { none: {} } },
+  });
+  await prisma.device.updateMany({
+    where: { id: { in: deviceIds } },
+    data: { nextCommandSeq: 1n },
+  });
 });
 
 describe("enqueueBatch", () => {
@@ -143,8 +154,8 @@ describe("leaseNext", () => {
     await enqueueBatch(prisma, [deviceIds[1]!], { cmd: "reboot" });
     const leased = await leaseNext(prisma, 1);
     expect(leased).not.toBeNull();
-    await new Promise((r) => setTimeout(r, 20));
-    const again = await leaseNext(prisma, 60_000);
+    // poll until the 1ms lease expires (DB clock vs wall clock may skew)
+    const again = await waitForClaimable(prisma, 60_000);
     expect(again).not.toBeNull();
     expect(again!.id).toBe(leased!.id);
     expect(again!.attemptCount).toBe(2);
@@ -184,6 +195,21 @@ describe("leaseNext", () => {
     await markBrokerAccepted(prisma, third!.id);
   });
 });
+
+/** Polls leaseNext until a command becomes claimable again (expiry). */
+async function waitForClaimable(
+  prisma: PrismaClient,
+  leaseDurationMs: number,
+  timeoutMs = 5000,
+): Promise<Awaited<ReturnType<typeof leaseNext>>> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const leased = await leaseNext(prisma, leaseDurationMs);
+    if (leased) return leased;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error("timeout waiting for claimable command");
+}
 
 describe("markBrokerAccepted / releaseLease", () => {
   test("markBrokerAccepted transitions leased -> broker_accepted", async () => {

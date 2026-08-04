@@ -165,7 +165,7 @@ export function renderFormat(
         precision = p;
       }
     }
-    if (precision !== null && precision > MAX_FORMAT_PRECISION) {
+    if (precision !== null && (precision < 0 || precision > MAX_FORMAT_PRECISION)) {
       throw new FormatRenderError("field precision exceeds limit");
     }
 
@@ -460,7 +460,7 @@ export function parseFmtSpec(
   } else if (s.length > 1) {
     throw new FormatRenderError(`unsupported fmt spec '{${raw}}'`);
   }
-  if (out.precision !== null && out.precision > MAX_FORMAT_PRECISION) {
+  if (out.precision !== null && (out.precision < 0 || out.precision > MAX_FORMAT_PRECISION)) {
     throw new FormatRenderError("field precision exceeds limit");
   }
   return out;
@@ -596,7 +596,9 @@ function displaySigned(v: bigint): bigint {
 /** Removes trailing zeros from a fixed-notation float string. */
 function trimFloat(s: string): string {
   if (s.includes("e") || s.includes("E")) return s;
-  return s.replace(/\.?0+$/, "");
+  // only strip trailing zeros when a decimal point is present: "100000"
+  // keeps its significant zeros, "3.141590" -> "3.14159"
+  return s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s;
 }
 
 function intValue(arg: On9logArg): bigint {

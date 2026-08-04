@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import {
   computeBuildId,
   importArtifact,
@@ -10,29 +9,51 @@ import {
   parseOn9logPacket,
   prisma,
 } from "@soulcloud/core";
-import { ON9LOG_FRAME_TYPE_ON9LOG, SlipDecoder } from "../helpers/slip";
+import { buildNoloadElf } from "../helpers/elf-builder";
 
-// Integration fixtures: the compiled on9log Unix demo ELF and its SLIP output.
-const DEMO_ELF_PATH = "/tmp/on9log_unix_demo";
-const DEMO_OUTPUT_PATH = "/tmp/on9log_demo_output.bin";
+// Integration fixtures are fully synthetic (no /tmp dependency):
+// a minimal ELF with .noload strings plus hand-built on9log packets whose
+// tag/fmt addresses match the synthetic ELF layout.
+const testElf = buildNoloadElf(
+  ["value=%d", "name=%s"],
+  ["demo", "wifi"],
+  32,
+  true,
+  0x40000000,
+);
+const FORMAT_VALUE_ADDR = 0x40000000; // "value=%d"
+const FORMAT_NAME_ADDR = 0x40000009; // "name=%s"
+const TAG_DEMO_ADDR = 0x40000011; // "demo"
+const TAG_WIFI_ADDR = 0x40000016; // "wifi"
 
-const hasFixtures = (() => {
-  try {
-    readFileSync(DEMO_ELF_PATH);
-    readFileSync(DEMO_OUTPUT_PATH);
-    return true;
-  } catch {
-    return false;
-  }
-})();
+/** A LOG packet with the given tag/fmt addresses and args (streaming). */
+function logPacket(tagId: number, fmtId: number, argTypes: number[], argBytes: number[]): Uint8Array {
+  return new Uint8Array([
+    0x9a, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ...le32(tagId), ...le32(fmtId), 0xff, 0xff,
+    argTypes.length, ...argTypes, ...argBytes,
+  ]);
+}
+
+function le32(v: number): number[] {
+  return [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >>> 24) & 0xff];
+}
 
 function demoLogPackets(): Uint8Array[] {
-  const decoder = new SlipDecoder();
-  decoder.push(readFileSync(DEMO_OUTPUT_PATH));
-  return decoder
-    .frames()
-    .filter((f) => f.type === ON9LOG_FRAME_TYPE_ON9LOG)
-    .map((f) => f.payload);
+  return [
+    // value=7 (one 32-bit arg)
+    logPacket(TAG_DEMO_ADDR, FORMAT_VALUE_ADDR, [1], le32(7)),
+    // name=wifi (one dynamic string arg)
+    logPacket(TAG_DEMO_ADDR, FORMAT_NAME_ADDR, [4], [...le32(4), ...new TextEncoder().encode("wifi")]),
+    // zero-arg log
+    logPacket(TAG_WIFI_ADDR, FORMAT_VALUE_ADDR, [], []),
+    // a DROPPED control packet
+    new Uint8Array([
+      0x9a, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00,
+      0x2a, 0x00, 0x00, 0x00,
+    ]),
+  ];
 }
 
 let projectId: string;
@@ -71,8 +92,7 @@ afterAll(async () => {
 
 describe("artifact import (real demo ELF)", () => {
   test("imports the ELF and extracts the dictionary", () => {
-    if (!hasFixtures) return;
-    const elf = readFileSync(DEMO_ELF_PATH);
+    const elf = testElf;
     buildId = computeBuildId(elf);
 
     return importArtifact(prisma, { projectId, elf }).then(async (result) => {
@@ -95,8 +115,7 @@ describe("artifact import (real demo ELF)", () => {
   });
 
   test("importing the same build is idempotent", async () => {
-    if (!hasFixtures) return;
-    const elf = readFileSync(DEMO_ELF_PATH);
+    const elf = testElf;
     const again = await importArtifact(prisma, { projectId, elf });
     expect(again.artifactId).toBe(artifactId);
     const count = await prisma.firmwareArtifact.count({ where: { buildId } });
@@ -115,14 +134,13 @@ describe("artifact import (real demo ELF)", () => {
 
 describe("log ingestion", () => {
   test("stores raw packets and associates the artifact via fw state", async () => {
-    if (!hasFixtures) return;
     // device reports firmware first (as stat would)
     await prisma.deviceFirmwareState.create({
       data: { deviceId, fwHash: buildId },
     });
 
     const packets = demoLogPackets();
-    expect(packets.length).toBeGreaterThan(5);
+    expect(packets.length).toBeGreaterThanOrEqual(4);
 
     for (const packet of packets) {
       const outcome = await ingestLogPacket(prisma, deviceId, packet);
@@ -159,7 +177,6 @@ describe("log ingestion", () => {
 
 describe("decoding", () => {
   test("decodes stored events end-to-end", async () => {
-    if (!hasFixtures) return;
     const events = await prisma.rawLogEvent.findMany({
       where: { deviceId, decodeState: "decodable", packetType: 0 },
       orderBy: { id: "asc" },
@@ -180,7 +197,6 @@ describe("decoding", () => {
   });
 
   test("returns null message for unknown-fw events", async () => {
-    if (!hasFixtures) return;
     const event = await prisma.rawLogEvent.findFirstOrThrow({
       where: { deviceId },
       orderBy: { id: "asc" },
@@ -289,5 +305,24 @@ describe("S4: unsigned 32-bit wire values (int4 overflow regression)", () => {
     });
     expect(event.tagId).toBe(0x80001000n);
     expect(event.fmtId).toBe(0x80002000n);
+  });
+});
+
+describe("M13: BOOT packet ingestion", () => {
+  test("BOOT packets are stored in raw_log_events", async () => {
+    // type 3 (0x30) with opaque payload
+    const packet = new Uint8Array([
+      0x9a, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
+      0xde, 0xad, 0xbe, 0xef,
+    ]);
+    const outcome = await ingestLogPacket(prisma, deviceId, packet);
+    expect(outcome.stored).toBe(true);
+    const event = await prisma.rawLogEvent.findFirstOrThrow({
+      where: { id: outcome.eventId! },
+    });
+    expect(event.packetType).toBe(3);
+    expect(event.level).toBeNull(); // not a LOG packet
+    expect(event.rawPacket).toEqual(Buffer.from(packet));
   });
 });

@@ -461,3 +461,32 @@ describe("M2: offline devices", () => {
     expect(after.availableAt.getTime()).toBeGreaterThan(Date.now());
   });
 });
+
+describe("WS-specific behavior", () => {
+  test("unknown WS path returns 404", async () => {
+    const res = await fetch(`http://127.0.0.1:${BROKER_PORT}/wrong-path`);
+    expect(res.status).toBe(404);
+  });
+
+  test("MQTT path serves the WS upgrade", async () => {
+    const res = await fetch(`http://127.0.0.1:${BROKER_PORT}/mqtt`, {
+      headers: { connection: "upgrade", upgrade: "websocket" },
+    });
+    // no upgrade headers -> Bun responds 400/426; the point is the route exists
+    expect([400, 426]).toContain(res.status);
+  });
+
+  test("device authenticates with a scrypt-hashed password", async () => {
+    const uid = `scrypt-${randomUUID().slice(0, 8)}`;
+    const { hashDevicePassword } = await import("@soulcloud/core");
+    const hash = await hashDevicePassword("hashed-pw");
+    await prisma.device.create({
+      data: { id: randomUUID(), deviceUid: uid, assignedId: "scrypt", passwordHash: hash, projectId },
+    });
+    const client = new MqttTestClient(BROKER_URL, { clientId: uid, username: uid, password: "hashed-pw" });
+    void client.connect().catch(() => {});
+    await waitForConnect(client);
+    client.end(true);
+    await prisma.device.deleteMany({ where: { deviceUid: uid } });
+  });
+});

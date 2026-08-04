@@ -51,7 +51,7 @@ const poller = startCommandPoller(
 // (lossy hint; the poll interval remains the correctness fallback).
 const notifier = await startCommandNotifier(config.DATABASE_URL, () => poller.wake(), logger);
 console.log(
-  `[soulcloud-broker] MQTT broker listening on tcp://0.0.0.0:${config.MQTT_BROKER_PORT}`,
+  `[soulcloud-broker] MQTT broker listening on ws://0.0.0.0:${config.MQTT_BROKER_PORT}${config.MQTT_BROKER_PATH}`,
 );
 
 async function shutdown(signal: string) {
