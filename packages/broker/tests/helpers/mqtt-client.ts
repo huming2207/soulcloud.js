@@ -164,7 +164,8 @@ export class MqttTestClient extends EventEmitter {
           retain: false,
         }),
       );
-      // QoS 0/1: no reliable ack path in this mini client; resolve on send
+      // this mini client has no reliable PUBACK tracking; resolve on send
+      // (the broker test flows verify delivery via waitMessage/DB state)
       resolve();
     });
   }
@@ -190,15 +191,15 @@ export class MqttTestClient extends EventEmitter {
     });
   }
 
-  /** Closes the connection. */
-  end(force = false): void {
+  /** Closes the connection (sends DISCONNECT, then closes the socket). */
+  end(_force = false): void {
     try {
       this.ws?.send(generate({ cmd: "disconnect" }));
     } catch {
       // ignore
     }
     try {
-      this.ws?.close(force ? 1000 : 1000);
+      this.ws?.close(1000);
     } catch {
       // ignore
     }

@@ -138,6 +138,9 @@ export class SlipDecoder {
       const computed = crc16Ccitt(Uint8Array.of(type as number), 0xffff);
       const full = crc16Ccitt(body, computed);
       if (full !== crc) {
+        // S6: consume the bad frame before throwing so a corrupted stream
+        // can resync instead of livelocking on the same bytes forever
+        this.buf.splice(0, j + 1);
         throw new SlipParseError(
           `SLIP frame CRC mismatch: got 0x${crc.toString(16)}, expected 0x${full.toString(16)}`,
         );
