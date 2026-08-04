@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../src/db";
 import { enqueueBatch } from "../../src/queue/enqueue";
-import { leaseNext } from "../../src/queue/lease";
+import { expireDelayedCommands, leaseNext } from "../../src/queue/lease";
 import { markBrokerAccepted, releaseLease } from "../../src/queue/acknowledge";
 import { recordDeviceResult } from "../../src/queue/result";
 import { CommandQueueError } from "../../src/queue/errors";
@@ -366,5 +366,68 @@ describe("M8: concurrent enqueue ordering", () => {
     expect(firstRow.sequence).toBe(rows[0]!.sequence);
     expect(await leaseNext(prisma, 60_000)).toBeNull();
     await releaseLease(prisma, first!.id);
+  });
+});
+
+describe("M2: per-command delivery timeout", () => {
+  test("command with a deadline expires to delivery_failed", async () => {
+    const batch = await enqueueBatch(prisma, [deviceIds[0]!], { cmd: "reboot" }, {
+      deliveryTimeoutSeconds: 3600,
+    });
+    const row = await prisma.deviceCommand.findFirstOrThrow({
+      where: { batchId: batch.id },
+    });
+    expect(row.deliveryExpiresAt).not.toBeNull();
+
+    // simulate the deadline passing
+    await prisma.deviceCommand.update({
+      where: { id: row.id },
+      data: { deliveryExpiresAt: new Date(Date.now() - 1000) },
+    });
+
+    const expired = await expireDelayedCommands(prisma);
+    expect(expired).toBe(1);
+    const after = await prisma.deviceCommand.findUniqueOrThrow({
+      where: { id: row.id },
+    });
+    expect(after.state).toBe("delivery_failed");
+    expect(after.leaseExpiresAt).toBeNull();
+  });
+
+  test("expired command releases the per-device queue", async () => {
+    // first command expires, second must become claimable
+    await enqueueBatch(prisma, [deviceIds[1]!], { cmd: "first" }, {
+      deliveryTimeoutSeconds: 3600,
+    });
+    const b2 = await enqueueBatch(prisma, [deviceIds[1]!], { cmd: "second" });
+    const first = await prisma.deviceCommand.findFirstOrThrow({
+      where: { batchId: { not: b2.id }, deviceId: deviceIds[1]! },
+    });
+    await prisma.deviceCommand.update({
+      where: { id: first.id },
+      data: { deliveryExpiresAt: new Date(Date.now() - 1000) },
+    });
+    await expireDelayedCommands(prisma);
+
+    const leased = await leaseNext(prisma, 60_000);
+    expect(leased).not.toBeNull();
+    const leasedRow = await prisma.deviceCommand.findUniqueOrThrow({
+      where: { id: leased!.id },
+    });
+    expect(leasedRow.batchId).toBe(b2.id); // the second command is now claimable
+    await releaseLease(prisma, leased!.id);
+  });
+
+  test("command without a deadline never expires", async () => {
+    const batch = await enqueueBatch(prisma, [deviceIds[0]!], { cmd: "reboot" });
+    const row = await prisma.deviceCommand.findFirstOrThrow({
+      where: { batchId: batch.id },
+    });
+    expect(row.deliveryExpiresAt).toBeNull();
+    expect(await expireDelayedCommands(prisma)).toBe(0);
+    const after = await prisma.deviceCommand.findUniqueOrThrow({
+      where: { id: row.id },
+    });
+    expect(after.state).toBe("queued");
   });
 });

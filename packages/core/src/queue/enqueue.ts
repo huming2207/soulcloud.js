@@ -36,6 +36,16 @@ interface TargetRow {
   next_command_sequence: bigint;
 }
 
+export interface EnqueueBatchOptions {
+  /**
+   * Delivery deadline in seconds from enqueue time. NULL/undefined means
+   * the command never expires: it is retried until the device completes
+   * it. A past deadline moves the command to the `delivery_failed`
+   * terminal state, releasing the per-device queue.
+   */
+  deliveryTimeoutSeconds?: number;
+}
+
 /**
  * Atomically creates a command batch for an explicit list of device IDs.
  *
@@ -46,6 +56,7 @@ export async function enqueueBatch(
   prisma: PrismaClient,
   targetDeviceIds: string[],
   command: DeviceCommand,
+  options: EnqueueBatchOptions = {},
 ): Promise<EnqueuedBatch> {
   if (targetDeviceIds.length === 0) {
     throw new CommandQueueError(
@@ -68,6 +79,10 @@ export async function enqueueBatch(
 
   const batchId = randomUUID();
   const deviceCount = targetDeviceIds.length;
+  const deliveryExpiresAt =
+    options.deliveryTimeoutSeconds === undefined
+      ? null
+      : new Date(Date.now() + options.deliveryTimeoutSeconds * 1000);
   // deterministic lock order: overlapping concurrent batches update the same
   // device rows; unsorted input could deadlock (Kimi low-risk)
   const sortedTargets = [...targetDeviceIds].sort();
@@ -122,6 +137,7 @@ export async function enqueueBatch(
         batchId,
         deviceId: target.id,
         sequence,
+        deliveryExpiresAt,
         payload: Buffer.from(
           encodeDeviceCommandExecution({
             // 16 raw binary bytes from the dashed UUID

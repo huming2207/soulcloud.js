@@ -14,6 +14,7 @@
 import type { Aedes } from "aedes";
 import {
   commandExecution,
+  expireDelayedCommands,
   leaseNext,
   markBrokerAccepted,
   releaseLease,
@@ -99,6 +100,10 @@ export async function pollOnce(
   options: PollerOptions,
   log: PollerLog,
 ): Promise<void> {
+  // expire commands whose delivery deadline has passed (releases the
+  // per-device queue; no-op when no deadlines are set)
+  await expireDelayedCommands(prisma);
+
   const leased = await leaseNext(prisma, options.leaseDurationMs);
   if (!leased) return;
 

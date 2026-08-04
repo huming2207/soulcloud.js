@@ -18,7 +18,12 @@
 
 import { Aedes, type Client } from "aedes";
 import type { PrismaClient } from "@soulcloud/core";
-import { isValidDeviceUid, parseDeviceTopic, TOPIC_PREFIX } from "@soulcloud/core";
+import {
+  isValidDeviceUid,
+  parseDeviceTopic,
+  TOPIC_PREFIX,
+  verifyDevicePassword,
+} from "@soulcloud/core";
 import { startWsBroker, type WsBrokerHandle } from "./ws-adapter";
 
 /** Delay before answering a failed authentication attempt. */
@@ -130,9 +135,9 @@ export async function startBroker(
 /**
  * Authenticates a device against the `devices` table.
  *
- * TODO: the password hashing algorithm is an unresolved product decision
- * (same as the Rust version). The current comparison is plaintext and must
- * be replaced once the algorithm is agreed.
+ * Passwords are stored scrypt-hashed (constant-time verification); legacy
+ * plaintext hashes are still accepted for development data but never
+ * written going forward.
  */
 async function authenticateDevice(
   prisma: PrismaClient,
@@ -145,7 +150,7 @@ async function authenticateDevice(
     select: { passwordHash: true },
   });
   if (!device) return false;
-  return device.passwordHash === password.toString();
+  return verifyDevicePassword(password.toString(), device.passwordHash);
 }
 
 /** Whether a device may publish to the given topic (uplink kinds only). */

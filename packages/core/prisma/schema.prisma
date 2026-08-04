@@ -112,8 +112,11 @@ model DeviceCommand {
   sequence          BigInt
   /// MessagePack-encoded DeviceCommandExecution
   payload           Bytes
-  /// State: queued | leased | broker_accepted | device_completed
+  /// State: queued | leased | broker_accepted | device_completed | delivery_failed
   state             String       @default("queued") @db.VarChar(32)
+  /// Absolute deadline for delivery; NULL = never expires (the command is
+  /// retried until the device completes it). Past deadline -> delivery_failed.
+  deliveryExpiresAt DateTime?    @map("delivery_expires_at") @db.Timestamptz()
   /// CHECK device_commands_attempt_count_nonnegative: attempt_count >= 0
   attemptCount      Int          @default(0) @map("attempt_count")
   availableAt       DateTime     @default(now()) @map("available_at") @db.Timestamptz()

@@ -29,6 +29,26 @@ interface ClaimCandidate {
 }
 
 /**
+ * Moves pending commands whose delivery deadline has passed to the
+ * `delivery_failed` terminal state (M2): the per-device queue is released
+ * without a device result. Commands with a NULL deadline never expire.
+ *
+ * @returns the number of commands expired.
+ */
+export async function expireDelayedCommands(
+  prisma: PrismaClient,
+): Promise<number> {
+  const result = await prisma.deviceCommand.updateMany({
+    where: {
+      state: { in: ["queued", "leased", "broker_accepted"] },
+      deliveryExpiresAt: { lt: new Date() },
+    },
+    data: { state: "delivery_failed", leaseExpiresAt: null },
+  });
+  return result.count;
+}
+
+/**
  * Claims the oldest eligible command, or null when nothing is eligible.
  *
  * @throws {CommandQueueError} when the lease expiry cannot be represented or

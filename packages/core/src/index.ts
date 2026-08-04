@@ -22,6 +22,7 @@ export * from "./elf/parser";
 export * from "./logging/artifact";
 export * from "./logging/ingest";
 export * from "./logging/decode";
+export * from "./security/password";
 export { prisma, ping, Prisma } from "./db";
 export type { PrismaClient } from "./db";
 export { SharedEnv, loadEnv } from "./config";

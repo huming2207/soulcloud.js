@@ -31,6 +31,11 @@ const CreateCommandBatchBody = z
   .object({
     device_ids: z.array(z.string().uuid()).max(MAX_BATCH_TARGETS),
     command: DeviceCommandSchema,
+    /**
+     * Delivery deadline in seconds (NULL/absent = never expires; the
+     * command is retried until the device completes it).
+     */
+    delivery_timeout_seconds: z.coerce.number().int().positive().optional(),
   })
   .strict();
 
@@ -60,6 +65,9 @@ export function createApp(prisma: PrismaClient) {
           prisma,
           parsed.data.device_ids,
           parsed.data.command,
+          {
+            deliveryTimeoutSeconds: parsed.data.delivery_timeout_seconds,
+          },
         );
         set.status = 202;
         return { batch_id: batch.id, device_count: batch.deviceCount };
