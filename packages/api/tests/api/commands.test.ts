@@ -214,3 +214,28 @@ describe("POST /v1/command-batches", () => {
     expect(body.message).not.toContain("boom");
   });
 });
+
+describe("G group: project membership", () => {
+  test("authenticated non-member -> 403 on command batches", async () => {
+    // a user with no membership in the test project
+    const username = `outsider-${randomUUID().slice(0, 8)}`;
+    const res = await app.handle(
+      new Request("http://localhost/v1/auth/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username,
+          password: "test-password-123",
+          email: `${username}@example.com`,
+        }),
+      }),
+    );
+    const body = (await res.json()) as { access_token: string };
+    const outsider = await postBatch(
+      { device_ids: deviceIds, command: { cmd: "reboot" } },
+      body.access_token,
+    );
+    expect(outsider.status).toBe(403);
+    expect(await outsider.json()).toMatchObject({ error: "forbidden" });
+  });
+});

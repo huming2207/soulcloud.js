@@ -630,3 +630,58 @@ describe("G group: credential revocation kills live sessions", () => {
     await prisma.device.deleteMany({ where: { deviceUid: uid } });
   });
 });
+
+describe("G group: credential rotation", () => {
+  test("re-issuing credentials invalidates the old password", async () => {
+    const { generateDevicePassword } = await import("@soulcloud/core");
+    const uid = `rotate-${randomUUID().slice(0, 8)}`;
+    const oldPw = generateDevicePassword();
+    await prisma.device.create({
+      data: {
+        id: randomUUID(),
+        deviceUid: uid,
+        assignedId: "rotate",
+        passwordHash: await hashDevicePassword(oldPw),
+        projectId,
+      },
+    });
+
+    // old password connects
+    const c1 = new MqttTestClient(BROKER_URL, { clientId: uid, username: uid, password: oldPw });
+    void c1.connect().catch(() => {});
+    await waitForConnect(c1);
+    c1.end();
+
+    // re-issue (as the API endpoint does: new hash replaces the old one)
+    const newPw = generateDevicePassword();
+    await prisma.device.update({
+      where: { deviceUid: uid },
+      data: { passwordHash: await hashDevicePassword(newPw), authRevoked: false },
+    });
+
+    // old password is now refused
+    const c2 = new MqttTestClient(BROKER_URL, { clientId: uid, username: uid, password: oldPw });
+    void c2.connect().catch(() => {});
+    const oldOutcome = await new Promise<string>((resolve) => {
+      c2.once("connect", () => resolve("connected"));
+      c2.once("error", (err: Error) => resolve(`error: ${err.message}`));
+      setTimeout(() => resolve("timeout"), 5000);
+    });
+    expect(oldOutcome.startsWith("error")).toBe(true);
+
+    // new password connects
+    const c3 = new MqttTestClient(BROKER_URL, { clientId: uid, username: uid, password: newPw });
+    void c3.connect().catch(() => {});
+    await waitForConnect(c3);
+    c3.end();
+
+    await prisma.device.deleteMany({ where: { deviceUid: uid } });
+  });
+});
+
+describe("G group: kickDeviceSession", () => {
+  test("returns false for devices that are not connected", () => {
+    const kicked = kickDeviceSession(broker.aedes, "not-connected-device");
+    expect(kicked).toBe(false);
+  });
+});

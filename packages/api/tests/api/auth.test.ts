@@ -233,3 +233,83 @@ describe("device credentials", () => {
     expect(await res.json()).toMatchObject({ error: "forbidden" });
   });
 });
+
+describe("auth edge cases", () => {
+  test("refresh with an unknown token -> 401 invalid_token", async () => {
+    const res = await app.handle(
+      jsonRequest("/v1/auth/refresh", "POST", { refresh_token: "definitely-not-a-real-token" }),
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: "invalid_token" });
+  });
+
+  test("refresh with an expired token -> 401 token_expired", async () => {
+    const username = `auth-${randomUUID().slice(0, 8)}`;
+    const user = await register(username);
+    // force expiry by backdating the stored token
+    const { createHash } = await import("node:crypto");
+    const tokenHash = createHash("sha256").update(user.refresh_token).digest("hex");
+    await prisma.refreshToken.update({
+      where: { tokenHash },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    const res = await app.handle(
+      jsonRequest("/v1/auth/refresh", "POST", { refresh_token: user.refresh_token }),
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: "token_expired" });
+  });
+
+  test("registration input validation -> 400", async () => {
+    const cases = [
+      { username: "ab", password: "test-password-123", email: "a@example.com" }, // username too short
+      { username: "bad name!", password: "test-password-123", email: "a@example.com" }, // invalid chars
+      { username: "okname", password: "short", email: "a@example.com" }, // password too short
+      { username: "okname", password: "test-password-123", email: "not-an-email" }, // bad email
+    ];
+    for (const body of cases) {
+      const res = await app.handle(jsonRequest("/v1/auth/register", "POST", body));
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test("access token expiry is enforced", async () => {
+    // a short-TTL app instance
+    const shortApp = createApp(prisma, {
+      secret: "test-secret-0123456789-0123456789-0123456789",
+      accessTtlSeconds: 1,
+      refreshTtlSeconds: 3600,
+    });
+    const username = `auth-${randomUUID().slice(0, 8)}`;
+    const regRes = await shortApp.handle(
+      jsonRequest("/v1/auth/register", "POST", {
+        username,
+        password: "test-password-123",
+        email: `${username}@example.com`,
+      }),
+    );
+    const user = (await regRes.json()) as { user_id: string; access_token: string };
+    await prisma.userProject.create({ data: { userId: user.user_id, projectId } });
+    const res = await shortApp.handle(
+      jsonRequest(`/v1/devices/${deviceId}/logs`, "GET", undefined, user.access_token),
+    );
+    expect(res.status).toBe(200); // still valid
+    // wait past TTL
+    await new Promise((r) => setTimeout(r, 1100));
+    const expired = await shortApp.handle(
+      jsonRequest(`/v1/devices/${deviceId}/logs`, "GET", undefined, user.access_token),
+    );
+    expect(expired.status).toBe(401);
+  });
+
+  test("device credentials for an unknown device -> 404", async () => {
+    const username = `auth-${randomUUID().slice(0, 8)}`;
+    const user = await register(username);
+    await prisma.userProject.create({ data: { userId: user.user_id, projectId } });
+    const res = await app.handle(
+      jsonRequest(`/v1/devices/${randomUUID()}/credentials`, "POST", undefined, user.access_token),
+    );
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: "device_not_found" });
+  });
+});

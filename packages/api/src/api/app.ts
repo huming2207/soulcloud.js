@@ -26,7 +26,7 @@ import {
 } from "@soulcloud/core";
 import { createAuthRoutes } from "./auth";
 import { createLoggingRoutes } from "./logging";
-import { authenticateRequest } from "./validate";
+import { authenticateRequest, userCanAccessProject } from "./validate";
 
 const MAX_BATCH_TARGETS = 1000;
 
@@ -75,6 +75,19 @@ export function createApp(prisma: PrismaClient, jwt?: JwtConfig) {
         };
       }
       try {
+        // project membership: every target device must belong to a project
+        // the caller can access (missing devices are reported by enqueue)
+        const targets = await prisma.device.findMany({
+          where: { id: { in: parsed.data.device_ids } },
+          select: { projectId: true },
+        });
+        const projectIds = new Set(targets.map((d) => d.projectId));
+        for (const pid of projectIds) {
+          if (!(await userCanAccessProject(prisma, authUser.user.id, pid))) {
+            set.status = 403;
+            return { error: "forbidden", message: "not a member of a target device's project" };
+          }
+        }
         const batch = await enqueueBatch(
           prisma,
           parsed.data.device_ids,
