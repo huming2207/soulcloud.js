@@ -236,7 +236,7 @@ export async function importArtifact(
 }
 
 /** Detects a Prisma unique-constraint violation (P2002). */
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&

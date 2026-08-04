@@ -76,6 +76,7 @@ model Project {
   orgLinks     OrganisationProject[]
   devices      Device[]
   artifacts    FirmwareArtifact[]
+  releases     FirmwareRelease[]
   userLinks    UserProject[]
 
   @@map("projects")
@@ -189,10 +190,52 @@ model FirmwareArtifact {
   uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz()
   logStrings  FirmwareLogString[]
   logEvents   RawLogEvent[]
+  releases    FirmwareRelease[]
 
   @@unique([projectId, buildId], map: "firmware_artifacts_project_build_unique")
   @@index([projectId, uploadedAt])
   @@map("firmware_artifacts")
+}
+
+// --- OTA firmware releases (see llm-docs/soulcloudjs/16-ota-firmware-releases-proposal.md) ---
+
+/// OTA release: a distributable firmware image (bin), optionally tied to an
+/// ELF artifact for build identity / on9log decoding.
+model FirmwareRelease {
+  id         String            @id @default(uuid()) @db.Uuid
+  projectId  String            @map("project_id") @db.Uuid
+  project    Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  /// Optional link to the ELF artifact (build identity = ELF hash)
+  artifactId String?           @map("artifact_id") @db.Uuid
+  artifact   FirmwareArtifact? @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  /// SHA-256 of the bin image (unique per project, idempotent re-upload)
+  binHash    String            @map("bin_hash") @db.VarChar(64)
+  /// bin image bytes (DB storage for the initial stage)
+  binBytes   Bytes             @map("bin_bytes")
+  binSize    Int               @map("bin_size")
+  /// Human-readable version label (reference only, never identity)
+  version    String?           @db.VarChar(255)
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+  downloadTokens FirmwareDownloadToken[]
+
+  @@unique([projectId, binHash], map: "firmware_releases_project_bin_unique")
+  @@index([projectId, createdAt])
+  @@map("firmware_releases")
+}
+
+/// Single-use, short-lived download credential for a release's bin.
+model FirmwareDownloadToken {
+  id        String          @id @default(uuid()) @db.Uuid
+  releaseId String          @map("release_id") @db.Uuid
+  release   FirmwareRelease @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  /// SHA-256 of the random token (only the digest is stored)
+  tokenHash String          @unique @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime        @map("expires_at") @db.Timestamptz()
+  usedAt    DateTime?       @map("used_at") @db.Timestamptz()
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([releaseId, expiresAt])
+  @@map("firmware_download_tokens")
 }
 
 /// ELF address -> string dictionary for one artifact (tag/format resolution).

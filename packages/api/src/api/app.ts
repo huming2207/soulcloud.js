@@ -26,6 +26,7 @@ import {
 } from "@soulcloud/core";
 import { createAuthRoutes } from "./auth";
 import { createLoggingRoutes } from "./logging";
+import { createFirmwareRoutes } from "./firmware";
 import { authenticateRequest, userCanAccessProject } from "./validate";
 
 const MAX_BATCH_TARGETS = 1000;
@@ -103,7 +104,8 @@ export function createApp(prisma: PrismaClient, jwt?: JwtConfig) {
       }
     })
     .use(createAuthRoutes(prisma, auth))
-    .use(createLoggingRoutes(prisma, auth));
+    .use(createLoggingRoutes(prisma, auth))
+    .use(createFirmwareRoutes(prisma, auth));
 }
 
 function formatZodIssues(
