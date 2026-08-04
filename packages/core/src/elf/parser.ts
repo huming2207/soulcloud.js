@@ -262,14 +262,17 @@ export interface ElfString {
 /**
  * Extracts every NUL-terminated string in the given section.
  * Used for `.noload_keep_in_elf.*` format/tag strings.
+ *
+ * The section is passed directly (M14): looking it up by name could match
+ * the wrong one when duplicate section names exist.
  */
 export function extractStrings(
   elf: ElfInfo,
   data: Uint8Array,
-  sectionName: string,
+  section: ElfSection,
 ): ElfString[] {
-  const sec = elf.sections.find((s) => s.name === sectionName);
-  if (!sec || sec.type === SHT_NOBITS) return [];
+  const sec = section;
+  if (sec.type === SHT_NOBITS) return [];
   const start = Number(sec.offset);
   const size = Number(sec.size);
   const limit = Math.min(start + size, data.length);

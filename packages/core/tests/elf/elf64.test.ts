@@ -58,7 +58,7 @@ describe("64-bit ELF robustness", () => {
     expect(elf.littleEndian).toBe(false);
     const sec = elf.sections.find((s) => s.name.startsWith(".noload_keep_in_elf"))!;
     expect(sec.addr).toBe(0x100000000n);
-    const strings = extractStrings(elf, elfBytes, sec.name);
+    const strings = extractStrings(elf, elfBytes, sec);
     expect(strings.map((s) => s.value)).toEqual(["fmt %d"]);
     expect(readStringAtVaddr(elf, elfBytes, 0x100000000)).toBe("fmt %d");
   });

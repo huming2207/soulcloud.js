@@ -340,3 +340,31 @@ describe("recordDeviceResult", () => {
     ).rejects.toMatchObject({ kind: "result_mismatch" });
   });
 });
+
+describe("M8: concurrent enqueue ordering", () => {
+  test("per-device lease order follows sequence, not transaction start", async () => {
+    // fire two enqueues concurrently; whichever commits second must NOT be
+    // delivered before the first (sequence order preserved)
+    const [b1, b2] = await Promise.all([
+      enqueueBatch(prisma, [deviceIds[0]!], { cmd: "first" }),
+      enqueueBatch(prisma, [deviceIds[0]!], { cmd: "second" }),
+    ]);
+    const rows = await prisma.deviceCommand.findMany({
+      where: { deviceId: deviceIds[0]!, batchId: { in: [b1.id, b2.id] } },
+      orderBy: { sequence: "asc" },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.sequence).toBeLessThan(rows[1]!.sequence);
+
+    // the oldest sequence must be leased first, and the second must stay
+    // blocked until the first completes
+    const first = await leaseNext(prisma, 60_000);
+    expect(first).not.toBeNull();
+    const firstRow = await prisma.deviceCommand.findUniqueOrThrow({
+      where: { id: first!.id },
+    });
+    expect(firstRow.sequence).toBe(rows[0]!.sequence);
+    expect(await leaseNext(prisma, 60_000)).toBeNull();
+    await releaseLease(prisma, first!.id);
+  });
+});

@@ -63,7 +63,7 @@ export function extractArtifactStrings(elf: Uint8Array): ExtractedStrings {
 
   for (const sec of info.sections) {
     if (sec.type === 8 /* SHT_NOBITS */) continue;
-    const strings = extractStrings(info, elf, sec.name);
+    const strings = extractStrings(info, elf, sec);
     if (strings.length === 0) continue;
     if (sec.name.startsWith(".noload_keep_in_elf")) {
       // formats (and possibly tags) live in no-load sections

@@ -58,7 +58,11 @@ export async function leaseNext(
             SELECT 1 FROM device_commands earlier
             WHERE earlier.device_id = dc.device_id
               AND earlier.state IN ('queued', 'leased', 'broker_accepted')
-              AND (earlier.created_at, earlier.id) < (dc.created_at, dc.id)
+              -- M8: per-device order by sequence, NOT created_at: concurrent
+              -- enqueues can commit in a different order than their
+              -- transactions started, and created_at is the transaction
+              -- start time (PG now()); sequence is monotonic per device
+              AND earlier.sequence < dc.sequence
         )
       ORDER BY dc.created_at, dc.id
       FOR UPDATE OF dc SKIP LOCKED

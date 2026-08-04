@@ -61,16 +61,16 @@ const noloadNames = demo.sections.filter((s) => s.name.startsWith(".noload_keep_
 console.log(`\n[extract] demo .noload sections: ${noloadNames.length}`);
 
 bench(`extractStrings demo (${noloadNames.length} noload sections)`, 20, () => {
-  for (const name of noloadNames) extractStrings(demo, demoElf, name);
+  for (const sec of demo.sections.filter((x) => x.name.startsWith(".noload_keep_in_elf"))) extractStrings(demo, demoElf, sec);
 });
 bench("extractStrings synth32", 1000, () => {
-  extractStrings(synth, synth32, ".noload_keep_in_elf.0");
+  extractStrings(synth, synth32, synth.sections.find((x) => x.name.startsWith(".noload_keep_in_elf"))!);
 });
 
 // --- address lookup ----------------------------------------------------------
 
 // collect real format addresses from the demo
-const fmtStrings = noloadNames.flatMap((name) => extractStrings(demo, demoElf, name));
+const fmtStrings = demo.sections.filter((x) => x.name.startsWith(".noload_keep_in_elf")).flatMap((sec) => extractStrings(demo, demoElf, sec));
 console.log(`\n[lookup] demo dictionary strings: ${fmtStrings.length}`);
 
 bench("readStringAtVaddr (first hit in PT_LOAD-less .noload)", 2000, () => {

@@ -458,3 +458,28 @@ describe("log/stat uplink ingestion", () => {
     device.end(true);
   });
 });
+
+describe("M2: offline devices", () => {
+  test("commands to offline devices stay queued (not published)", async () => {
+    const batch = await enqueueBatch(prisma, [deviceId], { cmd: "reboot" });
+    const row = await prisma.deviceCommand.findFirstOrThrow({
+      where: { batchId: batch.id },
+    });
+
+    // no device connected under DEVICE_UID
+    await pollOnce(broker.aedes, prisma, {
+      pollIntervalMs: 100,
+      leaseDurationMs: 60_000,
+      retain: false,
+      offlineRetryMs: 60_000,
+    }, silentLog);
+
+    const after = await prisma.deviceCommand.findUniqueOrThrow({
+      where: { id: row.id },
+    });
+    expect(after.state).toBe("queued"); // not broker_accepted
+    expect(after.leaseExpiresAt).toBeNull();
+    // deferred: not claimable immediately
+    expect(after.availableAt.getTime()).toBeGreaterThan(Date.now());
+  });
+});

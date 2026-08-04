@@ -34,31 +34,35 @@ export async function startCommandNotifier(
   onWakeup: () => void,
   log: NotifierLog,
 ): Promise<CommandNotifier> {
-  const client = new Client({ connectionString: databaseUrl });
   let closed = false;
-  let listening = false;
-
-  client.on("notification", (message) => {
-    if (message.channel === COMMAND_NOTIFY_CHANNEL) {
-      log.info("command notification received", {
-        batchId: message.payload ?? undefined,
-      });
-      onWakeup();
-    }
-  });
-
-  client.on("error", (error) => {
-    log.warn("command notify connection error; will reconnect", {
-      error: error.message,
-    });
-    listening = false;
-    void scheduleReconnect();
-  });
+  // M9: a pg Client cannot be re-connected after an error; each reconnect
+  // creates a fresh Client (the previous one is ended first).
+  let client: Client | null = null;
 
   async function listen(): Promise<void> {
-    await client.connect();
-    await client.query(`LISTEN ${COMMAND_NOTIFY_CHANNEL}`);
-    listening = true;
+    const c = new Client({ connectionString: databaseUrl });
+
+    c.on("notification", (message) => {
+      if (message.channel === COMMAND_NOTIFY_CHANNEL) {
+        log.info("command notification received", {
+          batchId: message.payload ?? undefined,
+        });
+        onWakeup();
+      }
+    });
+
+    // a broken connection emits 'error' then 'end'; schedule a fresh listen
+    c.on("error", (error) => {
+      log.warn("command notify connection error; will reconnect", {
+        error: error.message,
+      });
+      void c.end().catch(() => {});
+      void scheduleReconnect();
+    });
+
+    await c.connect();
+    await c.query(`LISTEN ${COMMAND_NOTIFY_CHANNEL}`);
+    client = c;
     log.info(`listening for command notifications on "${COMMAND_NOTIFY_CHANNEL}"`);
   }
 
@@ -82,7 +86,7 @@ export async function startCommandNotifier(
     close: async () => {
       closed = true;
       try {
-        await client.end();
+        await client?.end();
       } catch {
         // connection may already be broken
       }

@@ -104,3 +104,41 @@ describe("command notifier", () => {
     await notifier.close();
   });
 });
+
+describe("M9: notifier reconnection", () => {
+  test("recovers after the connection is killed", async () => {
+    const wakeups: string[] = [];
+    const notifier = await startCommandNotifier(
+      process.env.DATABASE_URL!,
+      () => wakeups.push("wake"),
+      silentLog,
+    );
+    await new Promise((r) => setTimeout(r, 100));
+
+    // kill every connection to the notifier's session by terminating all
+    // pg connections from this app (the dedicated LISTEN connection drops)
+    await prisma.$executeRaw`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'pg' AND pid <> pg_backend_pid()`;
+
+    // wait for the reconnect (1s delay) then publish again
+    await new Promise((r) => setTimeout(r, 1500));
+    const before = wakeups.length;
+    const publisher = new Client({ connectionString: process.env.DATABASE_URL });
+    await publisher.connect();
+    await publisher.query(`SELECT pg_notify($1, 'after-reconnect')`, [COMMAND_NOTIFY_CHANNEL]);
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("no wake after reconnect")), 4000);
+      const check = setInterval(() => {
+        if (wakeups.length > before) {
+          clearTimeout(timer);
+          clearInterval(check);
+          resolve();
+        }
+      }, 50);
+    });
+
+    expect(wakeups.length).toBeGreaterThan(before);
+    await publisher.end();
+    await notifier.close();
+  });
+});

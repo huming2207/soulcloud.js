@@ -28,7 +28,7 @@ describe("parseElf", () => {
     expect(elf32be.littleEndian).toBe(false);
     // big-endian string extraction must work too
     const sec = elf32be.sections.find((s) => s.name.startsWith(".noload_keep_in_elf"))!;
-    const strings = extractStrings(elf32be, buildNoloadElf(["fmt"], [], 32, false, 0x1000), sec.name);
+    const strings = extractStrings(elf32be, buildNoloadElf(["fmt"], [], 32, false, 0x1000), sec);
     expect(strings.some((s) => s.value === "fmt")).toBe(true);
   });
 
@@ -71,7 +71,7 @@ describe("extractStrings", () => {
     const elfBytes = buildNoloadElf(["value=%d", "plain"], [], 32, true);
     const elf = parseElf(elfBytes);
     const sec = elf.sections.find((s) => s.name.startsWith(".noload_keep_in_elf"))!;
-    const strings = extractStrings(elf, elfBytes, sec.name);
+    const strings = extractStrings(elf, elfBytes, sec);
     expect(strings).toHaveLength(2);
     expect(strings[0]).toEqual({ addr: 0x40000000, value: "value=%d" });
     expect(strings[1]).toEqual({ addr: 0x40000009, value: "plain" });
@@ -87,13 +87,13 @@ describe("extractStrings", () => {
     });
     const elf = parseElf(elfBytes);
     const sec = elf.sections.find((s) => s.name.startsWith(".noload_keep_in_elf"))!;
-    const strings = extractStrings(elf, elfBytes, sec.name);
+    const strings = extractStrings(elf, elfBytes, sec);
     expect(strings.map((s) => s.value)).toEqual(["ok=%d", "second"]);
   });
 
   test("returns empty for missing sections", () => {
     const elf = parseElf(buildNoloadElf(["x"], []));
-    expect(extractStrings(elf, new Uint8Array(0), ".does_not_exist")).toEqual([]);
+    expect(extractStrings(elf, new Uint8Array(0), elf.sections[0]!)).toEqual([]);
   });
 
   test("handles NOBITS sections", () => {
@@ -107,7 +107,7 @@ describe("extractStrings", () => {
     });
     const elf = parseElf(elfBytes);
     const sec = elf.sections.find((s) => s.name.startsWith(".noload_keep_in_elf"))!;
-    expect(extractStrings(elf, elfBytes, sec.name)).toEqual([]);
+    expect(extractStrings(elf, elfBytes, sec)).toEqual([]);
   });
 });
 

@@ -27,6 +27,11 @@ export interface PollerOptions {
   leaseDurationMs: number;
   /** Retained flag for command publications. */
   retain: boolean;
+  /**
+   * Delay before an offline-targeted command becomes claimable again
+   * (prevents a busy poll loop while a device stays offline).
+   */
+  offlineRetryMs?: number;
 }
 
 export interface PollerLog {
@@ -96,6 +101,30 @@ export async function pollOnce(
 ): Promise<void> {
   const leased = await leaseNext(prisma, options.leaseDurationMs);
   if (!leased) return;
+
+  // M2: never publish to an offline device. A QoS1 message to a clean-session
+  // client is dropped by the broker, which would strand the command in
+  // broker_accepted forever and block the per-device queue. Instead the
+  // command stays queued and is delivered when the device reconnects.
+  // (aedes exposes `clients` as a plain object keyed by clientId; the type
+  // definitions only expose connectedClients, hence the duck typing)
+  const clients = (aedes as unknown as { clients?: Record<string, unknown> }).clients;
+  const online = clients ? leased.deviceUid in clients : false;
+  if (!online) {
+    log.debug("device offline; deferring command", {
+      commandId: leased.id,
+      deviceUid: leased.deviceUid,
+    });
+    await prisma.deviceCommand.update({
+      where: { id: leased.id, state: "leased" },
+      data: {
+        state: "queued",
+        leaseExpiresAt: null,
+        availableAt: new Date(Date.now() + (options.offlineRetryMs ?? 5_000)),
+      },
+    });
+    return;
+  }
 
   let topic: string;
   try {

@@ -86,7 +86,7 @@ describe("ELF parsing against real demo ELF", () => {
     expect(noload.length).toBeGreaterThan(0);
     const all: string[] = [];
     for (const sec of noload) {
-      for (const s of extractStrings(elf, data, sec.name)) {
+      for (const s of extractStrings(elf, data, sec)) {
         all.push(s.value);
       }
     }
