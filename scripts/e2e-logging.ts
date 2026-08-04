@@ -18,8 +18,8 @@ import { ON9LOG_FRAME_TYPE_ON9LOG } from "../packages/core/tests/helpers/slip";
 const API = "http://localhost:8080";
 const MQTT_URL = "ws://127.0.0.1:1883/mqtt";
 const E2E_USER = `e2elog-${randomUUID().slice(0, 8)}`;
-const DEMO_ELF = "/tmp/on9log_unix_demo";
-const DEMO_OUTPUT = "/tmp/on9log_demo_output.bin";
+const DEMO_ELF = "packages/core/tests/fixtures/on9log_unix_demo";
+const DEMO_OUTPUT = "packages/core/tests/fixtures/on9log_demo_output.bin";
 const DEVICE_UID = `e2e-log-${randomUUID().slice(0, 8)}`;
 const PASSWORD = "e2e-secret";
 

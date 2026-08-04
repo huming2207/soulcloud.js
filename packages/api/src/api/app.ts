@@ -48,11 +48,15 @@ export function createApp(
   jwt: JwtConfig,
   otaTargetTtlSeconds = 15 * 60,
 ) {
-  const auth = jwt ?? {
-    secret: "dev-only-secret-change-me-0123456789",
-    accessTtlSeconds: 15 * 60,
-    refreshTtlSeconds: 30 * 24 * 3600,
-  };
+  // C1 (round-5): never fall back to a hardcoded secret. The caller MUST
+  // pass the configured JwtConfig (index.ts wires .env; tests inject
+  // TEST_JWT). A runtime `undefined` (JS callers) must fail, not degrade.
+  if (!jwt) {
+    throw new Error(
+      "createApp requires a JwtConfig: JWT_SECRET must be set in .env and wired through the config",
+    );
+  }
+  const auth = jwt;
   return new Elysia()
     .get("/health/live", () => ({ status: "ok" }))
     .get("/health/ready", async ({ set }) => {

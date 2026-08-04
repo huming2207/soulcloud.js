@@ -151,10 +151,21 @@ Implemented:
   ELF artifact upload with SHA-256 build identity, dictionary extraction,
   on-demand decoding at query time (see `docs`)
 - **Uplink protection**: per-device rate limits and packet-size caps
+- **Human auth**: JWT dual-token (short access + server-side refresh with
+  rotation/reuse detection), argon2id passwords, in-process login throttling
+- **Device auth**: per-session MQTT (credential issue/revoke, session kill)
+- **OTA**: firmware releases (bin + optional ELF), deploy with per-device
+  short-JWT download credentials over MQTT, HTTP pull, three-layer target
+  state machine (acknowledgements + stat.fw confirmation)
 
-Open (same scope as the Rust version): user/org/tenant auth, OTA,
-full-text log search, object storage archive, retention policies,
-fleet selectors.
+Open (same scope as the Rust version): rollout FSM, full-text log search,
+object storage archive, retention policies, fleet selectors, org/tenant
+tenancy (direct user→project today).
+
+> **Deployment notes**: both processes require `JWT_SECRET` (>= 32 chars,
+> identical for api and broker, see `.env.example`). Login throttling is
+> in-process (per instance); register brute-force and OTA download rate
+> limiting must be handled at the reverse proxy.
 
 ## Log ingestion quick tour
 

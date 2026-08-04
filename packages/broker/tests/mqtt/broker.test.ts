@@ -684,6 +684,63 @@ describe("G group: credential rotation", () => {
 });
 
 describe("G group: kickDeviceSession", () => {
+  test("credential rotation kicks the live session (same path as revoke)", async () => {
+    const { startNotifier } = await import("../../src/mqtt/notify");
+    const uid = `rotate-${randomUUID().slice(0, 8)}`;
+    await prisma.device.create({
+      data: {
+        id: randomUUID(),
+        deviceUid: uid,
+        assignedId: "rotate",
+        passwordHash: await hashDevicePassword("pw-old"),
+        projectId,
+      },
+    });
+
+    const client = new MqttTestClient(BROKER_URL, {
+      clientId: uid,
+      username: uid,
+      password: "pw-old",
+    });
+    void client.connect().catch(() => {});
+    await new Promise<void>((resolve, reject) => {
+      client.once("connect", () => resolve());
+      client.once("error", reject);
+      setTimeout(() => reject(new Error("connect timeout")), 5000);
+    });
+
+    // rotation = new hash + revocation notify (exactly what the API
+    // credentials endpoint does, see logging.ts)
+    const kicked: string[] = [];
+    const notifier = await startNotifier(
+      process.env.DATABASE_URL!,
+      { onCommand: () => {}, onOta: () => {}, onCredentialRevoked: (d) => kicked.push(d) },
+      silentLog,
+    );
+    await prisma.$executeRaw`SELECT pg_notify(${CREDENTIAL_REVOKED_CHANNEL}, 'probe')`;
+    await waitFor(async () => kicked.includes("probe"), "notifier listening");
+    await prisma.$transaction([
+      prisma.device.update({
+        where: { deviceUid: uid },
+        data: { passwordHash: await hashDevicePassword("pw-new"), authRevoked: false },
+      }),
+      prisma.$executeRaw`SELECT pg_notify(${CREDENTIAL_REVOKED_CHANNEL}, ${uid})`,
+    ]);
+
+    const disconnected = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), 4000);
+      client.once("close", () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+    expect(disconnected).toBe(true);
+    expect(kicked).toContain(uid);
+
+    await notifier.close();
+    await prisma.device.deleteMany({ where: { deviceUid: uid } });
+  });
+
   test("returns false for devices that are not connected", () => {
     const kicked = kickDeviceSession(broker.aedes, "not-connected-device");
     expect(kicked).toBe(false);

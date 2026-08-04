@@ -50,3 +50,14 @@ describe("API env config (C1)", () => {
     if (result.success) expect(result.data.OTA_TARGET_TTL_SECONDS).toBe(600);
   });
 });
+
+describe("createApp JWT wiring (C1 round-5)", () => {
+  test("createApp without a JwtConfig throws at runtime (no hardcoded fallback)", async () => {
+    const { createApp } = await import("../../src/api/app");
+    // a JS caller passing undefined must fail loudly, never degrade to a
+    // public dev secret
+    expect(() =>
+      createApp(undefined as never, undefined as never),
+    ).toThrow(/JwtConfig/);
+  });
+});

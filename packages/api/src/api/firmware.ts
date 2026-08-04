@@ -406,8 +406,10 @@ export function createFirmwareRoutes(
               set.status = 404;
               return { error: "target_devices_not_found", message: error.message };
             case "target_not_in_project":
-              set.status = 403;
-              return { error: "forbidden", message: error.message };
+              // round-5: identical response to "not found" — the caller
+              // must not learn whether a device exists in another project
+              set.status = 404;
+              return { error: "target_devices_not_found", message: error.message };
             case "release_not_in_project":
               set.status = 404;
               return { error: "not_found", message: error.message };
@@ -501,55 +503,81 @@ export function createFirmwareRoutes(
         }
         const authHeader = request.headers.get("authorization");
         let release: { projectId: string; binBytes: Uint8Array; binSize: number } | null = null;
-        if (authHeader?.startsWith("Bearer ")) {
-          // human download: membership is the credential
-          const authUser = await authenticateRequest(prisma, jwt, request);
-          if (!authUser) {
-            set.status = 401;
-            return { error: "unauthorized", message: "authentication required" };
+        /**
+         * Device download path: OTA JWT claims -> release + device checks.
+         * Returns the release, or null after responding with an error.
+         */
+        const deviceDownload = async (claims: { deviceUid: string; releaseId: string; jobId: string }) => {
+          if (claims.releaseId !== id.data) {
+            set.status = 403;
+            return null;
           }
-          release = await prisma.firmwareRelease.findUnique({
+          const rel = await prisma.firmwareRelease.findUnique({
             where: { id: id.data },
             select: { projectId: true, binBytes: true, binSize: true },
           });
-          if (!release) {
+          if (!rel) {
             set.status = 404;
-            return { error: "not_found", message: "release does not exist" };
-          }
-          if (!(await userCanAccessProject(prisma, authUser.user.id, release.projectId))) {
-            set.status = 403;
-            return { error: "forbidden", message: "not a member of this project" };
-          }
-        } else {
-          // device download: short-lived per-device JWT (delivered over MQTT)
-          const url = new URL(request.url);
-          const token = url.searchParams.get("token") ?? "";
-          const claims = await verifyOtaToken(jwt.secret, token);
-          if (!claims || claims.releaseId !== id.data) {
-            set.status = 403;
-            return { error: "invalid_download_token", message: "invalid download token" };
-          }
-          release = await prisma.firmwareRelease.findUnique({
-            where: { id: id.data },
-            select: { projectId: true, binBytes: true, binSize: true },
-          });
-          if (!release) {
-            set.status = 404;
-            return { error: "not_found", message: "release does not exist" };
+            return null;
           }
           // the claimed device must still exist in the release's project
           const device = await prisma.device.findUnique({
             where: { deviceUid: claims.deviceUid },
             select: { projectId: true },
           });
-          if (!device || device.projectId !== release.projectId) {
+          if (!device || device.projectId !== rel.projectId) {
             set.status = 403;
-            return { error: "invalid_download_token", message: "invalid download token" };
+            return null;
           }
           // the download request itself is the strongest "device received
           // the notice" evidence: advance the target to delivering
           // (idempotent; downloads are never blocked by state)
           await markOtaTargetDelivering(prisma, claims.jobId, claims.deviceUid);
+          return rel;
+        };
+        if (authHeader?.startsWith("Bearer ")) {
+          const bearerToken = authHeader.slice("Bearer ".length).trim();
+          // human download first (access token, aud=soulcloud-api)...
+          const authUser = await authenticateRequest(prisma, jwt, request);
+          if (authUser) {
+            release = await prisma.firmwareRelease.findUnique({
+              where: { id: id.data },
+              select: { projectId: true, binBytes: true, binSize: true },
+            });
+            if (!release) {
+              set.status = 404;
+              return { error: "not_found", message: "release does not exist" };
+            }
+            if (!(await userCanAccessProject(prisma, authUser.user.id, release.projectId))) {
+              set.status = 403;
+              return { error: "forbidden", message: "not a member of this project" };
+            }
+          } else {
+            // ...then the device OTA token (aud=ota-download, M5: devices
+            // may carry the credential in the Authorization header)
+            const claims = await verifyOtaToken(jwt.secret, bearerToken);
+            if (!claims) {
+              set.status = 403;
+              return { error: "invalid_download_token", message: "invalid download token" };
+            }
+            release = await deviceDownload(claims);
+            if (!release) {
+              return { error: "invalid_download_token", message: "invalid download token" };
+            }
+          }
+        } else {
+          // legacy/query-string credential (kept for compatibility)
+          const url = new URL(request.url);
+          const token = url.searchParams.get("token") ?? "";
+          const claims = await verifyOtaToken(jwt.secret, token);
+          if (!claims) {
+            set.status = 403;
+            return { error: "invalid_download_token", message: "invalid download token" };
+          }
+          release = await deviceDownload(claims);
+          if (!release) {
+            return { error: "invalid_download_token", message: "invalid download token" };
+          }
         }
         set.status = 200;
         set.headers["content-type"] = "application/octet-stream";

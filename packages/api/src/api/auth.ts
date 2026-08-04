@@ -38,6 +38,46 @@ const DUMMY_PASSWORD_HASH =
 /** Fixed delay applied to failed authentication attempts (like the broker). */
 const AUTH_FAIL_DELAY_MS = 100;
 
+/**
+ * In-process login throttling (audit M5 round-5): after
+ * LOGIN_MAX_FAILURES consecutive failures for a username, that username is
+ * locked for LOGIN_LOCK_SECONDS. In-memory per-instance state — the
+ * deployment docs must note that a multi-instance API needs rate limiting
+ * at the reverse proxy (this is a cheap local barrier, not a global one).
+ */
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_LOCK_SECONDS = 60;
+const loginFailures = new Map<string, { count: number; lockedUntil: number }>();
+
+/** Returns the remaining lock seconds for a username (0 = not locked). */
+function loginLockRemaining(username: string): number {
+  const entry = loginFailures.get(username);
+  if (!entry) return 0;
+  // lockedUntil === 0 means "never locked": the counter must NOT be
+  // dropped here (a past check used `lockedUntil <= Date.now()`, which
+  // deleted the counter on every request and made the lock impossible)
+  if (entry.lockedUntil === 0) return 0;
+  if (entry.lockedUntil <= Date.now()) {
+    loginFailures.delete(username);
+    return 0;
+  }
+  return Math.ceil((entry.lockedUntil - Date.now()) / 1000);
+}
+
+function recordLoginFailure(username: string): void {
+  const entry = loginFailures.get(username) ?? { count: 0, lockedUntil: 0 };
+  entry.count += 1;
+  if (entry.count >= LOGIN_MAX_FAILURES) {
+    entry.lockedUntil = Date.now() + LOGIN_LOCK_SECONDS * 1000;
+    entry.count = 0;
+  }
+  loginFailures.set(username, entry);
+}
+
+function clearLoginFailures(username: string): void {
+  loginFailures.delete(username);
+}
+
 const RegisterBody = z
   .object({
     username: z.string().min(3).max(64).regex(/^[a-zA-Z0-9_.-]+$/),
@@ -106,6 +146,14 @@ export function createAuthRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 400;
           return { error: "invalid_request", message: "invalid login payload" };
         }
+        // brute-force barrier: a locked username is rejected before any
+        // credential work (the fixed delay still applies, no timing signal)
+        const locked = loginLockRemaining(parsed.data.username);
+        if (locked > 0) {
+          await new Promise((r) => setTimeout(r, AUTH_FAIL_DELAY_MS));
+          set.status = 401;
+          return { error: "invalid_credentials", message: "invalid username or password" };
+        }
         const user = await prisma.user.findUnique({
           where: { username: parsed.data.username },
         });
@@ -116,10 +164,12 @@ export function createAuthRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           : await verifyPassword(parsed.data.password, DUMMY_PASSWORD_HASH);
         if (!user || !passwordOk) {
           // throttle brute force; also masks the timing oracle
+          recordLoginFailure(parsed.data.username);
           await new Promise((r) => setTimeout(r, AUTH_FAIL_DELAY_MS));
           set.status = 401;
           return { error: "invalid_credentials", message: "invalid username or password" };
         }
+        clearLoginFailures(parsed.data.username);
         const refreshToken = await issueRefreshToken(prisma, user.id, jwt);
         const accessToken = await signAccessToken(jwt, { sub: user.id, username: user.username });
         return { user_id: user.id, access_token: accessToken, refresh_token: refreshToken };

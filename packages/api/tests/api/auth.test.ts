@@ -375,3 +375,50 @@ describe("auth edge cases", () => {
     expect(await res.json()).toMatchObject({ error: "device_not_found" });
   });
 });
+
+describe("login throttling (M5 round-5)", () => {
+  test("repeated failures lock the username; a correct password still fails while locked", async () => {
+    const username = `throttle-${randomUUID().slice(0, 8)}`;
+    await register(username);
+
+    // five wrong passwords -> locked
+    for (let i = 0; i < 5; i++) {
+      const res = await app.handle(
+        jsonRequest("/v1/auth/login", "POST", { username, password: "wrong-password" }),
+      );
+      expect(res.status).toBe(401);
+    }
+    // the sixth attempt (even with the RIGHT password) is rejected
+    const locked = await app.handle(
+      jsonRequest("/v1/auth/login", "POST", { username, password: "test-password-123" }),
+    );
+    expect(locked.status).toBe(401);
+    expect(await locked.json()).toMatchObject({ error: "invalid_credentials" });
+  });
+
+  test("a successful login clears the failure counter", async () => {
+    const username = `throttle-ok-${randomUUID().slice(0, 8)}`;
+    await register(username);
+    // two failures then a success clears the counter
+    await app.handle(
+      jsonRequest("/v1/auth/login", "POST", { username, password: "wrong-password" }),
+    );
+    await app.handle(
+      jsonRequest("/v1/auth/login", "POST", { username, password: "wrong-password" }),
+    );
+    const ok = await app.handle(
+      jsonRequest("/v1/auth/login", "POST", { username, password: "test-password-123" }),
+    );
+    expect(ok.status).toBe(200);
+    // failures resume counting from zero: 4 more failures must NOT lock yet
+    for (let i = 0; i < 4; i++) {
+      await app.handle(
+        jsonRequest("/v1/auth/login", "POST", { username, password: "wrong-password" }),
+      );
+    }
+    const stillOpen = await app.handle(
+      jsonRequest("/v1/auth/login", "POST", { username, password: "test-password-123" }),
+    );
+    expect(stillOpen.status).toBe(200);
+  });
+});

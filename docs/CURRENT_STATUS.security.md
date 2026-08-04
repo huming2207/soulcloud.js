@@ -71,8 +71,10 @@ project membership).
 
 - No authentication on the broker WS endpoint beyond device credentials
   (TLS is the reverse proxy's job; WebSocket origin checks could be added)
-- Rate limiting per IP at the proxy level is not implemented (in-broker
-  per-device limits are)
+- Login throttling is in-process (per-username lockout after 5 failures
+  for 60s; in-memory, per-instance). Register brute-force and OTA download
+  rate limiting are NOT built in — a production deployment must rate-limit
+  at the reverse proxy (documented in .env.example / README)
 - Object storage encryption/retention policies are deferred
 - `hashDevicePassword`'s argon2id parameters are Bun.password defaults
   (cost tuning is a deployment decision)

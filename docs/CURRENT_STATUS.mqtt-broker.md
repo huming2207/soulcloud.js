@@ -29,7 +29,8 @@ WebSocket (uWS core).
 | Direction | Topic | Status |
 | --- | --- | --- |
 | Platform → device | `soulcloud/v1/devices/{uid}/cmd/exec` | Implemented (command delivery) |
-| Platform → device | `soulcloud/v1/devices/{uid}/ota` | Topic constant only; payload contract open |
+| Platform → device | `soulcloud/v1/devices/{uid}/ota` | Implemented (OTA notice: release/job metadata + per-device download JWT; device fetches the bin over HTTP itself) |
+| Device → platform | `soulcloud/v1/devices/{uid}/ota/result` | Implemented (download/install/failure acknowledgements drive the target state machine) |
 | Device → platform | `soulcloud/v1/devices/{uid}/cmd/result` | Implemented (idempotent result recording) |
 | Device → platform | `soulcloud/v1/devices/{uid}/log` | Implemented (raw on9log ingestion) |
 | Device → platform | `soulcloud/v1/devices/{uid}/stat` | Implemented (validated; persists `fw` → device_firmware_state) |

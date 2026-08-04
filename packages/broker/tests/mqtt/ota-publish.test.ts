@@ -380,3 +380,57 @@ describe("ota result acknowledgements over MQTT", () => {
     client.end();
   });
 });
+
+describe("ota notice payload shape", () => {
+  test("a release without version omits the version field", async () => {
+    // fixture releaseId HAS version v2.0.0; create a plain one
+    const rel = await prisma.firmwareRelease.create({
+      data: {
+        id: randomUUID(),
+        projectId,
+        binHash: "ef".repeat(32),
+        binBytes: Buffer.from(new Uint8Array(8).fill(0xee)),
+        binSize: 8,
+      },
+    });
+    const dev = await createDevice(`ota-nov-${randomUUID().slice(0, 8)}`, projectId);
+    let jobId = "";
+    try {
+      const job = await createOtaJob(prisma, {
+        projectId,
+        releaseId: rel.id,
+        createdBy: randomUUID(),
+        deviceIds: [dev.id],
+        targetTtlSeconds: 900,
+      });
+      jobId = job.jobId;
+      const client = new MqttTestClient(BROKER_URL, {
+        clientId: dev.deviceUid,
+        username: dev.deviceUid,
+        password: "secret",
+      });
+      const notices: Array<Uint8Array> = [];
+      client.on("message", (topic: string, payload: Uint8Array) => notices.push(payload));
+      await client.connect();
+      await client.subscribe(`soulcloud/v1/devices/${dev.deviceUid}/ota`);
+      await waitFor(async () => {
+        await otaPollOnce(broker.aedes, prisma, {
+          secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000,
+          tokenTtlSeconds: 900, stallTimeoutMinutes: 30,
+        }, silentLog);
+        return notices.length > 0 ? true : null;
+      });
+      const notice = decode(notices[0]!) as Record<string, unknown>;
+      expect(notice.release_id).toBe(rel.id);
+      expect(notice.version).toBeUndefined();
+      expect(notice.job_id).toBe(jobId);
+      await client.end();
+    } finally {
+      // FK order: targets -> jobs -> device -> release
+      await prisma.otaTarget.deleteMany({ where: { jobId } });
+      await prisma.otaJob.deleteMany({ where: { id: jobId } });
+      await prisma.device.delete({ where: { id: dev.id } });
+      await prisma.firmwareRelease.delete({ where: { id: rel.id } });
+    }
+  });
+});

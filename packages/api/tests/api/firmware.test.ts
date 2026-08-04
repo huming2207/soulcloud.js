@@ -385,7 +385,7 @@ describe("POST /v1/firmware-releases/:id/deploy", () => {
     expect(targets).toBe(1);
   });
 
-  test("device from another project -> 403", async () => {
+  test("device from another project -> 404 (no existence oracle)", async () => {
     const res = await app.handle(
       new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
         method: "POST",
@@ -393,8 +393,8 @@ describe("POST /v1/firmware-releases/:id/deploy", () => {
         body: JSON.stringify({ device_ids: [otherProjectDeviceId] }),
       }),
     );
-    expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ error: "forbidden" });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: "target_devices_not_found" });
   });
 
   test("unknown device -> 404", async () => {
@@ -682,5 +682,82 @@ describe("GET /v1/ota-jobs/:id", () => {
       }),
     );
     expect(missing.status).toBe(404);
+  });
+});
+
+describe("M5: OTA download credential in the Authorization header", () => {
+  test("device downloads with its per-device JWT in the Bearer header", async () => {
+    const token = await signOtaToken(TEST_JWT.secret, {
+      deviceUid,
+      releaseId: createdReleaseId,
+      jobId: randomUUID(),
+    }, 900);
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/bin`, {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect([...bytes]).toEqual([...makeBin(1024, 3)]);
+  });
+
+  test("an access token in the header still takes the human path", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/bin`, {
+        headers: authHeaders(),
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  test("a stale/invalid bearer that is neither access nor ota -> 403", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/bin`, {
+        headers: { authorization: "Bearer garbage-token" },
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "invalid_download_token" });
+  });
+});
+
+describe("round-5 edge coverage", () => {
+  test("oversized version -> 400", async () => {
+    const form = new FormData();
+    form.append("project_id", projectId);
+    form.append("bin", new Blob([makeBin(64, 13)]), "firmware.bin");
+    form.append("version", "v".repeat(256));
+    const res = await app.handle(
+      new Request("http://localhost/v1/firmware-releases", {
+        method: "POST",
+        headers: authHeaders(),
+        body: form,
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("valid token for a deleted release -> 404", async () => {
+    // create a throwaway release, then delete it (job-less release)
+    const bin = makeBin(64, 21);
+    const up = await app.handle(
+      new Request("http://localhost/v1/firmware-releases", {
+        method: "POST",
+        headers: authHeaders(),
+        body: uploadForm({ bin }),
+      }),
+    );
+    const { release_id } = (await up.json()) as { release_id: string };
+    await prisma.firmwareRelease.delete({ where: { id: release_id } });
+    const token = await signOtaToken(TEST_JWT.secret, {
+      deviceUid,
+      releaseId: release_id,
+      jobId: randomUUID(),
+    }, 900);
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${release_id}/bin?token=${encodeURIComponent(token)}`),
+    );
+    expect(res.status).toBe(404);
   });
 });
