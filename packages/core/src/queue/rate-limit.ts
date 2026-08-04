@@ -85,9 +85,17 @@ export class PerDeviceLimiter {
     return bucket.tryConsume(tokens, now);
   }
 
-  /** Drops buckets that have been idle for `idleTimeoutMs`. */
+  private lastReclaim = 0;
+
+  /** Drops buckets that have been idle for `idleTimeoutMs`.
+   *
+   * Only runs when the table is at capacity and at most once per second
+   * (M7: a full scan per packet would be an O(n) amplification under a
+   * random-device-ID flood). */
   private reclaim(now: number): void {
     if (this.buckets.size < this.maxDevices) return;
+    if (now - this.lastReclaim < 1000) return;
+    this.lastReclaim = now;
     for (const [id, seenAt] of this.lastSeen) {
       if (now - seenAt > this.idleTimeoutMs) {
         this.buckets.delete(id);

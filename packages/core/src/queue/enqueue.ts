@@ -19,7 +19,9 @@ import type { DeviceCommand } from "../protocol/command";
 import { encodeDeviceCommandExecution } from "../protocol/command";
 import { commandExecution } from "../protocol/topic";
 
-const INT32_MAX = 2_147_483_647;
+/** Maximum number of target devices per batch (M11: the old INT32_MAX
+ * bound was a no-op; this is the real, enforced limit). */
+export const MAX_BATCH_TARGETS = 1000;
 
 export interface EnqueuedBatch {
   /** Stable identifier for tracking the batch. */
@@ -57,7 +59,7 @@ export async function enqueueBatch(
       "a command batch contains duplicate device IDs",
     );
   }
-  if (targetDeviceIds.length > INT32_MAX) {
+  if (targetDeviceIds.length > MAX_BATCH_TARGETS) {
     throw new CommandQueueError(
       "too_many_targets",
       "the command batch contains too many target devices",
@@ -66,12 +68,16 @@ export async function enqueueBatch(
 
   const batchId = randomUUID();
   const deviceCount = targetDeviceIds.length;
+  // deterministic lock order: overlapping concurrent batches update the same
+  // device rows; unsorted input could deadlock (Kimi low-risk)
+  const sortedTargets = [...targetDeviceIds].sort();
 
-  return prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     const targets = await tx.$queryRaw<TargetRow[]>`
       UPDATE devices
       SET next_command_sequence = next_command_sequence + 1
-      WHERE id IN (${Prisma.join(targetDeviceIds)})
+      WHERE id IN (${Prisma.join(sortedTargets)})
       RETURNING id, device_uid, next_command_sequence
     `;
 
@@ -137,5 +143,12 @@ export async function enqueueBatch(
     await tx.$executeRaw`SELECT pg_notify(${COMMAND_NOTIFY_CHANNEL}, ${batchId})`;
 
     return { id: batchId, deviceCount };
-  });
+    });
+  } catch (error) {
+    if (error instanceof CommandQueueError) throw error;
+    throw new CommandQueueError(
+      "database",
+      `command enqueue failed: ${(error as Error).message}`,
+    );
+  }
 }

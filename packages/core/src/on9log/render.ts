@@ -219,7 +219,8 @@ export function renderFormat(
         }
         const text = argToString(arg);
         let s = text;
-        if (precision !== null) s = s.slice(0, precision);
+        // C semantics: a negative precision is treated as absent
+        if (precision !== null && precision >= 0) s = s.slice(0, precision);
         push(padString(s, width, flags));
         break;
       }
@@ -359,7 +360,16 @@ function formatFloat(
 function padString(s: string, width: number, flags: string): string {
   if (width <= s.length) return s;
   const pad = width - s.length;
-  const padChar = flags.includes("0") && !flags.includes("-") ? "0" : " ";
+  if (flags.includes("0") && !flags.includes("-")) {
+    // zero padding goes after the sign (C semantics: %+08d -> "+0000042")
+    const signMatch = /^([+-]|0[xX])/.exec(s);
+    if (signMatch) {
+      const sign = signMatch[0];
+      return sign + "0".repeat(pad) + s.slice(sign.length);
+    }
+    return "0".repeat(pad) + s;
+  }
+  const padChar = " ";
   if (flags.includes("-")) return s + padChar.repeat(pad);
   return padChar.repeat(pad) + s;
 }

@@ -25,9 +25,11 @@ import {
 } from "@soulcloud/core";
 import { createLoggingRoutes } from "./logging";
 
+const MAX_BATCH_TARGETS = 1000;
+
 const CreateCommandBatchBody = z
   .object({
-    device_ids: z.array(z.string().uuid()),
+    device_ids: z.array(z.string().uuid()).max(MAX_BATCH_TARGETS),
     command: DeviceCommandSchema,
   })
   .strict();

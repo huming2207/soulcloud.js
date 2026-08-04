@@ -82,8 +82,8 @@ bench("readStringAtVaddr (first hit in PT_LOAD-less .noload)", 2000, () => {
 
 // --- end-to-end decode path (parse + lookup + render) ------------------------
 
-import { renderFormat } from "@soulcloud/core";
-import { parseOn9logPacket, SlipDecoder } from "@soulcloud/core";
+import { renderFormat, parseOn9logPacket } from "@soulcloud/core";
+import { SlipDecoder } from "../packages/core/tests/helpers/slip";
 
 const demoOutput = readFileSync("/tmp/on9log_demo_output.bin");
 const decoder = new SlipDecoder();

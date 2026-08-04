@@ -4,7 +4,7 @@ import {
   ON9LOG_FRAME_TYPE_ON9LOG,
   SlipDecoder,
   crc16Ccitt,
-} from "../../src/on9log/slip";
+} from "../helpers/slip";
 import { parseOn9logPacket, On9logPacketType } from "../../src/on9log/packet";
 import {
   parseElf,

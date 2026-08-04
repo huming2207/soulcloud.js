@@ -191,6 +191,23 @@ describe("topic authorization", () => {
     device.end(true);
   });
 
+  test("device cannot subscribe to its own uplink topics (no echo)", async () => {
+    const device = connectDevice();
+    await waitForConnect(device);
+    const disconnected = new Promise<boolean>((resolve) => {
+      device.once("close", () => resolve(true));
+      setTimeout(() => resolve(false), 3000);
+    });
+    await new Promise<void>((resolve) => {
+      device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/log`, { qos: 1 }, () =>
+        resolve(),
+      );
+      setTimeout(resolve, 1000);
+    });
+    expect(await disconnected).toBe(true);
+    device.end(true);
+  });
+
   test("device cannot publish to its own downlink topic", async () => {
     const device = connectDevice();
     await waitForConnect(device);

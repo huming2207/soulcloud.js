@@ -167,6 +167,16 @@ function valueEqual(a: unknown, b: unknown): boolean {
   if (a instanceof Uint8Array && b instanceof Uint8Array) {
     return bytesEqual(a, b);
   }
+  // NaN payloads must compare equal to themselves (a result with a NaN
+  // argument is semantically identical to a re-delivered copy of itself)
+  if (typeof a === "number" && typeof b === "number" && Number.isNaN(a) && Number.isNaN(b)) {
+    return true;
+  }
+  // the same integer may decode as number (small) or bigint (64-bit)
+  if ((typeof a === "number" && typeof b === "bigint") ||
+      (typeof a === "bigint" && typeof b === "number")) {
+    return Number(a) === Number(b) || BigInt(a) === BigInt(b);
+  }
   return a === b;
 }
 

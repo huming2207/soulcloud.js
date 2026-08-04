@@ -6,7 +6,7 @@ import {
   SlipDecoder,
   SlipParseError,
   crc16Ccitt,
-} from "../../src/on9log/slip";
+} from "../helpers/slip";
 
 /** Encodes one SLIP frame (mirrors the firmware framing). */
 function encodeSlipFrame(type: number, payload: Uint8Array): Uint8Array {

@@ -7,11 +7,10 @@ import {
   ingestLogPacket,
   backfillDecodeState,
   decodeRawEvent,
-  prisma,
-  SlipDecoder,
   parseOn9logPacket,
-  ON9LOG_FRAME_TYPE_ON9LOG,
+  prisma,
 } from "@soulcloud/core";
+import { ON9LOG_FRAME_TYPE_ON9LOG, SlipDecoder } from "../helpers/slip";
 
 // Integration fixtures: the compiled on9log Unix demo ELF and its SLIP output.
 const DEMO_ELF_PATH = "/tmp/on9log_unix_demo";

@@ -126,6 +126,11 @@ export function createLoggingRoutes(prisma: PrismaClient) {
           set.status = 400;
           return { error: "invalid_request", message: "project_id (UUID) is required" };
         }
+        const limit = LimitParam.safeParse(query.limit ?? 100);
+        if (!limit.success) {
+          set.status = 400;
+          return { error: "invalid_request", message: "limit must be an integer between 1 and 500" };
+        }
         const artifacts = await prisma.firmwareArtifact.findMany({
           where: { projectId: projectId.data },
           orderBy: { uploadedAt: "desc" },
@@ -138,7 +143,7 @@ export function createLoggingRoutes(prisma: PrismaClient) {
             uploadedAt: true,
             _count: { select: { logStrings: true } },
           },
-          take: 100,
+          take: limit.data,
         });
         return {
           artifacts: artifacts.map((a) => ({

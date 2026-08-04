@@ -19,6 +19,9 @@ import { createServer, type Server } from "node:net";
 import type { PrismaClient } from "@soulcloud/core";
 import { isValidDeviceUid, parseDeviceTopic, TOPIC_PREFIX } from "@soulcloud/core";
 
+/** Delay before answering a failed authentication attempt. */
+const AUTH_FAIL_DELAY_MS = 100;
+
 /** Absolute upper bound for a device publish (MQTT spec allows 256MB; the
  * dispatch layer applies the configurable UPLINK_MAX_PACKET_BYTES limit,
  * this is the early-reject ceiling before dispatch runs). */
@@ -53,7 +56,14 @@ export async function startBroker(
       return;
     }
     authenticateDevice(prisma, username, password)
-      .then((ok) => callback(null, ok))
+      .then(async (ok) => {
+        if (!ok) {
+          // M6: fixed delay on auth failure (cheap brute-force throttle;
+          // a real rate limiter belongs in the reverse proxy)
+          await new Promise((r) => setTimeout(r, AUTH_FAIL_DELAY_MS));
+        }
+        callback(null, ok);
+      })
       .catch((error) => {
         // database failure is a server problem, not bad credentials:
         // returnCode 3 (server unavailable) so clients do not stop retrying
@@ -78,11 +88,14 @@ export async function startBroker(
     callback(isAllowedUplink(client, packet.topic) ? null : new Error("topic not allowed"));
   };
 
-  // Devices may only subscribe to topics under their own device prefix.
+  // Direction separation (spec 06): devices may only subscribe to their own
+  // DOWNLINK topics (cmd/exec, ota). Subscribing to their own uplink topics
+  // (log/stat/cmd/result) would echo their own reports back to them.
+  const DOWNLINK_SUFFIXES = ["cmd/exec", "ota"] as const;
   aedes.authorizeSubscribe = (client, subscription, callback) => {
-    const allowed =
-      subscription.topic === `${TOPIC_PREFIX}/${client.id}/#` ||
-      subscription.topic.startsWith(`${TOPIC_PREFIX}/${client.id}/`);
+    const allowed = DOWNLINK_SUFFIXES.some(
+      (suffix) => subscription.topic === `${TOPIC_PREFIX}/${client.id}/${suffix}`,
+    );
     callback(allowed ? null : new Error("topic not allowed"), subscription);
   };
 

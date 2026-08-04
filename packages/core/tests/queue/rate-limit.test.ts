@@ -56,8 +56,11 @@ describe("PerDeviceLimiter", () => {
     });
     expect(limiter.tryConsume("a", 1, 0)).toBe(true);
     expect(limiter.tryConsume("b", 1, 0)).toBe(false); // saturated
-    // after idle timeout, "a" is reclaimed on the next try
-    expect(limiter.tryConsume("b", 1, 200)).toBe(true);
+    // reclaim is throttled to once per second (M7): an early retry is
+    // still refused...
+    expect(limiter.tryConsume("b", 1, 500)).toBe(false);
+    // ...and after the throttle window + idle timeout, "a" is reclaimed
+    expect(limiter.tryConsume("b", 1, 2000)).toBe(true);
     expect(limiter.size).toBe(1);
   });
 });

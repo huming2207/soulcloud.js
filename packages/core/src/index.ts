@@ -17,7 +17,6 @@ export * from "./queue/result";
 export * from "./queue/notify";
 export * from "./queue/rate-limit";
 export * from "./on9log/packet";
-export * from "./on9log/slip";
 export * from "./on9log/render";
 export * from "./elf/parser";
 export * from "./logging/artifact";

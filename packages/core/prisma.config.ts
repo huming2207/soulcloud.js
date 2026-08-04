@@ -1,6 +1,7 @@
 // Prisma CLI configuration.
-// Loads .env from the repo root or the package directory, whichever exists
-// (migrate/generate may run from either location).
+// Loads .env from the package directory first, then the repo root
+// (migrate/generate may run from either location; the package-local file
+// wins when both exist).
 import { existsSync } from "node:fs";
 import { config } from "dotenv";
 import { defineConfig } from "prisma/config";

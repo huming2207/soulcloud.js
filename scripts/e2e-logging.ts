@@ -11,12 +11,9 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import mqtt from "mqtt";
-import {
-  SlipDecoder,
-  ON9LOG_FRAME_TYPE_ON9LOG,
-  encodeDeviceStat,
-  prisma,
-} from "@soulcloud/core";
+import { encodeDeviceStat, prisma } from "@soulcloud/core";
+import { SlipDecoder } from "../packages/core/tests/helpers/slip";
+import { ON9LOG_FRAME_TYPE_ON9LOG } from "../packages/core/tests/helpers/slip";
 
 const API = "http://localhost:8080";
 const MQTT_URL = "mqtt://127.0.0.1:1883";

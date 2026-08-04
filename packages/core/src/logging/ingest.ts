@@ -14,6 +14,29 @@ import {
   type On9logPacket,
 } from "../on9log/packet";
 
+/** TTL for the in-process deviceUid -> deviceId cache. */
+const DEVICE_CACHE_TTL_MS = 60_000;
+
+/** Small in-process cache to cut the per-packet device lookup (M12). */
+const deviceIdCache = new Map<string, { id: string; expiresAt: number }>();
+
+async function resolveDeviceId(
+  prisma: PrismaClient,
+  deviceUid: string,
+): Promise<string | null> {
+  const now = Date.now();
+  const cached = deviceIdCache.get(deviceUid);
+  if (cached && cached.expiresAt > now) return cached.id;
+  const device = await prisma.device.findUnique({
+    where: { deviceUid },
+    select: { id: true },
+  });
+  if (!device) return null;
+  deviceIdCache.set(deviceUid, { id: device.id, expiresAt: now + DEVICE_CACHE_TTL_MS });
+  if (deviceIdCache.size > 10_000) deviceIdCache.clear(); // bounded
+  return device.id;
+}
+
 export class LogIngestError extends Error {
   constructor(
     public readonly kind: "invalid_packet" | "database",
@@ -26,7 +49,7 @@ export class LogIngestError extends Error {
 
 export interface IngestOutcome {
   stored: boolean;
-  /** null when the packet is valid but not stored (e.g. non-LOG control packets). */
+  /** id of the stored raw event (always set when stored). */
   eventId: bigint | null;
   packetType: number;
 }

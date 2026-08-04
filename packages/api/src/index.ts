@@ -13,13 +13,16 @@ import { loadApiConfig } from "./config";
 const config = loadApiConfig();
 
 // API_BIND_ADDRESS is "host:port" (e.g. "0.0.0.0:8080")
-const [hostname, port] = config.API_BIND_ADDRESS.split(":");
-if (!hostname || !port) {
+// API_BIND_ADDRESS is "host:port" (e.g. "0.0.0.0:8080" or "[::1]:8080")
+const bindMatch = /^\[([^\]]+)\]:(\d+)$|^([^:]+):(\d+)$/.exec(config.API_BIND_ADDRESS);
+if (!bindMatch) {
   console.error(
     `Invalid API_BIND_ADDRESS: ${config.API_BIND_ADDRESS} (expected host:port)`,
   );
   process.exit(1);
 }
+const hostname = (bindMatch[1] ?? bindMatch[3])!;
+const port = Number(bindMatch[2] ?? bindMatch[4]);
 
 const app = createApp(prisma);
 app.listen({ hostname, port: Number(port) });
@@ -29,6 +32,7 @@ console.log(
 
 async function shutdown(signal: string) {
   console.log(`[soulcloud-api] received ${signal}, shutting down`);
+  app.stop();
   await prisma.$disconnect();
   process.exit(0);
 }
