@@ -109,6 +109,37 @@ bun scripts/e2e.ts    # full-loop smoke test (needs both processes running)
 | Device to platform | `soulcloud/v1/devices/{dev_uid}/log` | Log events (contract not yet defined) |
 | Device to platform | `soulcloud/v1/devices/{dev_uid}/stat` | Device status (validated, not yet persisted) |
 
+## Authentication (G group)
+
+**Human users** (REST API): JWT dual-token.
+
+```text
+POST /v1/auth/register   {username, password, email}   -> user + personal project
+POST /v1/auth/login      {username, password}           -> access + refresh tokens
+POST /v1/auth/refresh    {refresh_token}                -> rotated token pair
+POST /v1/auth/logout     {refresh_token}                -> revoke
+```
+
+- access token: HS256 JWT (default 15 min, stateless)
+- refresh token: server-side (SHA-256 stored), default 30 days, revocable,
+  rotated on every use; reuse of a rotated token revokes the whole chain
+- all command/log/artifact/firmware-state/device-credential endpoints
+  require `Authorization: Bearer <access token>`; project-scoped operations
+  also require project membership (user_projects)
+
+**Devices** (MQTT): per-session stateful authentication, not JWT.
+
+```text
+POST /v1/devices/:id/credentials              issue (password shown once)
+POST /v1/devices/:id/credentials/revoke       refuse new connections
+```
+
+- device connects with `username = device_uid` (clientId MUST equal it) and
+  the issued password; revocation refuses new connections (an open session
+  keeps running until disconnect)
+- passwords (human + device) are argon2id via Bun.password; legacy scrypt /
+  plaintext hashes still verify for development data
+
 ## Status
 
 Implemented:

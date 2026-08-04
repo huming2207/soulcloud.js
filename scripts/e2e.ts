@@ -15,6 +15,7 @@ import { prisma } from "@soulcloud/core";
 
 const API = "http://localhost:8080";
 const MQTT_URL = "ws://127.0.0.1:1883/mqtt";
+const E2E_USER = `e2e-${randomUUID().slice(0, 8)}`;
 const DEVICE_UID = `e2e-${randomUUID().slice(0, 8)}`;
 const PASSWORD = "e2e-secret";
 
@@ -46,6 +47,23 @@ const device = await prisma.device.create({
 });
 console.log(`device ${DEVICE_UID} created`);
 
+// --- register a user for the protected API ----------------------------------
+
+const reg = await fetch(`${API}/v1/auth/register`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    username: E2E_USER,
+    password: "e2e-password-123",
+    email: `${E2E_USER}@example.com`,
+  }),
+});
+const regBody = (await reg.json()) as { access_token: string; user_id: string };
+check("register -> 201", reg.status === 201, `got ${reg.status}`);
+// bind the user to the e2e project (registration created their own)
+await prisma.userProject.create({ data: { userId: regBody.user_id, projectId: project.id } });
+const authHeaders = { "content-type": "application/json", authorization: `Bearer ${regBody.access_token}` };
+
 try {
   // --- connect the device ---------------------------------------------------
 
@@ -65,7 +83,7 @@ try {
 
   const res = await fetch(`${API}/v1/command-batches`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: authHeaders,
     body: JSON.stringify({
       device_ids: [device.id],
       command: { cmd: "setLogging", args: [{ enabled: true }] },

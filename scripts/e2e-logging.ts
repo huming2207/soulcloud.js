@@ -17,6 +17,7 @@ import { ON9LOG_FRAME_TYPE_ON9LOG } from "../packages/core/tests/helpers/slip";
 
 const API = "http://localhost:8080";
 const MQTT_URL = "ws://127.0.0.1:1883/mqtt";
+const E2E_USER = `e2elog-${randomUUID().slice(0, 8)}`;
 const DEMO_ELF = "/tmp/on9log_unix_demo";
 const DEMO_OUTPUT = "/tmp/on9log_demo_output.bin";
 const DEVICE_UID = `e2e-log-${randomUUID().slice(0, 8)}`;
@@ -51,6 +52,7 @@ const fwHash = (() => {
 const project = await prisma.project.create({
   data: { id: randomUUID(), name: "e2e-log-project" },
 });
+const projectId = project.id;
 const device = await prisma.device.create({
   data: {
     id: randomUUID(),
@@ -61,6 +63,22 @@ const device = await prisma.device.create({
   },
 });
 
+// --- register a user for the protected API ----------------------------------
+
+const reg = await fetch(`${API}/v1/auth/register`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    username: E2E_USER,
+    password: "e2e-password-123",
+    email: `${E2E_USER}@example.com`,
+  }),
+});
+const regBody = (await reg.json()) as { access_token: string; user_id: string };
+check("register -> 201", reg.status === 201, `got ${reg.status}`);
+await prisma.userProject.create({ data: { userId: regBody.user_id, projectId } });
+const authHeaders = { authorization: `Bearer ${regBody.access_token}` };
+
 try {
   // --- 1. upload the ELF ------------------------------------------------------
 
@@ -69,6 +87,7 @@ try {
   form.append("file", new Blob([elf]), "firmware.elf");
   const up = await fetch(`${API}/v1/firmware-artifacts`, {
     method: "POST",
+    headers: authHeaders,
     body: form,
   });
   const upBody = (await up.json()) as {
@@ -115,7 +134,9 @@ try {
 
   // --- 3. query the logs API ---------------------------------------------------
 
-  const logs = await fetch(`${API}/v1/devices/${device.id}/logs?limit=10`);
+  const logs = await fetch(`${API}/v1/devices/${device.id}/logs?limit=10`, {
+    headers: authHeaders,
+  });
   const logsBody = (await logs.json()) as {
     events: Array<{
       id: string;
