@@ -71,6 +71,17 @@ function connectDevice(overrides: Record<string, unknown> = {}): MqttClient {
   });
 }
 
+/** Polls a predicate until it is true (replaces fixed sleeps; avoids flaky
+ * timing-dependent assertions on asynchronous DB writes). */
+async function waitFor(predicate: () => Promise<boolean>, what: string, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timeout waiting for ${what}`);
+}
+
 function waitForConnect(client: MqttClient): Promise<void> {
   return new Promise((resolve, reject) => {
     client.once("connect", () => resolve());
@@ -382,7 +393,11 @@ describe("log/stat uplink ingestion", () => {
       );
       setTimeout(() => reject(new Error("log publish timeout")), 5000);
     });
-    await new Promise((r) => setTimeout(r, 300));
+    await waitFor(
+      async () =>
+        (await prisma.rawLogEvent.count({ where: { device: { deviceUid: DEVICE_UID } } })) > 0,
+      "log event persisted",
+    );
 
     const events = await prisma.rawLogEvent.findMany({
       where: { device: { deviceUid: DEVICE_UID } },
@@ -411,7 +426,15 @@ describe("log/stat uplink ingestion", () => {
       );
       setTimeout(resolve, 1000);
     });
-    await new Promise((r) => setTimeout(r, 300));
+    // give dispatch a couple of poll cycles, then confirm nothing was stored
+    await waitFor(
+      async () => {
+        const pending = await prisma.rawLogEvent.count({ where: { device: { deviceUid: DEVICE_UID } } });
+        await new Promise((r) => setTimeout(r, 400));
+        return (await prisma.rawLogEvent.count({ where: { device: { deviceUid: DEVICE_UID } } })) === pending;
+      },
+      "invalid packet not stored",
+    );
     const after = await prisma.rawLogEvent.count({
       where: { device: { deviceUid: DEVICE_UID } },
     });
@@ -439,7 +462,10 @@ describe("log/stat uplink ingestion", () => {
       );
       setTimeout(() => reject(new Error("stat publish timeout")), 5000);
     });
-    await new Promise((r) => setTimeout(r, 300));
+    await waitFor(
+      async () => (await prisma.deviceFirmwareState.count({ where: { device: { deviceUid: DEVICE_UID } } })) > 0,
+      "firmware state persisted",
+    );
 
     const state = await prisma.deviceFirmwareState.findFirstOrThrow({
       where: { device: { deviceUid: DEVICE_UID } },
@@ -463,7 +489,13 @@ describe("log/stat uplink ingestion", () => {
       );
       setTimeout(() => reject(new Error("stat publish timeout")), 5000);
     });
-    await new Promise((r) => setTimeout(r, 300));
+    await waitFor(
+      async () => {
+        const s = await prisma.deviceFirmwareState.findFirst({ where: { device: { deviceUid: DEVICE_UID } } });
+        return s?.fwHash === "01";
+      },
+      "firmware state updated",
+    );
     const updated = await prisma.deviceFirmwareState.findFirstOrThrow({
       where: { device: { deviceUid: DEVICE_UID } },
     });

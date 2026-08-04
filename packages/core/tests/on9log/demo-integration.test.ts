@@ -13,14 +13,14 @@ import {
 } from "../../src/elf/parser";
 import { renderFormat } from "../../src/on9log/render";
 
-// Integration fixtures: captured output of the on9log Unix demo and its
-// compiled ELF. See scripts/build-on9log-fixtures.sh to regenerate.
-const DEMO_OUTPUT = "/tmp/on9log_demo_output.bin";
+// Integration fixtures: captured output of the on9log Unix demo (checked in
+// under tests/fixtures) and its compiled ELF (regenerated with
+// scripts/build-on9log-fixtures.sh; skipped when absent).
+const DEMO_OUTPUT = new URL("../fixtures/on9log_demo_output.bin", import.meta.url).pathname;
 const DEMO_ELF = "/tmp/on9log_unix_demo";
 
 const hasFixtures = (() => {
   try {
-    readFileSync(DEMO_OUTPUT);
     readFileSync(DEMO_ELF);
     return true;
   } catch {
