@@ -47,7 +47,7 @@ describe("command notifier", () => {
     const wakeups: string[] = [];
     const notifier = await startNotifier(
       process.env.DATABASE_URL!,
-      { onCommand: () => wakeups.push("wake"), onCredentialRevoked: () => {} },
+      { onCommand: () => wakeups.push("wake"), onOta: () => wakeups.push("ota"), onCredentialRevoked: () => {} },
       silentLog,
     );
     notifierClose = notifier.close;
@@ -80,7 +80,7 @@ describe("command notifier", () => {
     const wakeups: string[] = [];
     const notifier = await startNotifier(
       process.env.DATABASE_URL!,
-      { onCommand: () => wakeups.push("wake"), onCredentialRevoked: () => {} },
+      { onCommand: () => wakeups.push("wake"), onOta: () => wakeups.push("ota"), onCredentialRevoked: () => {} },
       silentLog,
     );
     notifierClose = notifier.close;
@@ -111,7 +111,7 @@ describe("M9: notifier reconnection", () => {
     const wakeups: string[] = [];
     const notifier = await startNotifier(
       process.env.DATABASE_URL!,
-      { onCommand: () => wakeups.push("wake"), onCredentialRevoked: () => {} },
+      { onCommand: () => wakeups.push("wake"), onOta: () => wakeups.push("ota"), onCredentialRevoked: () => {} },
       silentLog,
     );
     await new Promise((r) => setTimeout(r, 100));

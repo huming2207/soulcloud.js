@@ -8,6 +8,8 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32).default("dev-only-secret-change-me-0123456789"),
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(15 * 60),
   JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(30 * 24 * 3600),
+  // OTA: delivery window for a pending target before it expires
+  OTA_TARGET_TTL_SECONDS: z.coerce.number().int().positive().default(15 * 60),
 });
 
 export type ApiConfig = BaseConfig & z.infer<typeof envSchema>;

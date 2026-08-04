@@ -19,6 +19,7 @@ import { Client } from "pg";
 import {
   COMMAND_NOTIFY_CHANNEL,
   CREDENTIAL_REVOKED_CHANNEL,
+  OTA_NOTIFY_CHANNEL,
 } from "@soulcloud/core";
 
 export interface Notifier {
@@ -34,6 +35,8 @@ export interface NotifierLog {
 export interface NotifierHandlers {
   /** Called for every command-channel notification (payload = batch id). */
   onCommand: (batchId: string | null) => void;
+  /** Called for every OTA-channel notification (payload = job id). */
+  onOta: (jobId: string | null) => void;
   /** Called for every credential-revocation notification (payload = device UID). */
   onCredentialRevoked: (deviceUid: string) => void;
 }
@@ -63,6 +66,11 @@ export async function startNotifier(
           batchId: message.payload ?? undefined,
         });
         handlers.onCommand(message.payload ?? null);
+      } else if (message.channel === OTA_NOTIFY_CHANNEL) {
+        log.info("ota notification received", {
+          jobId: message.payload ?? undefined,
+        });
+        handlers.onOta(message.payload ?? null);
       } else if (message.channel === CREDENTIAL_REVOKED_CHANNEL) {
         if (message.payload) {
           log.info("credential revocation notification received", {
@@ -85,10 +93,11 @@ export async function startNotifier(
     await c.connect();
     // PostgreSQL LISTEN accepts one channel per statement
     await c.query(`LISTEN ${COMMAND_NOTIFY_CHANNEL}`);
+    await c.query(`LISTEN ${OTA_NOTIFY_CHANNEL}`);
     await c.query(`LISTEN ${CREDENTIAL_REVOKED_CHANNEL}`);
     client = c;
     log.info(
-      `listening for notifications on "${COMMAND_NOTIFY_CHANNEL}" and "${CREDENTIAL_REVOKED_CHANNEL}"`,
+      `listening for notifications on "${COMMAND_NOTIFY_CHANNEL}", "${OTA_NOTIFY_CHANNEL}" and "${CREDENTIAL_REVOKED_CHANNEL}"`,
     );
   }
 

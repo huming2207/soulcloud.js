@@ -30,6 +30,7 @@
       "name": "@soulcloud/broker",
       "version": "0.1.0",
       "dependencies": {
+        "@msgpack/msgpack": "^3.1.0",
         "@soulcloud/core": "workspace:*",
         "aedes": "^1.1.1",
         "pg": "^8.22.0",

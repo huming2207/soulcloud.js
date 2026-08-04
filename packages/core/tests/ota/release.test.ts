@@ -5,14 +5,12 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { prisma } from "../../src/db";
 import {
   MAX_FIRMWARE_BYTES,
   ReleaseError,
   computeBinHash,
-  consumeDownloadToken,
-  createDownloadToken,
   createFirmwareRelease,
 } from "../../src/ota/release";
 import { buildNoloadElf } from "../helpers/elf-builder";
@@ -124,74 +122,5 @@ describe("createFirmwareRelease", () => {
       where: { projectId, binHash: computeBinHash(makeBin(256)) },
     });
     expect(count).toBe(0);
-  });
-});
-
-describe("download tokens", () => {
-  let releaseId: string;
-  beforeAll(async () => {
-    const created = await createFirmwareRelease(prisma, {
-      projectId,
-      bin: makeBin(300),
-    });
-    releaseId = created.releaseId;
-  });
-
-  test("token is random, only its digest is stored", async () => {
-    const { token, expiresAt } = await createDownloadToken(prisma, releaseId, 180);
-    expect(token.length).toBeGreaterThan(20);
-    const digest = createHash("sha256").update(token).digest("hex");
-    const row = await prisma.firmwareDownloadToken.findFirst({
-      where: { releaseId, tokenHash: digest },
-    });
-    expect(row).not.toBeNull();
-    expect(expiresAt.getTime()).toBeGreaterThan(Date.now());
-    // the plaintext token must not appear in the DB
-    const all = await prisma.firmwareDownloadToken.findMany({ where: { releaseId } });
-    expect(all.some((r) => r.tokenHash === token)).toBe(false);
-  });
-
-  test("consume succeeds once, then refuses (single use)", async () => {
-    const { token } = await createDownloadToken(prisma, releaseId, 180);
-    expect(await consumeDownloadToken(prisma, releaseId, token)).toBe(true);
-    expect(await consumeDownloadToken(prisma, releaseId, token)).toBe(false);
-  });
-
-  test("expired token is refused", async () => {
-    const { token } = await createDownloadToken(prisma, releaseId, 180);
-    // backdate the row past expiry
-    await prisma.firmwareDownloadToken.updateMany({
-      where: { tokenHash: createHash("sha256").update(token).digest("hex") },
-      data: { expiresAt: new Date(Date.now() - 1000) },
-    });
-    expect(await consumeDownloadToken(prisma, releaseId, token)).toBe(false);
-  });
-
-  test("token cannot be consumed against another release", async () => {
-    const other = await createFirmwareRelease(prisma, {
-      projectId,
-      bin: makeBin(301),
-    });
-    const { token } = await createDownloadToken(prisma, releaseId, 180);
-    expect(await consumeDownloadToken(prisma, other.releaseId, token)).toBe(false);
-    // ...but is still valid for its own release
-    expect(await consumeDownloadToken(prisma, releaseId, token)).toBe(true);
-  });
-
-  test("random garbage token is refused", async () => {
-    expect(await consumeDownloadToken(prisma, releaseId, randomBytes(32).toString("base64url"))).toBe(false);
-  });
-
-  test("lazy cleanup removes expired tokens of the release", async () => {
-    const stale = await createDownloadToken(prisma, releaseId, 180);
-    await prisma.firmwareDownloadToken.updateMany({
-      where: { tokenHash: createHash("sha256").update(stale.token).digest("hex") },
-      data: { expiresAt: new Date(Date.now() - 5000) },
-    });
-    await createDownloadToken(prisma, releaseId, 180);
-    const leftover = await prisma.firmwareDownloadToken.count({
-      where: { releaseId, expiresAt: { lt: new Date() } },
-    });
-    expect(leftover).toBe(0);
   });
 });

@@ -43,7 +43,11 @@ const CreateCommandBatchBody = z
   })
   .strict();
 
-export function createApp(prisma: PrismaClient, jwt?: JwtConfig) {
+export function createApp(
+  prisma: PrismaClient,
+  jwt?: JwtConfig,
+  otaTargetTtlSeconds = 15 * 60,
+) {
   const auth = jwt ?? {
     secret: "dev-only-secret-change-me-0123456789",
     accessTtlSeconds: 15 * 60,
@@ -105,7 +109,7 @@ export function createApp(prisma: PrismaClient, jwt?: JwtConfig) {
     })
     .use(createAuthRoutes(prisma, auth))
     .use(createLoggingRoutes(prisma, auth))
-    .use(createFirmwareRoutes(prisma, auth));
+    .use(createFirmwareRoutes(prisma, auth, otaTargetTtlSeconds));
 }
 
 function formatZodIssues(

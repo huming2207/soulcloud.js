@@ -3,20 +3,17 @@
  * optionally tied to an ELF artifact for build identity (device `stat.fw`
  * reports the ELF hash) and on9log decoding.
  *
- * Download authorization uses single-use, short-lived tokens: a project
- * member trades a release id for a 3-minute credential; the download
- * endpoint consumes it atomically (see llm-docs/soulcloudjs/16-ota-firmware-releases-proposal.md).
+ * Download authorization: project members download with a Bearer token;
+ * devices download with a per-device short-lived JWT delivered over MQTT
+ * (see llm-docs/soulcloudjs/17-ota-mqtt-deploy-proposal.md).
  */
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { PrismaClient } from "../db";
 import { ArtifactImportError, importArtifact, isUniqueViolation } from "../logging/artifact";
 
 /** Maximum accepted bin/ELF size (32MB, same as ELF artifacts). */
 export const MAX_FIRMWARE_BYTES = 32 * 1024 * 1024;
-
-/** Default download token lifetime (seconds). */
-export const DOWNLOAD_TOKEN_TTL_SECONDS = 180;
 
 export class ReleaseError extends Error {
   constructor(
@@ -156,52 +153,4 @@ export async function createFirmwareRelease(
       `release creation failed: ${(error as Error).message}`,
     );
   }
-}
-
-export interface DownloadTokenResult {
-  /** The credential itself (returned once; only its digest is stored). */
-  token: string;
-  expiresAt: Date;
-}
-
-/**
- * Issues a single-use download credential for a release's bin. Expired
- * tokens of the same release are lazily purged (the table stays tiny).
- */
-export async function createDownloadToken(
-  prisma: PrismaClient,
-  releaseId: string,
-  ttlSeconds: number = DOWNLOAD_TOKEN_TTL_SECONDS,
-): Promise<DownloadTokenResult> {
-  const token = randomBytes(32).toString("base64url");
-  const tokenHash = sha256Hex(token);
-  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
-  await prisma.$transaction(async (tx) => {
-    await tx.firmwareDownloadToken.deleteMany({
-      where: { releaseId, expiresAt: { lt: new Date() } },
-    });
-    await tx.firmwareDownloadToken.create({
-      data: { releaseId, tokenHash, expiresAt },
-    });
-  });
-  return { token, expiresAt };
-}
-
-/**
- * Atomically consumes a download credential. The UPDATE's
- * `used_at IS NULL` predicate makes single-use safe under concurrency:
- * only one request can flip the row. Returns false for invalid, expired,
- * already-used or release-mismatched tokens (indistinguishable on purpose).
- */
-export async function consumeDownloadToken(
-  prisma: PrismaClient,
-  releaseId: string,
-  token: string,
-): Promise<boolean> {
-  const now = new Date();
-  const result = await prisma.firmwareDownloadToken.updateMany({
-    where: { releaseId, tokenHash: sha256Hex(token), usedAt: null, expiresAt: { gt: now } },
-    data: { usedAt: now },
-  });
-  return result.count === 1;
 }

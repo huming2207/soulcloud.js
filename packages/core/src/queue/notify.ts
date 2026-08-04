@@ -15,6 +15,9 @@
 
 export const COMMAND_NOTIFY_CHANNEL = "soulcloud_commands";
 
+/** Wake-up channel for OTA target delivery (broker ota poller). */
+export const OTA_NOTIFY_CHANNEL = "soulcloud_ota";
+
 
 /** Wake-up channel for device credential revocation (session kill). */
 export const CREDENTIAL_REVOKED_CHANNEL = "soulcloud_credentials_revoked";

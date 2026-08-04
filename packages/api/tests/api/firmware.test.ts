@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { createApp } from "../../src/api/app";
-import { prisma } from "@soulcloud/core";
+import { prisma, signOtaToken } from "@soulcloud/core";
 import { buildNoloadElf } from "../../../core/tests/helpers/elf-builder";
 
 const TEST_JWT = {
@@ -16,7 +16,7 @@ const TEST_JWT = {
   refreshTtlSeconds: 3600,
 };
 
-const app = createApp(prisma, TEST_JWT);
+const app = createApp(prisma, TEST_JWT, 900);
 
 const testElf = buildNoloadElf(["value=%d"], ["demo"], 32, true);
 
@@ -35,6 +35,9 @@ let projectId: string;
 let otherProjectId: string;
 let accessToken = "";
 let otherAccessToken = "";
+let deviceId = "";
+let deviceUid = "";
+let otherProjectDeviceId = "";
 
 async function registerUser(prefix: string): Promise<{ userId: string; token: string }> {
   const username = `${prefix}-${randomUUID().slice(0, 8)}`;
@@ -84,11 +87,34 @@ beforeAll(async () => {
   accessToken = owner.token;
   const outsider = await registerUser("ota-outsider");
   otherAccessToken = outsider.token;
+  deviceUid = `ota-api-${randomUUID().slice(0, 8)}`;
+  const device = await prisma.device.create({
+    data: {
+      id: randomUUID(),
+      deviceUid,
+      assignedId: "assigned-ota-api",
+      passwordHash: "unused",
+      projectId,
+    },
+  });
+  deviceId = device.id;
+  const cross = await prisma.device.create({
+    data: {
+      id: randomUUID(),
+      deviceUid: `ota-api-x-${randomUUID().slice(0, 8)}`,
+      assignedId: "assigned-ota-api-x",
+      passwordHash: "unused",
+      projectId: otherProjectId,
+    },
+  });
+  otherProjectDeviceId = cross.id;
 });
 
 afterAll(async () => {
-  await prisma.firmwareDownloadToken.deleteMany({
-    where: { release: { projectId: { in: [projectId, otherProjectId] } } },
+  await prisma.otaTarget.deleteMany({ where: { job: { projectId: { in: [projectId, otherProjectId] } } } });
+  await prisma.otaJob.deleteMany({ where: { projectId: { in: [projectId, otherProjectId] } } });
+  await prisma.device.deleteMany({
+    where: { id: { in: [deviceId, otherProjectDeviceId] } },
   });
   await prisma.firmwareRelease.deleteMany({
     where: { projectId: { in: [projectId, otherProjectId] } },
@@ -337,137 +363,204 @@ describe("GET /v1/firmware-releases/:id", () => {
   });
 });
 
-describe("download tokens", () => {
-  test("POST download-token requires membership, returns credential", async () => {
+describe("POST /v1/firmware-releases/:id/deploy", () => {
+  test("deploys to online project devices (201)", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/download-token`, {
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
         method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [deviceId] }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      job_id: string;
+      targets: Array<{ device_id: string; device_uid: string; state: string }>;
+    };
+    expect(body.job_id).toBeTruthy();
+    expect(body.targets).toEqual([
+      { device_id: deviceId, device_uid: deviceUid, state: "pending" },
+    ]);
+    const targets = await prisma.otaTarget.count({ where: { jobId: body.job_id } });
+    expect(targets).toBe(1);
+  });
+
+  test("device from another project -> 403", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [otherProjectDeviceId] }),
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "forbidden" });
+  });
+
+  test("unknown device -> 404", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [randomUUID()] }),
+      }),
+    );
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: "target_devices_not_found" });
+  });
+
+  test("empty / duplicate device lists -> 400", async () => {
+    const empty = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [] }),
+      }),
+    );
+    expect(empty.status).toBe(400);
+    const dup = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [deviceId, deviceId] }),
+      }),
+    );
+    expect(dup.status).toBe(400);
+  });
+
+  test("non-member -> 403; unknown release -> 404; no auth -> 401", async () => {
+    const denied = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
+        method: "POST",
+        headers: { ...authHeaders(otherAccessToken), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [deviceId] }),
+      }),
+    );
+    expect(denied.status).toBe(403);
+    const missing = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${randomUUID()}/deploy`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [deviceId] }),
+      }),
+    );
+    expect(missing.status).toBe(404);
+    const noauth = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [deviceId] }),
+      }),
+    );
+    expect(noauth.status).toBe(401);
+  });
+});
+
+describe("bin download", () => {
+  test("project member downloads directly with Bearer", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/bin`, {
         headers: authHeaders(),
       }),
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      token: string;
-      expires_at: string;
-      url: string;
-    };
-    expect(body.token.length).toBeGreaterThan(20);
-    expect(body.url).toContain(`/v1/firmware-releases/${createdReleaseId}/bin?token=`);
-    const expiry = new Date(body.expires_at).getTime();
-    expect(expiry).toBeGreaterThan(Date.now() + 120_000);
-    expect(expiry).toBeLessThanOrEqual(Date.now() + 180_000);
-
-    // non-member cannot create one
-    const denied = await app.handle(
-      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/download-token`, {
-        method: "POST",
-        headers: authHeaders(otherAccessToken),
-      }),
-    );
-    expect(denied.status).toBe(403);
-  });
-
-  test("GET bin with a valid token downloads the exact bytes (no Bearer)", async () => {
-    const res = await app.handle(
-      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/download-token`, {
-        method: "POST",
-        headers: authHeaders(),
-      }),
-    );
-    const { token } = (await res.json()) as { token: string };
-    const download = await app.handle(
-      new Request(
-        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
-      ),
-    );
-    expect(download.status).toBe(200);
-    expect(download.headers.get("content-type")).toBe("application/octet-stream");
-    const bytes = new Uint8Array(await download.arrayBuffer());
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    const bytes = new Uint8Array(await res.arrayBuffer());
     expect([...bytes]).toEqual([...makeBin(1024, 3)]);
   });
 
-  test("token is single-use: second download refused", async () => {
+  test("non-member Bearer -> 403", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/download-token`, {
-        method: "POST",
-        headers: authHeaders(),
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/bin`, {
+        headers: authHeaders(otherAccessToken),
       }),
     );
-    const { token } = (await res.json()) as { token: string };
-    const first = await app.handle(
+    expect(res.status).toBe(403);
+  });
+
+  test("device downloads with its per-device JWT (no Bearer)", async () => {
+    const token = await signOtaToken(TEST_JWT.secret, {
+      deviceUid,
+      releaseId: createdReleaseId,
+    }, 900);
+    const res = await app.handle(
       new Request(
         `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
       ),
     );
-    expect(first.status).toBe(200);
-    const second = await app.handle(
-      new Request(
-        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
-      ),
+    expect(res.status).toBe(200);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect([...bytes]).toEqual([...makeBin(1024, 3)]);
+  });
+
+  test("no credentials -> 403", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/bin`),
     );
-    expect(second.status).toBe(403);
-    expect(await second.json()).toMatchObject({ error: "invalid_download_token" });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "invalid_download_token" });
   });
 
   test("garbage token -> 403", async () => {
     const res = await app.handle(
       new Request(
-        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=not-a-real-token`,
+        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=not-a-jwt`,
       ),
     );
     expect(res.status).toBe(403);
-  });
-
-  test("no token -> 403", async () => {
-    const res = await app.handle(
-      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/bin`),
-    );
-    expect(res.status).toBe(403);
-  });
-
-  test("token is release-scoped: cannot download another release", async () => {
-    // create a second release
-    const bin = makeBin(777, 9);
-    const up = await app.handle(
-      new Request("http://localhost/v1/firmware-releases", {
-        method: "POST",
-        headers: authHeaders(),
-        body: uploadForm({ bin }),
-      }),
-    );
-    const { release_id: otherReleaseId } = (await up.json()) as { release_id: string };
-    const res = await app.handle(
-      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/download-token`, {
-        method: "POST",
-        headers: authHeaders(),
-      }),
-    );
-    const { token } = (await res.json()) as { token: string };
-    const cross = await app.handle(
-      new Request(
-        `http://localhost/v1/firmware-releases/${otherReleaseId}/bin?token=${encodeURIComponent(token)}`,
-      ),
-    );
-    expect(cross.status).toBe(403);
   });
 
   test("expired token -> 403", async () => {
+    const token = await signOtaToken(TEST_JWT.secret, {
+      deviceUid,
+      releaseId: createdReleaseId,
+    }, -1);
     const res = await app.handle(
-      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/download-token`, {
-        method: "POST",
-        headers: authHeaders(),
-      }),
-    );
-    const { token } = (await res.json()) as { token: string };
-    await prisma.firmwareDownloadToken.updateMany({
-      where: { tokenHash: createHash("sha256").update(token).digest("hex") },
-      data: { expiresAt: new Date(Date.now() - 1000) },
-    });
-    const download = await app.handle(
       new Request(
         `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
       ),
     );
-    expect(download.status).toBe(403);
+    expect(res.status).toBe(403);
+  });
+
+  test("token for a different release -> 403", async () => {
+    const token = await signOtaToken(TEST_JWT.secret, {
+      deviceUid,
+      releaseId: randomUUID(),
+    }, 900);
+    const res = await app.handle(
+      new Request(
+        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
+      ),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  test("token for an unknown device -> 403", async () => {
+    const token = await signOtaToken(TEST_JWT.secret, {
+      deviceUid: "no-such-device",
+      releaseId: createdReleaseId,
+    }, 900);
+    const res = await app.handle(
+      new Request(
+        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
+      ),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  test("token for a device outside the release project -> 403", async () => {
+    // sign a token for the cross-project device (same project as the
+    // release is NOT checked at issuance, only at download)
+    const token = await signOtaToken(TEST_JWT.secret, {
+      deviceUid: "ota-api-x",
+      releaseId: createdReleaseId,
+    }, 900);
+    const res = await app.handle(
+      new Request(
+        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
+      ),
+    );
+    expect(res.status).toBe(403);
   });
 });

@@ -12,6 +12,7 @@ import { prisma } from "@soulcloud/core";
 import { kickDeviceSession, startBroker } from "./mqtt/broker";
 import { attachDispatch } from "./mqtt/dispatch";
 import { startCommandPoller } from "./mqtt/publish";
+import { startOtaPoller } from "./mqtt/ota-publish";
 import { startNotifier } from "./mqtt/notify";
 import { loadBrokerConfig } from "./config";
 
@@ -48,6 +49,19 @@ const poller = startCommandPoller(
   },
   logger,
 );
+// OTA delivery: metadata + per-device download JWT over MQTT; the device
+// fetches the bin over HTTP itself.
+const otaPoller = startOtaPoller(
+  aedes,
+  prisma,
+  {
+    secret: config.JWT_SECRET,
+    pollIntervalMs: config.OTA_POLL_INTERVAL_MS,
+    leaseDurationMs: config.OTA_LEASE_SECONDS * 1000,
+    tokenTtlSeconds: config.OTA_TOKEN_TTL_SECONDS,
+  },
+  logger,
+);
 // Wake the poller immediately when the API process enqueues commands
 // (lossy hint; the poll interval remains the correctness fallback) and
 // kill live sessions when credentials are revoked.
@@ -55,6 +69,7 @@ const notifier = await startNotifier(
   config.DATABASE_URL,
   {
     onCommand: () => poller.wake(),
+    onOta: () => otaPoller.wake(),
     onCredentialRevoked: (deviceUid) => {
       const kicked = kickDeviceSession(aedes, deviceUid);
       logger.info("revoked device session", { deviceUid, kicked });
@@ -69,6 +84,7 @@ console.log(
 async function shutdown(signal: string) {
   console.log(`[soulcloud-broker] received ${signal}, shutting down`);
   poller.stop();
+  otaPoller.stop();
   await notifier.close();
   await closeBroker();
   await prisma.$disconnect();

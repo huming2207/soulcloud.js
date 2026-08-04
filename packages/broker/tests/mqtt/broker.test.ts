@@ -59,6 +59,7 @@ beforeAll(async () => {
     process.env.DATABASE_URL!,
     {
       onCommand: () => {},
+      onOta: () => {},
       onCredentialRevoked: (deviceUid) => {
         kickDeviceSession(broker.aedes, deviceUid);
       },
@@ -604,7 +605,7 @@ describe("G group: credential revocation kills live sessions", () => {
     const revoked: string[] = [];
     const notifier = await startNotifier(
       process.env.DATABASE_URL!,
-      { onCommand: () => {}, onCredentialRevoked: (d) => revoked.push(d) },
+      { onCommand: () => {}, onOta: () => {}, onCredentialRevoked: (d) => revoked.push(d) },
       silentLog,
     );
     await new Promise((r) => setTimeout(r, 100));

@@ -9,13 +9,16 @@
  */
 
 import { Elysia } from "elysia";
+import { z } from "zod";
 import {
   ArtifactImportError,
   MAX_FIRMWARE_BYTES,
+  MAX_OTA_TARGETS,
+  OtaError,
   ReleaseError,
-  consumeDownloadToken,
-  createDownloadToken,
   createFirmwareRelease,
+  createOtaJob,
+  verifyOtaToken,
   type JwtConfig,
   type PrismaClient,
 } from "@soulcloud/core";
@@ -81,7 +84,11 @@ function isFile(value: unknown): value is File {
   return typeof value === "object" && value !== null && "arrayBuffer" in value;
 }
 
-export function createFirmwareRoutes(prisma: PrismaClient, jwt: JwtConfig) {
+export function createFirmwareRoutes(
+  prisma: PrismaClient,
+  jwt: JwtConfig,
+  otaTargetTtlSeconds: number,
+) {
   return new Elysia({ prefix: "/v1" })
     // --- upload ------------------------------------------------------------
 
@@ -322,9 +329,9 @@ export function createFirmwareRoutes(prisma: PrismaClient, jwt: JwtConfig) {
       }
     })
 
-    // --- single-use download URL -------------------------------------------
+    // --- deploy: fan out per-device download credentials over MQTT ---------
 
-    .post("/firmware-releases/:id/download-token", async ({ request, params, set }) => {
+    .post("/firmware-releases/:id/deploy", async ({ request, params, set }) => {
       try {
         const authUser = await authenticateRequest(prisma, jwt, request);
         if (!authUser) {
@@ -335,6 +342,23 @@ export function createFirmwareRoutes(prisma: PrismaClient, jwt: JwtConfig) {
         if (!id.success) {
           set.status = 404;
           return { error: "not_found", message: "release does not exist" };
+        }
+        const body = await request.json().catch(() => null);
+        if (!body || typeof body !== "object") {
+          set.status = 400;
+          return { error: "invalid_request", message: "expected JSON body" };
+        }
+        const parsed = z
+          .object({
+            device_ids: z.array(UuidParam).max(MAX_OTA_TARGETS),
+          })
+          .safeParse(body);
+        if (!parsed.success) {
+          set.status = 400;
+          return {
+            error: "invalid_request",
+            message: "device_ids must be an array of UUIDs",
+          };
         }
         const release = await prisma.firmwareRelease.findUnique({
           where: { id: id.data },
@@ -348,18 +372,48 @@ export function createFirmwareRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 403;
           return { error: "forbidden", message: "not a member of this project" };
         }
-        const { token, expiresAt } = await createDownloadToken(prisma, release.id);
+        const job = await createOtaJob(prisma, {
+          projectId: release.projectId,
+          releaseId: release.id,
+          createdBy: authUser.user.id,
+          deviceIds: parsed.data.device_ids,
+          targetTtlSeconds: otaTargetTtlSeconds,
+        });
+        set.status = 201;
         return {
-          token,
-          expires_at: expiresAt,
-          url: `/v1/firmware-releases/${release.id}/bin?token=${token}`,
+          job_id: job.jobId,
+          targets: job.targets.map((t) => ({
+            device_id: t.deviceId,
+            device_uid: t.deviceUid,
+            state: t.state,
+          })),
         };
       } catch (error) {
+        if (error instanceof OtaError) {
+          switch (error.kind) {
+            case "empty_targets":
+            case "duplicate_targets":
+            case "too_many_targets":
+              set.status = 400;
+              return { error: "invalid_targets", message: error.message };
+            case "target_not_found":
+              set.status = 404;
+              return { error: "target_devices_not_found", message: error.message };
+            case "target_not_in_project":
+              set.status = 403;
+              return { error: "forbidden", message: error.message };
+            case "release_not_in_project":
+              set.status = 404;
+              return { error: "not_found", message: error.message };
+            case "database":
+              break; // fall through to uniform 500
+          }
+        }
         return handleApiError(error, set);
       }
     })
 
-    // --- download (no Bearer; the token IS the credential) -----------------
+    // --- download (Bearer for humans, per-device JWT for devices) ----------
 
     .get("/firmware-releases/:id/bin", async ({ request, params, set }) => {
       try {
@@ -368,26 +422,53 @@ export function createFirmwareRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 403;
           return { error: "invalid_download_token", message: "invalid download token" };
         }
-        const url = new URL(request.url);
-        const token = url.searchParams.get("token") ?? "";
-        if (token.length === 0) {
-          set.status = 403;
-          return { error: "invalid_download_token", message: "invalid download token" };
-        }
-        // atomic single-use consumption (also guards release mismatch)
-        const consumed = await consumeDownloadToken(prisma, id.data, token);
-        if (!consumed) {
-          set.status = 403;
-          return { error: "invalid_download_token", message: "invalid download token" };
-        }
-        const release = await prisma.firmwareRelease.findUnique({
-          where: { id: id.data },
-          select: { binBytes: true, binSize: true },
-        });
-        // release exists (the token references it), but guard anyway
-        if (!release) {
-          set.status = 404;
-          return { error: "not_found", message: "release does not exist" };
+        const authHeader = request.headers.get("authorization");
+        let release: { projectId: string; binBytes: Uint8Array; binSize: number } | null = null;
+        if (authHeader?.startsWith("Bearer ")) {
+          // human download: membership is the credential
+          const authUser = await authenticateRequest(prisma, jwt, request);
+          if (!authUser) {
+            set.status = 401;
+            return { error: "unauthorized", message: "authentication required" };
+          }
+          release = await prisma.firmwareRelease.findUnique({
+            where: { id: id.data },
+            select: { projectId: true, binBytes: true, binSize: true },
+          });
+          if (!release) {
+            set.status = 404;
+            return { error: "not_found", message: "release does not exist" };
+          }
+          if (!(await userCanAccessProject(prisma, authUser.user.id, release.projectId))) {
+            set.status = 403;
+            return { error: "forbidden", message: "not a member of this project" };
+          }
+        } else {
+          // device download: short-lived per-device JWT (delivered over MQTT)
+          const url = new URL(request.url);
+          const token = url.searchParams.get("token") ?? "";
+          const claims = await verifyOtaToken(jwt.secret, token);
+          if (!claims || claims.releaseId !== id.data) {
+            set.status = 403;
+            return { error: "invalid_download_token", message: "invalid download token" };
+          }
+          release = await prisma.firmwareRelease.findUnique({
+            where: { id: id.data },
+            select: { projectId: true, binBytes: true, binSize: true },
+          });
+          if (!release) {
+            set.status = 404;
+            return { error: "not_found", message: "release does not exist" };
+          }
+          // the claimed device must still exist in the release's project
+          const device = await prisma.device.findUnique({
+            where: { deviceUid: claims.deviceUid },
+            select: { projectId: true },
+          });
+          if (!device || device.projectId !== release.projectId) {
+            set.status = 403;
+            return { error: "invalid_download_token", message: "invalid download token" };
+          }
         }
         set.status = 200;
         set.headers["content-type"] = "application/octet-stream";
