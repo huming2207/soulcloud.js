@@ -26,6 +26,18 @@ import {
 } from "@soulcloud/core";
 import { handleApiError } from "./validate";
 
+/**
+ * Timing equalization (audit M2): when the username does not exist we still
+ * run one argon2id verification against this fixed dummy hash so that
+ * "user not found" and "wrong password" cost the same — no username
+ * enumeration via response timing. The value is public (not a secret).
+ */
+const DUMMY_PASSWORD_HASH =
+  "$argon2id$v=19$m=65536,t=2,p=1$iTSM8f1M2+WEv8Gski5WvW41lwIm7iZt+OioJwx2pyI$XAgkoMq7xhmEvqNnpJRWTFJNqACk9Tnt7wboBK0JEBw";
+
+/** Fixed delay applied to failed authentication attempts (like the broker). */
+const AUTH_FAIL_DELAY_MS = 100;
+
 const RegisterBody = z
   .object({
     username: z.string().min(3).max(64).regex(/^[a-zA-Z0-9_.-]+$/),
@@ -97,7 +109,14 @@ export function createAuthRoutes(prisma: PrismaClient, jwt: JwtConfig) {
         const user = await prisma.user.findUnique({
           where: { username: parsed.data.username },
         });
-        if (!user || !(await verifyPassword(parsed.data.password, user.passwordHash))) {
+        // timing-equalized credential check: unknown users verify against
+        // the dummy hash instead of short-circuiting
+        const passwordOk = user
+          ? await verifyPassword(parsed.data.password, user.passwordHash)
+          : await verifyPassword(parsed.data.password, DUMMY_PASSWORD_HASH);
+        if (!user || !passwordOk) {
+          // throttle brute force; also masks the timing oracle
+          await new Promise((r) => setTimeout(r, AUTH_FAIL_DELAY_MS));
           set.status = 401;
           return { error: "invalid_credentials", message: "invalid username or password" };
         }

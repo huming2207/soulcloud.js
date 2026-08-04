@@ -45,7 +45,7 @@ const CreateCommandBatchBody = z
 
 export function createApp(
   prisma: PrismaClient,
-  jwt?: JwtConfig,
+  jwt: JwtConfig,
   otaTargetTtlSeconds = 15 * 60,
 ) {
   const auth = jwt ?? {

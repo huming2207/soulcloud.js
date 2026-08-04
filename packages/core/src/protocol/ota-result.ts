@@ -76,4 +76,8 @@ export const OTA_RESULT_CODES = {
   FLASH_FAILED: -3,
   INVALID_IMAGE: -4,
   OTHER: -5,
+  /** Platform-side: the notice was delivered but the device never started
+   * or completed its download within the stall window (e.g. old firmware
+   * without OTA support never subscribed to the ota topic). */
+  DELIVERY_WINDOW_TIMEOUT: -7,
 } as const;

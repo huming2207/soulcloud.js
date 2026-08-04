@@ -151,9 +151,8 @@ export async function startBroker(
 /**
  * Authenticates a device against the `devices` table.
  *
- * Passwords are stored scrypt-hashed (constant-time verification); legacy
- * plaintext hashes are still accepted for development data but never
- * written going forward.
+ * Passwords are argon2id-hashed (Bun.password); no legacy formats are
+ * accepted (scrypt/plaintext compatibility was removed by user decision).
  */
 async function authenticateDevice(
   prisma: PrismaClient,
@@ -166,8 +165,8 @@ async function authenticateDevice(
     select: { passwordHash: true, authRevoked: true },
   });
   if (!device) return false;
-  // G group: revoked credentials refuse new connections (an already-open
-  // session keeps running until it disconnects; documented limitation)
+  // G group: revoked credentials refuse new connections (live sessions are
+  // killed via the CREDENTIAL_REVOKED notify + kickDeviceSession)
   if (device.authRevoked) return false;
   return verifyDevicePassword(password.toString(), device.passwordHash);
 }

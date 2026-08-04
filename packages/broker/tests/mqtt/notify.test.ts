@@ -85,8 +85,20 @@ describe("command notifier", () => {
     );
     notifierClose = notifier.close;
 
-    // wait until LISTEN is active before enqueueing
-    await new Promise((r) => setTimeout(r, 100));
+    // deterministic LISTEN-ready check: probe the channel, then wait for
+    // the callback (a fixed sleep raced enqueueBatch's pg_notify)
+    const before = wakeups.length;
+    await prisma.$executeRaw`SELECT pg_notify(${COMMAND_NOTIFY_CHANNEL}, 'probe')`;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("probe timeout")), 3000);
+      const check = setInterval(() => {
+        if (wakeups.length > before) {
+          clearTimeout(timer);
+          clearInterval(check);
+          resolve();
+        }
+      }, 20);
+    });
 
     await enqueueBatch(prisma, [deviceId], { cmd: "reboot" });
 
@@ -114,28 +126,23 @@ describe("M9: notifier reconnection", () => {
       { onCommand: () => wakeups.push("wake"), onOta: () => wakeups.push("ota"), onCredentialRevoked: () => {} },
       silentLog,
     );
-    await new Promise((r) => setTimeout(r, 100));
-
     // kill every connection to the notifier's session by terminating all
     // pg connections from this app (the dedicated LISTEN connection drops)
     await prisma.$executeRaw`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'pg' AND pid <> pg_backend_pid()`;
 
-    // wait for the notifier to reconnect (1s retry delay): poll until the
-    // original connection has been replaced, then publish again
+    // wait for the notifier to reconnect (1s retry delay): probe the
+    // channel until a notification lands again
     const before = wakeups.length;
     const deadline = Date.now() + 8000;
-    while (Date.now() < deadline) {
-      // the reconnect creates a new LISTEN; we cannot observe it directly,
-      // so publish repeatedly until one lands (idempotent wakeups)
+    while (Date.now() < deadline && wakeups.length <= before) {
       const publisher = new Client({ connectionString: process.env.DATABASE_URL });
       await publisher.connect();
       await publisher.query(`SELECT pg_notify($1, 'poll')`, [COMMAND_NOTIFY_CHANNEL]);
       await publisher.end();
-      if (wakeups.length > before) break;
-      await new Promise((r) => setTimeout(r, 250));
+      if (wakeups.length <= before) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
     }
-    const publisher = new Client({ connectionString: process.env.DATABASE_URL });
-    await publisher.connect();
     expect(wakeups.length).toBeGreaterThan(before);
     await notifier.close();
   });

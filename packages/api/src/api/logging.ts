@@ -183,6 +183,19 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 400;
           return { error: "invalid_request", message: "limit must be an integer between 1 and 500" };
         }
+        // H1: project membership is required to list artifacts
+        const project = await prisma.project.findUnique({
+          where: { id: projectId.data },
+          select: { id: true },
+        });
+        if (!project) {
+          set.status = 404;
+          return { error: "project_not_found", message: "project does not exist" };
+        }
+        if (!(await userCanAccessProject(prisma, authUser.user.id, projectId.data))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this project" };
+        }
         const artifacts = await prisma.firmwareArtifact.findMany({
           where: { projectId: projectId.data },
           orderBy: { uploadedAt: "desc" },
@@ -309,6 +322,11 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 404;
           return { error: "firmware_state_not_found", message: "no firmware state reported" };
         }
+        // H1: the device's project membership is required to read the state
+        if (!(await userCanAccessProject(prisma, authUser.user.id, state.device.projectId))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this device's project" };
+        }
         const artifact = await prisma.firmwareArtifact.findUnique({
           where: {
             projectId_buildId: { projectId: state.device.projectId, buildId: state.fwHash },
@@ -355,13 +373,19 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           return { error: "forbidden", message: "not a member of this device's project" };
         }
         // issue fresh credentials (the device_uid stays the MQTT username;
-        // the password is returned exactly once)
+        // the password is returned exactly once). Rotation replaces the
+        // hash, so the old password dies immediately; a live session from
+        // the old credentials is kicked (same "revoke = kick" semantics
+        // as the revoke endpoint, audit M3).
         const password = generateDevicePassword();
         const passwordHash = await hashPassword(password);
-        await prisma.device.update({
-          where: { id: deviceId.data },
-          data: { passwordHash, authRevoked: false },
-        });
+        await prisma.$transaction([
+          prisma.device.update({
+            where: { id: deviceId.data },
+            data: { passwordHash, authRevoked: false },
+          }),
+          prisma.$executeRaw`SELECT pg_notify(${CREDENTIAL_REVOKED_CHANNEL}, ${device.deviceUid})`,
+        ]);
         return {
           device_id: deviceId.data,
           mqtt_username: device.deviceUid,
@@ -446,6 +470,12 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
         if (!device) {
           set.status = 404;
           return { error: "device_not_found", message: "device does not exist" };
+        }
+        // H1: membership is required BEFORE the write (a non-member must
+        // never bind artifacts or mutate another project's device state)
+        if (!(await userCanAccessProject(prisma, authUser.user.id, device.projectId))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this device's project" };
         }
         if (!artifact) {
           set.status = 404;

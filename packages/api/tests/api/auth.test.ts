@@ -156,6 +156,68 @@ describe("auth flow", () => {
     expect(t2reuse.status).toBe(401);
   });
 
+  test("H2: reuse detection revokes the whole family at any chain depth", async () => {
+    const username = `auth-${randomUUID().slice(0, 8)}`;
+    const user = await register(username);
+
+    // rotate twice: T0 -> T1 -> T2 -> T3
+    const r1 = await app.handle(
+      jsonRequest("/v1/auth/refresh", "POST", { refresh_token: user.refresh_token }),
+    );
+    const t1 = (await r1.json()) as { refresh_token: string };
+    const r2 = await app.handle(
+      jsonRequest("/v1/auth/refresh", "POST", { refresh_token: t1.refresh_token }),
+    );
+    const t2 = (await r2.json()) as { refresh_token: string };
+    const r3 = await app.handle(
+      jsonRequest("/v1/auth/refresh", "POST", { refresh_token: t2.refresh_token }),
+    );
+    const t3 = (await r3.json()) as { refresh_token: string };
+
+    // replay T0 (the ROOT, depth 2 away) -> the whole family dies
+    const replay = await app.handle(
+      jsonRequest("/v1/auth/refresh", "POST", { refresh_token: user.refresh_token }),
+    );
+    expect(replay.status).toBe(401);
+    expect(await replay.json()).toMatchObject({ error: "reuse_detected" });
+
+    for (const token of [t1.refresh_token, t2.refresh_token, t3.refresh_token]) {
+      const attempt = await app.handle(
+        jsonRequest("/v1/auth/refresh", "POST", { refresh_token: token }),
+      );
+      expect(attempt.status).toBe(401);
+      expect(await attempt.json()).toMatchObject({ error: "reuse_detected" });
+    }
+  });
+
+  test("M1: concurrent refresh of the same token lets only one win", async () => {
+    const username = `auth-${randomUUID().slice(0, 8)}`;
+    const user = await register(username);
+
+    const [a, b] = await Promise.all([
+      app.handle(jsonRequest("/v1/auth/refresh", "POST", { refresh_token: user.refresh_token })),
+      app.handle(jsonRequest("/v1/auth/refresh", "POST", { refresh_token: user.refresh_token })),
+    ]);
+    const statuses = [a.status, b.status].sort();
+    // one rotation succeeds, the other is detected as reuse
+    expect(statuses).toEqual([200, 401]);
+    // the reuse signal revokes the whole family: the winner's successor
+    // token is dead too (forced re-login is the intended semantics)
+    const winner = a.status === 200 ? (await a.json()) : (await b.json());
+    const finalAttempt = await app.handle(
+      jsonRequest("/v1/auth/refresh", "POST", {
+        refresh_token: (winner as { refresh_token: string }).refresh_token,
+      }),
+    );
+    expect(finalAttempt.status).toBe(401);
+    // all tokens of the user are revoked
+    const row = await prisma.refreshToken.findFirst({
+      where: { user: { username } },
+      select: { revokedAt: true },
+    });
+    expect(row?.revokedAt).not.toBeNull();
+  });
+
   test("logout revokes the refresh token", async () => {
     const username = `auth-${randomUUID().slice(0, 8)}`;
     const user = await register(username);

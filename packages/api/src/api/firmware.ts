@@ -1,6 +1,7 @@
 /**
  * OTA firmware release routes: upload (bin required, ELF optional),
- * listing/detail, and single-use temporary download URLs.
+ * listing/detail, deploy, and download (Bearer for humans, per-device
+ * short-lived JWT for devices).
  *
  * Error mapping follows the project conventions: 400 invalid_request,
  * 403 forbidden, 404 not_found, 413 payload_too_large, 422 invalid_elf,
@@ -118,6 +119,10 @@ export function createFirmwareRoutes(
           return { error: "invalid_request", message: "project_id must be a UUID" };
         }
         const version = form.get("version");
+        if (typeof version === "string" && version.length > 255) {
+          set.status = 400;
+          return { error: "invalid_request", message: "version must be at most 255 characters" };
+        }
         const bin = form.get("bin");
         const elf = form.get("elf");
 

@@ -135,6 +135,7 @@ describe("ota poller", () => {
         pollIntervalMs: 500,
         leaseDurationMs: 60_000,
         tokenTtlSeconds: 900,
+                stallTimeoutMinutes: 30,
       }, silentLog);
       return notices.length > 0 ? true : null;
     });
@@ -178,6 +179,7 @@ describe("ota poller", () => {
         pollIntervalMs: 500,
         leaseDurationMs: 60_000,
         tokenTtlSeconds: 900,
+                stallTimeoutMinutes: 30,
       }, silentLog);
     }
     const target = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
@@ -201,6 +203,7 @@ describe("ota poller", () => {
       pollIntervalMs: 500,
       leaseDurationMs: 60_000,
       tokenTtlSeconds: 900,
+            stallTimeoutMinutes: 30,
     }, silentLog);
     const target = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
     expect(target?.state).toBe("expired");
@@ -229,6 +232,7 @@ describe("ota result acknowledgements over MQTT", () => {
     await waitFor(async () => {
       await otaPollOnce(broker.aedes, prisma, {
         secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000, tokenTtlSeconds: 900,
+            stallTimeoutMinutes: 30,
       }, silentLog);
       const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
       return t?.state === "delivered" ? true : null;
@@ -279,6 +283,7 @@ describe("ota result acknowledgements over MQTT", () => {
     await waitFor(async () => {
       await otaPollOnce(broker.aedes, prisma, {
         secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000, tokenTtlSeconds: 900,
+            stallTimeoutMinutes: 30,
       }, silentLog);
       const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
       return t?.state === "delivered" ? true : null;
@@ -334,6 +339,7 @@ describe("ota result acknowledgements over MQTT", () => {
     await waitFor(async () => {
       await otaPollOnce(broker.aedes, prisma, {
         secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000, tokenTtlSeconds: 900,
+            stallTimeoutMinutes: 30,
       }, silentLog);
       const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
       return t?.state === "delivered" ? true : null;

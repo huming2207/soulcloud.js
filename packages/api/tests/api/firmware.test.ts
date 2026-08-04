@@ -553,6 +553,58 @@ describe("bin download", () => {
     expect(res.status).toBe(403);
   });
 
+  test("download request drives the target to delivering (real jobId)", async () => {
+    // deploy a real job so the JWT's jobId maps to an actual target
+    const dep = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [deviceId] }),
+      }),
+    );
+    const { job_id } = (await dep.json()) as { job_id: string };
+    // simulate broker delivery (the API test env has no poller)
+    await prisma.otaTarget.updateMany({
+      where: { jobId: job_id },
+      data: { state: "delivered", deliveredAt: new Date() },
+    });
+    const token = await signOtaToken(TEST_JWT.secret, {
+      deviceUid,
+      releaseId: createdReleaseId,
+      jobId: job_id,
+    }, 900);
+    const download = await app.handle(
+      new Request(
+        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
+      ),
+    );
+    expect(download.status).toBe(200);
+    const target = await prisma.otaTarget.findFirst({ where: { jobId: job_id } });
+    expect(target?.state).toBe("delivering");
+  });
+
+  test("the same JWT can download repeatedly (retry/resume contract)", async () => {
+    const token = await signOtaToken(TEST_JWT.secret, {
+      deviceUid,
+      releaseId: createdReleaseId,
+      jobId: randomUUID(),
+    }, 900);
+    const first = await app.handle(
+      new Request(
+        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
+      ),
+    );
+    expect(first.status).toBe(200);
+    const second = await app.handle(
+      new Request(
+        `http://localhost/v1/firmware-releases/${createdReleaseId}/bin?token=${encodeURIComponent(token)}`,
+      ),
+    );
+    expect(second.status).toBe(200);
+    const bytes = new Uint8Array(await second.arrayBuffer());
+    expect([...bytes]).toEqual([...makeBin(1024, 3)]);
+  });
+
   test("token for a device outside the release project -> 403", async () => {
     // sign a token for the cross-project device (same project as the
     // release is NOT checked at issuance, only at download)

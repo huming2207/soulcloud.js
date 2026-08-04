@@ -59,6 +59,7 @@ const otaPoller = startOtaPoller(
     pollIntervalMs: config.OTA_POLL_INTERVAL_MS,
     leaseDurationMs: config.OTA_LEASE_SECONDS * 1000,
     tokenTtlSeconds: config.OTA_TOKEN_TTL_SECONDS,
+    stallTimeoutMinutes: config.OTA_STALL_TIMEOUT_MINUTES,
   },
   logger,
 );

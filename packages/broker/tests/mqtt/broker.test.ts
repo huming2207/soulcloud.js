@@ -608,7 +608,10 @@ describe("G group: credential revocation kills live sessions", () => {
       { onCommand: () => {}, onOta: () => {}, onCredentialRevoked: (d) => revoked.push(d) },
       silentLog,
     );
-    await new Promise((r) => setTimeout(r, 100));
+    // deterministic LISTEN-ready check: probe the channel (replaces a
+    // fixed sleep, which raced pg_notify delivery and made this flaky)
+    await prisma.$executeRaw`SELECT pg_notify(${CREDENTIAL_REVOKED_CHANNEL}, 'probe')`;
+    await waitFor(async () => revoked.includes("probe"), "notifier listening");
 
     // revoke via the database + notify (the API endpoint does exactly this)
     await prisma.$transaction([

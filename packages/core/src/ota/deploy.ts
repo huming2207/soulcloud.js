@@ -50,6 +50,9 @@ export interface OtaTokenPayload {
   jobId: string;
 }
 
+/** Audience for OTA download credentials (audit M5: token class separation). */
+export const OTA_TOKEN_AUDIENCE = "ota-download";
+
 /** Signs a per-device OTA download credential (HS256, short-lived). */
 export async function signOtaToken(
   secret: string,
@@ -60,6 +63,7 @@ export async function signOtaToken(
   return new SignJWT({ releaseId: payload.releaseId, jobId: payload.jobId })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.deviceUid)
+    .setAudience(OTA_TOKEN_AUDIENCE)
     .setIssuedAt()
     .setExpirationTime(`${ttlSeconds}s`)
     .sign(key);
@@ -76,7 +80,10 @@ export async function verifyOtaToken(
 ): Promise<OtaTokenPayload | null> {
   try {
     const key = new TextEncoder().encode(secret);
-    const { payload } = await jwtVerify(token, key, { algorithms: ["HS256"] });
+    const { payload } = await jwtVerify(token, key, {
+      algorithms: ["HS256"],
+      audience: OTA_TOKEN_AUDIENCE,
+    });
     if (
       typeof payload.sub !== "string" ||
       typeof payload.releaseId !== "string" ||
@@ -204,14 +211,51 @@ export async function createOtaJob(
 
 /**
  * Moves targets whose delivery window has passed to the terminal `expired`
- * state, releasing the lease if one was held.
+ * state. Only SAFE states are expired (audit fix, OTA round-4 #2):
+ *
+ *   - `pending`: never published — clearly dead
+ *   - `leased` with an EXPIRED lease: no active publisher holds it anymore
+ *     (a live lease means a publish is in flight; expiring it would race
+ *     the publisher and produce false negatives — the device really
+ *     upgraded but the target sits in `expired` forever)
  */
 export async function expireOtaTargets(prisma: PrismaClient): Promise<number> {
-  const result = await prisma.otaTarget.updateMany({
-    where: { state: { in: ["pending", "leased"] }, expiresAt: { lt: new Date() } },
-    data: { state: "expired", leaseExpiresAt: null },
-  });
-  return result.count;
+  const result = await prisma.$executeRaw`
+    UPDATE ota_targets
+    SET state = 'expired', lease_expires_at = NULL
+    WHERE expires_at < now()
+      AND (state = 'pending'
+           OR (state = 'leased' AND lease_expires_at <= now()))
+  `;
+  return result;
+}
+
+/**
+ * Platform-side stall timeout (OTA round-4 #1): a target that was
+ * DELIVERED but never completed its download within the stall window is
+ * failed with code -7. This closes the permanent-stuck state for the
+ * common first-OTA case: devices running old firmware without ota-topic
+ * support receive nothing (Aedes reports a successful publish even with
+ * zero subscribers), so `delivered` would otherwise sit forever.
+ *
+ * `installed` is deliberately NOT stalled here: a device may legitimately
+ * be powered off; judging it requires the active+firmware-mismatch signal
+ * (rollout milestone, proposal 19 D6).
+ */
+export async function expireStalledOtaTargets(
+  prisma: PrismaClient,
+  stallMinutes: number,
+): Promise<number> {
+  const result = await prisma.$executeRaw`
+    UPDATE ota_targets
+    SET state = 'failed',
+        confirmed_at = now(),
+        result_code = -7,
+        result_message = 'download window timeout'
+    WHERE state IN ('delivered', 'delivering', 'downloaded')
+      AND delivered_at < now() - make_interval(secs => ${stallMinutes * 60}::double precision)
+  `;
+  return result;
 }
 
 export interface LeasedOtaTarget {

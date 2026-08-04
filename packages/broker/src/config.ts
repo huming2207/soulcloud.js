@@ -3,8 +3,9 @@ import { z } from "zod";
 
 const envSchema = z.object({
   ...SharedEnv,
-  /// HS256 secret for OTA download JWTs (must match the API process)
-  JWT_SECRET: z.string().min(32).default("dev-only-secret-change-me-0123456789"),
+  /// HS256 secret for OTA download JWTs. REQUIRED, no default; MUST match
+  /// the API process's JWT_SECRET (set in .env).
+  JWT_SECRET: z.string().min(32),
   MQTT_BROKER_PORT: z.coerce.number().int().positive().default(1883),
   /// WebSocket path for MQTT (reverse proxy terminates TLS in front of this)
   MQTT_BROKER_PATH: z.string().startsWith("/").default("/mqtt"),
@@ -19,6 +20,9 @@ const envSchema = z.object({
   OTA_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
   /// Download JWT lifetime in seconds (minted at publish time)
   OTA_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(15 * 60),
+  /// A delivered/delivering/downloaded target that never completes its
+  /// download within this window is failed with code -7
+  OTA_STALL_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
   // Uplink ingestion protection (DDoS / misbehaving devices):
   UPLINK_MAX_PACKET_BYTES: z.coerce.number().int().positive().default(65536),
   UPLINK_RATE_PER_SECOND: z.coerce.number().int().positive().default(20),

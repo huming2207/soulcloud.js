@@ -6,8 +6,8 @@
  *
  * Flow: register user → upload release (bin+elf) → deploy to a device →
  * MQTT ota notice received (msgpack: metadata + per-device JWT) →
- * HTTP download with the JWT → bytes match → re-download refused (expired
- * semantics covered by unit tests; here we verify the happy path).
+ * HTTP download with the JWT → bytes match (retries are allowed: JWTs
+ * are stateless and unlimited by design, unit tests cover expiry).
  *
  * Usage: bun scripts/e2e-ota.ts
  */

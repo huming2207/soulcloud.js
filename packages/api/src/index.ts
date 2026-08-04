@@ -24,7 +24,15 @@ if (!bindMatch) {
 const hostname = (bindMatch[1] ?? bindMatch[3])!;
 const port = Number(bindMatch[2] ?? bindMatch[4]);
 
-const app = createApp(prisma, undefined, config.OTA_TARGET_TTL_SECONDS);
+const app = createApp(
+  prisma,
+  {
+    secret: config.JWT_SECRET,
+    accessTtlSeconds: config.JWT_ACCESS_TTL_SECONDS,
+    refreshTtlSeconds: config.JWT_REFRESH_TTL_SECONDS,
+  },
+  config.OTA_TARGET_TTL_SECONDS,
+);
 app.listen({ hostname, port: Number(port) });
 console.log(
   `[soulcloud-api] listening on ${config.API_BIND_ADDRESS}`,

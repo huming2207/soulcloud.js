@@ -45,6 +45,9 @@ export class AuthError extends Error {
   }
 }
 
+/** Audience for human access tokens (audit M5: separates token classes). */
+export const ACCESS_TOKEN_AUDIENCE = "soulcloud-api";
+
 /** Signs a short-lived access token. */
 export async function signAccessToken(
   config: JwtConfig,
@@ -54,6 +57,7 @@ export async function signAccessToken(
   return new SignJWT({ username: payload.username })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.sub)
+    .setAudience(ACCESS_TOKEN_AUDIENCE)
     .setIssuedAt()
     .setExpirationTime(`${config.accessTtlSeconds}s`)
     .sign(key);
@@ -66,7 +70,10 @@ export async function verifyAccessToken(
 ): Promise<AccessTokenPayload> {
   try {
     const key = new TextEncoder().encode(config.secret);
-    const { payload } = await jwtVerify(token, key, { algorithms: ["HS256"] });
+    const { payload } = await jwtVerify(token, key, {
+      algorithms: ["HS256"],
+      audience: ACCESS_TOKEN_AUDIENCE,
+    });
     if (typeof payload.sub !== "string" || typeof payload.username !== "string") {
       throw new AuthError("invalid_token", "malformed token payload");
     }
@@ -120,35 +127,40 @@ export async function rotateRefreshToken(
   if (!stored) {
     throw new AuthError("invalid_token", "unknown refresh token");
   }
-  if (stored.revokedAt !== null) {
-    // reuse of a rotated/revoked token: revoke the whole chain
-    await revokeChain(prisma, stored);
-    throw new AuthError("reuse_detected", "refresh token reuse detected");
-  }
   if (stored.expiresAt.getTime() < Date.now()) {
-    await prisma.refreshToken.update({
-      where: { id: stored.id },
+    // expiry is terminal; mark revoked (best effort) and reject
+    await prisma.refreshToken.updateMany({
+      where: { id: stored.id, revokedAt: null },
       data: { revokedAt: new Date() },
     });
     throw new AuthError("token_expired", "refresh token expired");
   }
 
+  // M1: atomic rotation. Only the first concurrent refresh wins the
+  // conditional update; a loser is either a replay (theft signal) or a
+  // concurrent refresh — both revoke the ENTIRE user session family
+  // (H2: chain-walking only reached depth 1; revoking by user closes the
+  // gap at any depth and forces a re-login, which is the clearest
+  // semantics for a stolen-token signal).
+  const claimed = await prisma.refreshToken.updateMany({
+    where: { id: stored.id, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  if (claimed.count === 0) {
+    await revokeAllForUser(prisma, stored.userId);
+    throw new AuthError("reuse_detected", "refresh token reuse detected");
+  }
+
   // revoke this token, issue the successor
   const nextToken = randomBytes(32).toString("base64url");
-  await prisma.$transaction([
-    prisma.refreshToken.update({
-      where: { id: stored.id },
-      data: { revokedAt: new Date() },
-    }),
-    prisma.refreshToken.create({
-      data: {
-        userId: stored.userId,
-        tokenHash: hashToken(nextToken),
-        expiresAt: new Date(Date.now() + config.refreshTtlSeconds * 1000),
-        rotatedFrom: stored.id,
-      },
-    }),
-  ]);
+  await prisma.refreshToken.create({
+    data: {
+      userId: stored.userId,
+      tokenHash: hashToken(nextToken),
+      expiresAt: new Date(Date.now() + config.refreshTtlSeconds * 1000),
+      rotatedFrom: stored.id,
+    },
+  });
 
   return {
     accessToken: await signAccessToken(config, {
@@ -174,32 +186,15 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-/** Revokes every token in a rotation chain (reuse detection). */
-async function revokeChain(
-  prisma: PrismaClient,
-  stored: { userId: string; id: string },
-): Promise<void> {
-  // collect the chain by walking rotated_from links (bounded: tokens are
-  // short-lived, chains are small; a hard cap protects against crafted data)
-  const ids = new Set<string>([stored.id]);
-  let currentId: string | undefined = stored.id;
-  for (let depth = 0; depth < 100 && currentId; depth++) {
-    const link: { rotatedFrom: string | null } | null =
-      await prisma.refreshToken.findUnique({
-        where: { id: currentId },
-        select: { rotatedFrom: true },
-      });
-    if (!link?.rotatedFrom || ids.has(link.rotatedFrom)) break;
-    ids.add(link.rotatedFrom);
-    currentId = link.rotatedFrom;
-  }
+/**
+ * Revokes EVERY active refresh token of the user (reuse detection, H2).
+ * Chain-walking only ever reached depth 1; revoking by user id closes the
+ * gap at any chain depth and forces a full re-login — the clearest
+ * semantics for a stolen-token signal.
+ */
+async function revokeAllForUser(prisma: PrismaClient, userId: string): Promise<void> {
   await prisma.refreshToken.updateMany({
-    where: { id: { in: [...ids] }, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
-  // also revoke any descendants that rotated FROM the chain
-  await prisma.refreshToken.updateMany({
-    where: { rotatedFrom: { in: [...ids] }, revokedAt: null },
+    where: { userId, revokedAt: null },
     data: { revokedAt: new Date() },
   });
 }

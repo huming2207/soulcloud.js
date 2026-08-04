@@ -18,6 +18,7 @@ import type { Aedes } from "aedes";
 import { encode } from "@msgpack/msgpack";
 import {
   expireOtaTargets,
+  expireStalledOtaTargets,
   leaseNextOtaTarget,
   markOtaTargetDelivered,
   releaseOtaTarget,
@@ -35,6 +36,8 @@ export interface OtaPollerOptions {
   leaseDurationMs: number;
   /** Download JWT lifetime in seconds. */
   tokenTtlSeconds: number;
+  /** Stall window (minutes) before a delivered target is failed (-7). */
+  stallTimeoutMinutes: number;
   /** Backoff before an offline-targeted notice becomes claimable again. */
   offlineRetryMs?: number;
 }
@@ -100,6 +103,10 @@ export async function otaPollOnce(
   log: OtaPollerLog,
 ): Promise<void> {
   await expireOtaTargets(prisma);
+  const stalled = await expireStalledOtaTargets(prisma, options.stallTimeoutMinutes);
+  if (stalled > 0) {
+    log.info("ota targets failed by stall timeout", { count: stalled });
+  }
 
   const target = await leaseNextOtaTarget(prisma, options.leaseDurationMs);
   if (!target) return;

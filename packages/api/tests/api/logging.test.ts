@@ -445,3 +445,68 @@ describe("audit regressions", () => {
     await prisma.project.delete({ where: { id: otherProject } });
   });
 });
+
+describe("H1: project membership on logging endpoints", () => {
+  test("non-member cannot list artifacts, read or write firmware-state (403)", async () => {
+    // register an outsider with no membership
+    const username = `h1-out-${randomUUID().slice(0, 8)}`;
+    const res = await app.handle(
+      new Request("http://localhost/v1/auth/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username, password: "test-password-123", email: `${username}@example.com` }),
+      }),
+    );
+    const { access_token: outsiderToken } = (await res.json()) as { access_token: string };
+    const outsider = { authorization: `Bearer ${outsiderToken}` };
+
+    // 1. list artifacts of the project
+    const list = await app.handle(
+      new Request(`http://localhost/v1/firmware-artifacts?project_id=${projectId}`, {
+        headers: outsider,
+      }),
+    );
+    expect(list.status).toBe(403);
+
+    // 2. read firmware-state of the project's device
+    const readState = await app.handle(
+      new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, {
+        headers: outsider,
+      }),
+    );
+    expect(readState.status).toBe(403);
+
+    // 3. write firmware-state (bind artifact) of the project's device
+    const writeState = await app.handle(
+      new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, {
+        method: "POST",
+        headers: { ...outsider, "content-type": "application/json" },
+        body: JSON.stringify({ artifact_id: artifactId }),
+      }),
+    );
+    expect(writeState.status).toBe(403);
+
+    // the owner can still do all three
+    const ownerList = await app.handle(
+      new Request(`http://localhost/v1/firmware-artifacts?project_id=${projectId}`, {
+        headers: authHeaders(),
+      }),
+    );
+    expect(ownerList.status).toBe(200);
+    const ownerRead = await app.handle(
+      new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, {
+        headers: authHeaders(),
+      }),
+    );
+    expect(ownerRead.status).toBe(200);
+  });
+
+  test("unknown project on artifact list -> 404 (no existence oracle)", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-artifacts?project_id=${randomUUID()}`, {
+        headers: authHeaders(),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+});

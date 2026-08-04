@@ -13,6 +13,7 @@ import {
   confirmOtaTargetByFirmware,
   createOtaJob,
   expireOtaTargets,
+  expireStalledOtaTargets,
   leaseNextOtaTarget,
   markOtaTargetDelivered,
   markOtaTargetDelivering,
@@ -470,5 +471,115 @@ describe("ota result acknowledgements", () => {
       await prisma.otaJob.deleteMany({ where: { id: { in: jobs.map((j) => j.id) } } });
       await prisma.firmwareRelease.delete({ where: { id: binOnly.releaseId } });
     }
+  });
+});
+
+describe("expire safety (OTA round-4)", () => {
+  async function freshJob(): Promise<{ jobId: string; targetId: string }> {
+    const job = await createOtaJob(prisma, {
+      projectId,
+      releaseId,
+      createdBy: randomUUID(),
+      deviceIds,
+      targetTtlSeconds: 900,
+    });
+    await prisma.otaTarget.updateMany({
+      where: {
+        id: { not: (await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } }))!.id },
+        state: { in: ["pending", "leased"] },
+      },
+      data: { state: "expired", leaseExpiresAt: null },
+    });
+    const row = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+    return { jobId: job.jobId, targetId: row!.id };
+  }
+
+  test("expire skips a leased target with a LIVE lease (publish in flight)", async () => {
+    const { targetId } = await freshJob();
+    await leaseNextOtaTarget(prisma, 60_000); // lease is valid for 60s
+    await prisma.otaTarget.update({
+      where: { id: targetId },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    await expireOtaTargets(prisma);
+    const row = await prisma.otaTarget.findUnique({ where: { id: targetId } });
+    // NOT expired: the publisher may still be delivering; the device may
+    // really upgrade and ack later (false-negative race, OTA round-4 #2)
+    expect(row?.state).toBe("leased");
+  });
+
+  test("expire reclaims a leased target whose lease has expired", async () => {
+    const { targetId } = await freshJob();
+    await leaseNextOtaTarget(prisma, 60_000);
+    await prisma.otaTarget.update({
+      where: { id: targetId },
+      data: { expiresAt: new Date(Date.now() - 1000), leaseExpiresAt: new Date(Date.now() - 1000) },
+    });
+    await expireOtaTargets(prisma);
+    expect((await prisma.otaTarget.findUnique({ where: { id: targetId } }))?.state).toBe("expired");
+  });
+
+  test("stall timeout fails delivered targets with code -7", async () => {
+    const { jobId, targetId } = await freshJob();
+    await leaseNextOtaTarget(prisma, 60_000);
+    await markOtaTargetDelivered(prisma, targetId);
+    // delivered_at is now; backdate it beyond the stall window
+    await prisma.otaTarget.update({
+      where: { id: targetId },
+      data: { deliveredAt: new Date(Date.now() - 31 * 60_000) },
+    });
+    const n = await expireStalledOtaTargets(prisma, 30);
+    expect(n).toBe(1);
+    const row = await prisma.otaTarget.findUnique({ where: { id: targetId } });
+    expect(row?.state).toBe("failed");
+    expect(row?.resultCode).toBe(-7);
+    expect(row?.resultMessage).toBe("download window timeout");
+    expect(row?.confirmedAt).not.toBeNull();
+    expect(jobId).toBeTruthy();
+  });
+
+  test("stall timeout covers delivering and downloaded, never installed", async () => {
+    // delivering
+    const d1 = await freshJob();
+    await leaseNextOtaTarget(prisma, 60_000);
+    await markOtaTargetDelivered(prisma, d1.targetId);
+    await markOtaTargetDelivering(prisma, d1.jobId, deviceUid);
+    await prisma.otaTarget.update({
+      where: { id: d1.targetId },
+      data: { deliveredAt: new Date(Date.now() - 31 * 60_000) },
+    });
+    // downloaded
+    const d2 = await freshJob();
+    await leaseNextOtaTarget(prisma, 60_000);
+    await markOtaTargetDelivered(prisma, d2.targetId);
+    await recordOtaResult(prisma, { deviceUid, jobId: d2.jobId, releaseId, state: "downloaded", code: 0 });
+    await prisma.otaTarget.update({
+      where: { id: d2.targetId },
+      data: { deliveredAt: new Date(Date.now() - 31 * 60_000) },
+    });
+    // installed (must NOT be stalled — device may be powered off)
+    const d3 = await freshJob();
+    await leaseNextOtaTarget(prisma, 60_000);
+    await markOtaTargetDelivered(prisma, d3.targetId);
+    await recordOtaResult(prisma, { deviceUid, jobId: d3.jobId, releaseId, state: "installed", code: 0 });
+    await prisma.otaTarget.update({
+      where: { id: d3.targetId },
+      data: { deliveredAt: new Date(Date.now() - 31 * 60_000) },
+    });
+
+    const n = await expireStalledOtaTargets(prisma, 30);
+    expect(n).toBeGreaterThanOrEqual(2);
+    expect((await prisma.otaTarget.findUnique({ where: { id: d1.targetId } }))?.state).toBe("failed");
+    expect((await prisma.otaTarget.findUnique({ where: { id: d2.targetId } }))?.state).toBe("failed");
+    expect((await prisma.otaTarget.findUnique({ where: { id: d3.targetId } }))?.state).toBe("installed");
+  });
+
+  test("stall timeout leaves recent deliveries alone", async () => {
+    const { jobId, targetId } = await freshJob();
+    await leaseNextOtaTarget(prisma, 60_000);
+    await markOtaTargetDelivered(prisma, targetId);
+    expect(await expireStalledOtaTargets(prisma, 30)).toBe(0);
+    expect((await prisma.otaTarget.findUnique({ where: { id: targetId } }))?.state).toBe("delivered");
+    expect(jobId).toBeTruthy();
   });
 });
