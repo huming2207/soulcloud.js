@@ -14,7 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
-import { decode } from "../packages/core/node_modules/@msgpack/msgpack";
+import { decode, encode } from "../packages/core/node_modules/@msgpack/msgpack";
 import { MqttTestClient } from "../packages/broker/tests/helpers/mqtt-client";
 import { hashDevicePassword, prisma } from "@soulcloud/core";
 
@@ -134,6 +134,27 @@ const human = await fetch(`${API}/v1/firmware-releases/${release_id}/bin`, {
 });
 assert(human.status === 200, `human download: ${human.status}`);
 console.log("human Bearer download ok");
+
+// 8. the device acks downloaded + installed over MQTT
+for (const state of ["downloaded", "installed"] as const) {
+  client.publish(
+    `soulcloud/v1/devices/${deviceUid}/ota/result`,
+    encode({ release_id, job_id, state, code: 0 }),
+  );
+  await new Promise((r) => setTimeout(r, 150));
+}
+console.log("device acks sent (downloaded + installed)");
+
+// 9. job query shows the intermediate state (awaiting run confirmation)
+const jobRes = await fetch(`${API}/v1/ota-jobs/${job_id}`, { headers: auth });
+assert(jobRes.status === 200, `job query: ${jobRes.status}`);
+const jobBody = (await jobRes.json()) as {
+  targets: Array<{ state: string }>;
+  summary: Record<string, number>;
+};
+assert(jobBody.targets[0]!.state === "installed", `target state: ${jobBody.targets[0]!.state}`);
+assert(jobBody.summary.installed === 1, `summary: ${JSON.stringify(jobBody.summary)}`);
+console.log(`job query: target=${jobBody.targets[0]!.state} summary=${JSON.stringify(jobBody.summary)}`);
 
 // cleanup
 client.end();

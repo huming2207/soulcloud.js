@@ -16,13 +16,16 @@ import type { Aedes } from "aedes";
 import {
   CommandQueueError,
   type CommandQueueErrorKind,
+  confirmOtaTargetByFirmware,
   decodeDeviceCommandResult,
   decodeDeviceStat,
+  decodeOtaResult,
   ingestLogPacket,
   LogIngestError,
   parseDeviceTopic,
   PerDeviceLimiter,
   recordDeviceResult,
+  recordOtaResult,
   resolveDeviceId,
   type PrismaClient,
 } from "@soulcloud/core";
@@ -112,6 +115,9 @@ async function handleUplink(
     case "cmd/result":
       await handleCommandResult(prisma, deviceUid, payload, log);
       break;
+    case "ota/result":
+      await handleOtaResult(prisma, deviceUid, payload, log);
+      break;
     case "stat":
       await handleStat(prisma, deviceUid, payload, log);
       break;
@@ -161,6 +167,55 @@ async function handleCommandResult(
         error: (error as Error).message,
       });
     }
+  }
+}
+
+/**
+ * Records a device ota/result acknowledgement (proposal 18): the
+ * acknowledgement drives the target state machine
+ * (delivered/delivering -> downloaded/installed, -> failed with a code).
+ * Terminal states are immutable; QoS1 duplicates update nothing.
+ */
+async function handleOtaResult(
+  prisma: PrismaClient,
+  deviceUid: string,
+  payload: Uint8Array,
+  log: DispatchLog,
+): Promise<void> {
+  let result;
+  try {
+    result = decodeOtaResult(payload);
+  } catch (error) {
+    log.warn("ignored invalid ota result", {
+      deviceUid,
+      payloadBytes: payload.length,
+      error: (error as Error).message,
+    });
+    return;
+  }
+
+  try {
+    const updated = await recordOtaResult(prisma, {
+      deviceUid,
+      jobId: result.job_id,
+      releaseId: result.release_id,
+      state: result.state,
+      code: result.code,
+      message: result.message,
+    });
+    log.info("recorded ota result", {
+      deviceUid,
+      jobId: result.job_id,
+      state: result.state,
+      code: result.code,
+      updated,
+    });
+  } catch (error) {
+    log.warn("failed to record ota result", {
+      deviceUid,
+      jobId: result.job_id,
+      error: (error as Error).message,
+    });
   }
 }
 
@@ -229,6 +284,10 @@ async function handleStat(
       log.warn("ignored stat from unknown device", { deviceUid });
       return;
     }
+    const previous = await prisma.deviceFirmwareState.findUnique({
+      where: { deviceId },
+      select: { fwHash: true },
+    });
     await prisma.deviceFirmwareState.upsert({
       where: { deviceId },
       update: { fwHash, reportedAt: new Date() },
@@ -238,6 +297,19 @@ async function handleStat(
       deviceUid,
       fwHash,
     });
+    // OTA fact layer (proposal 18): a firmware CHANGE that matches a
+    // release's ELF build id confirms the device actually runs the new
+    // firmware — the only driver of the completed terminal state.
+    if (previous?.fwHash !== fwHash) {
+      const confirmed = await confirmOtaTargetByFirmware(prisma, deviceId, fwHash);
+      if (confirmed > 0) {
+        log.info("ota target confirmed by firmware state", {
+          deviceUid,
+          fwHash,
+          confirmed,
+        });
+      }
+    }
   } catch (error) {
     log.warn("failed to record device firmware state", {
       deviceUid,

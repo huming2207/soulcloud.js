@@ -69,9 +69,10 @@ describe("isValidDeviceUid", () => {
 });
 
 describe("DEVICE_TO_PLATFORM_FILTERS", () => {
-  test("contains the three uplink filters", () => {
+  test("contains the four uplink filters", () => {
     expect(DEVICE_TO_PLATFORM_FILTERS).toEqual([
       "soulcloud/v1/devices/+/cmd/result",
+      "soulcloud/v1/devices/+/ota/result",
       "soulcloud/v1/devices/+/log",
       "soulcloud/v1/devices/+/stat",
     ]);

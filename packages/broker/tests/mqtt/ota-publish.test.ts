@@ -7,16 +7,19 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
-import { decode } from "@msgpack/msgpack";
+import { createHash, randomUUID } from "node:crypto";
+import { decode, encode } from "@msgpack/msgpack";
 import {
+  encodeDeviceStat,
   hashDevicePassword,
+  importArtifact,
   prisma,
   signOtaToken,
   verifyOtaToken,
   createOtaJob,
 } from "@soulcloud/core";
 import { MqttTestClient } from "../helpers/mqtt-client";
+import { buildNoloadElf } from "../../../core/tests/helpers/elf-builder";
 import { startBroker, type BrokerHandle } from "../../src/mqtt/broker";
 import { attachDispatch } from "../../src/mqtt/dispatch";
 import { otaPollOnce } from "../../src/mqtt/ota-publish";
@@ -85,6 +88,8 @@ afterAll(async () => {
     where: { id: { in: [onlineDeviceId, offlineDeviceId] } },
   });
   await prisma.firmwareRelease.deleteMany({ where: { projectId } });
+  await prisma.firmwareLogString.deleteMany({ where: { artifact: { projectId } } });
+  await prisma.firmwareArtifact.deleteMany({ where: { projectId } });
   await prisma.project.delete({ where: { id: projectId } });
   await prisma.$disconnect();
 });
@@ -145,7 +150,7 @@ describe("ota poller", () => {
     expect(typeof download.expires_at).toBe("string");
     // the token is bound to THIS device and THIS release
     const claims = await verifyOtaToken(SECRET, download.token as string);
-    expect(claims).toEqual({ deviceUid: onlineDeviceUid, releaseId });
+    expect(claims).toEqual({ deviceUid: onlineDeviceUid, releaseId, jobId: job.jobId });
     // the signed token must be usable (round-trip through the same secret)
     const resigned = await signOtaToken(SECRET, claims!, 900);
     expect(resigned.split(".")[2]).toBe((download.token as string).split(".")[2]);
@@ -199,5 +204,173 @@ describe("ota poller", () => {
     }, silentLog);
     const target = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
     expect(target?.state).toBe("expired");
+  });
+});
+
+describe("ota result acknowledgements over MQTT", () => {
+  test("device ack drives delivered -> downloaded -> installed", async () => {
+    const client = new MqttTestClient(BROKER_URL, {
+      clientId: onlineDeviceUid,
+      username: onlineDeviceUid,
+      password: "secret",
+    });
+    await client.connect();
+    await client.subscribe(`soulcloud/v1/devices/${onlineDeviceUid}/ota`);
+
+    const job = await createOtaJob(prisma, {
+      projectId,
+      releaseId,
+      createdBy: randomUUID(),
+      deviceIds: [onlineDeviceId],
+      targetTtlSeconds: 900,
+    });
+
+    // deliver the notice
+    await waitFor(async () => {
+      await otaPollOnce(broker.aedes, prisma, {
+        secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000, tokenTtlSeconds: 900,
+      }, silentLog);
+      const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+      return t?.state === "delivered" ? true : null;
+    });
+
+    // device acks downloaded
+    await client.publish(`soulcloud/v1/devices/${onlineDeviceUid}/ota/result`,
+      encode({ release_id: releaseId, job_id: job.jobId, state: "downloaded", code: 0 }));
+    await waitFor(async () => {
+      const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+      return t?.state === "downloaded" ? true : null;
+    });
+
+    // device acks installed
+    await client.publish(`soulcloud/v1/devices/${onlineDeviceUid}/ota/result`,
+      encode({ release_id: releaseId, job_id: job.jobId, state: "installed", code: 0 }));
+    await waitFor(async () => {
+      const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+      return t?.state === "installed" ? true : null;
+    });
+    // replay of the downloaded ack is ignored (state machine strictness)
+    await client.publish(`soulcloud/v1/devices/${onlineDeviceUid}/ota/result`,
+      encode({ release_id: releaseId, job_id: job.jobId, state: "downloaded", code: 0 }));
+    await new Promise((r) => setTimeout(r, 150));
+    const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+    expect(t?.state).toBe("installed");
+    expect(t?.confirmedAt).toBeNull(); // awaiting run confirmation
+
+    await client.end();
+  });
+
+  test("failed ack with a code lands in failed", async () => {
+    const client = new MqttTestClient(BROKER_URL, {
+      clientId: onlineDeviceUid,
+      username: onlineDeviceUid,
+      password: "secret",
+    });
+    await client.connect();
+    await client.subscribe(`soulcloud/v1/devices/${onlineDeviceUid}/ota`);
+
+    const job = await createOtaJob(prisma, {
+      projectId,
+      releaseId,
+      createdBy: randomUUID(),
+      deviceIds: [onlineDeviceId],
+      targetTtlSeconds: 900,
+    });
+    await waitFor(async () => {
+      await otaPollOnce(broker.aedes, prisma, {
+        secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000, tokenTtlSeconds: 900,
+      }, silentLog);
+      const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+      return t?.state === "delivered" ? true : null;
+    });
+    await client.publish(`soulcloud/v1/devices/${onlineDeviceUid}/ota/result`,
+      encode({ release_id: releaseId, job_id: job.jobId, state: "failed", code: -2, message: "sha256 mismatch" }));
+    await waitFor(async () => {
+      const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+      return t?.state === "failed" ? true : null;
+    });
+    const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+    expect(t?.resultCode).toBe(-2);
+    expect(t?.resultMessage).toBe("sha256 mismatch");
+    expect(t?.confirmedAt).not.toBeNull();
+    await client.end();
+  });
+
+  test("stat.fw change matching the release confirms completed (fact layer)", async () => {
+    // releaseId fixture has no artifact -> use a release WITH an ELF
+    const elf = buildNoloadElf(["value=%d"], ["demo"], 32, true);
+    const elfHash = createHash("sha256").update(elf).digest("hex");
+    const rel = await prisma.firmwareRelease.create({
+      data: {
+        id: randomUUID(),
+        projectId,
+        binHash: "cd".repeat(32),
+        binBytes: Buffer.from(new Uint8Array(16).fill(0xcc)),
+        binSize: 16,
+        version: "v3.0.0",
+      },
+    });
+    const artifact = await importArtifact(prisma, { projectId, elf });
+    await prisma.firmwareRelease.update({
+      where: { id: rel.id },
+      data: { artifactId: artifact.artifactId },
+    });
+
+    const client = new MqttTestClient(BROKER_URL, {
+      clientId: onlineDeviceUid,
+      username: onlineDeviceUid,
+      password: "secret",
+    });
+    await client.connect();
+    await client.subscribe(`soulcloud/v1/devices/${onlineDeviceUid}/ota`);
+
+    const job = await createOtaJob(prisma, {
+      projectId,
+      releaseId: rel.id,
+      createdBy: randomUUID(),
+      deviceIds: [onlineDeviceId],
+      targetTtlSeconds: 900,
+    });
+    await waitFor(async () => {
+      await otaPollOnce(broker.aedes, prisma, {
+        secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000, tokenTtlSeconds: 900,
+      }, silentLog);
+      const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+      return t?.state === "delivered" ? true : null;
+    });
+
+    // device boots the new firmware and reports it in stat
+    await client.publish(`soulcloud/v1/devices/${onlineDeviceUid}/stat`,
+      encodeDeviceStat({
+        sn: new Uint8Array([1, 2, 3]),
+        fw: Buffer.from(elfHash, "hex"),
+        up: 42n,
+        rst: "power-on",
+      }));
+    await waitFor(async () => {
+      const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+      return t?.state === "completed" ? true : null;
+    });
+    const t = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+    expect(t?.resultCode).toBe(0);
+    expect(t?.confirmedAt).not.toBeNull();
+    await client.end();
+  });
+
+  test("device cannot publish ota/result for another device", async () => {
+    const client = new MqttTestClient(BROKER_URL, {
+      clientId: onlineDeviceUid,
+      username: onlineDeviceUid,
+      password: "secret",
+    });
+    await client.connect();
+    const disconnected = new Promise<boolean>((resolve) => {
+      client.once("close", () => resolve(true));
+      setTimeout(() => resolve(false), 3000);
+    });
+    await client.publish(`soulcloud/v1/devices/someone-else/ota/result`,
+      encode({ release_id: releaseId, job_id: randomUUID(), state: "failed", code: -1 })).catch(() => {});
+    expect(await disconnected).toBe(true);
+    client.end();
   });
 });

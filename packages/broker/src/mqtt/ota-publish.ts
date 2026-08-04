@@ -120,7 +120,7 @@ export async function otaPollOnce(
 
   const token = await signOtaToken(
     options.secret,
-    { deviceUid: target.deviceUid, releaseId: target.releaseId },
+    { deviceUid: target.deviceUid, releaseId: target.releaseId, jobId: target.jobId },
     options.tokenTtlSeconds,
   );
   const expiresAt = new Date(Date.now() + options.tokenTtlSeconds * 1000);
@@ -132,6 +132,7 @@ export async function otaPollOnce(
   };
   const notice: Record<string, unknown> = {
     release_id: target.releaseId,
+    job_id: target.jobId,
     bin_sha256: target.binHash,
     bin_size: target.binSize,
     download,

@@ -482,6 +482,7 @@ describe("bin download", () => {
     const token = await signOtaToken(TEST_JWT.secret, {
       deviceUid,
       releaseId: createdReleaseId,
+      jobId: randomUUID(),
     }, 900);
     const res = await app.handle(
       new Request(
@@ -514,6 +515,7 @@ describe("bin download", () => {
     const token = await signOtaToken(TEST_JWT.secret, {
       deviceUid,
       releaseId: createdReleaseId,
+      jobId: randomUUID(),
     }, -1);
     const res = await app.handle(
       new Request(
@@ -527,6 +529,7 @@ describe("bin download", () => {
     const token = await signOtaToken(TEST_JWT.secret, {
       deviceUid,
       releaseId: randomUUID(),
+      jobId: randomUUID(),
     }, 900);
     const res = await app.handle(
       new Request(
@@ -540,6 +543,7 @@ describe("bin download", () => {
     const token = await signOtaToken(TEST_JWT.secret, {
       deviceUid: "no-such-device",
       releaseId: createdReleaseId,
+      jobId: randomUUID(),
     }, 900);
     const res = await app.handle(
       new Request(
@@ -555,6 +559,7 @@ describe("bin download", () => {
     const token = await signOtaToken(TEST_JWT.secret, {
       deviceUid: "ota-api-x",
       releaseId: createdReleaseId,
+      jobId: randomUUID(),
     }, 900);
     const res = await app.handle(
       new Request(
@@ -562,5 +567,68 @@ describe("bin download", () => {
       ),
     );
     expect(res.status).toBe(403);
+  });
+});
+
+describe("GET /v1/ota-jobs/:id", () => {
+  test("returns job detail with target states and current firmware", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [deviceId] }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { job_id } = (await res.json()) as { job_id: string };
+    // drive the target to a terminal state via a direct ack for a clean summary
+    const job = await prisma.otaJob.findUnique({
+      where: { id: job_id },
+      select: { releaseId: true },
+    });
+    await prisma.otaTarget.updateMany({
+      where: { jobId: job_id },
+      data: { state: "downloaded", deliveredAt: new Date() },
+    });
+    const detail = await app.handle(
+      new Request(`http://localhost/v1/ota-jobs/${job_id}`, { headers: authHeaders() }),
+    );
+    expect(detail.status).toBe(200);
+    const body = (await detail.json()) as {
+      job_id: string;
+      release_id: string;
+      targets: Array<{ device_uid: string; state: string }>;
+      summary: Record<string, number>;
+    };
+    expect(body.release_id).toBe(createdReleaseId);
+    expect(body.targets).toEqual([
+      expect.objectContaining({ device_uid: deviceUid, state: "downloaded" }),
+    ]);
+    expect(body.summary.downloaded).toBe(1);
+    expect(job?.releaseId).toBe(createdReleaseId);
+  });
+
+  test("non-member -> 403; unknown job -> 404", async () => {
+    // a real job in the owner's project, queried by a non-member
+    const up = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/deploy`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [deviceId] }),
+      }),
+    );
+    const { job_id: realJobId } = (await up.json()) as { job_id: string };
+    const denied = await app.handle(
+      new Request(`http://localhost/v1/ota-jobs/${realJobId}`, {
+        headers: authHeaders(otherAccessToken),
+      }),
+    );
+    expect(denied.status).toBe(403);
+    const missing = await app.handle(
+      new Request(`http://localhost/v1/ota-jobs/${randomUUID()}`, {
+        headers: authHeaders(),
+      }),
+    );
+    expect(missing.status).toBe(404);
   });
 });

@@ -250,10 +250,16 @@ model OtaTarget {
   job       OtaJob   @relation(fields: [jobId], references: [id], onDelete: Cascade)
   deviceId  String   @map("device_id") @db.Uuid
   device    Device   @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  /// pending | leased | delivered | expired
+  /// pending | leased | delivered | delivering | downloaded | installed |
+  /// expired | completed | failed
   state     String   @default("pending") @db.VarChar(32)
   leaseExpiresAt DateTime? @map("lease_expires_at") @db.Timestamptz()
   deliveredAt DateTime? @map("delivered_at") @db.Timestamptz()
+  /// Device acknowledgement time (completed/failed terminal states)
+  confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz()
+  /// 0 = success (completed); negative = failure code (failed)
+  resultCode Int? @map("result_code")
+  resultMessage String? @map("result_message") @db.VarChar(512)
   /// Earliest time the target may be claimed again (offline backoff)
   availableAt DateTime @default(now()) @map("available_at") @db.Timestamptz()
   /// Delivery window deadline: a pending target is expired after this

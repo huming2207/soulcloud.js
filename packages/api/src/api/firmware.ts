@@ -18,6 +18,7 @@ import {
   ReleaseError,
   createFirmwareRelease,
   createOtaJob,
+  markOtaTargetDelivering,
   verifyOtaToken,
   type JwtConfig,
   type PrismaClient,
@@ -413,6 +414,77 @@ export function createFirmwareRoutes(
       }
     })
 
+    // --- job status --------------------------------------------------------
+
+    .get("/ota-jobs/:id", async ({ request, params, set }) => {
+      try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
+        const id = UuidParam.safeParse(params.id);
+        if (!id.success) {
+          set.status = 404;
+          return { error: "not_found", message: "job does not exist" };
+        }
+        const job = await prisma.otaJob.findUnique({
+          where: { id: id.data },
+          select: {
+            id: true,
+            projectId: true,
+            releaseId: true,
+            createdAt: true,
+            targets: {
+              select: {
+                id: true,
+                deviceId: true,
+                device: {
+                  select: { deviceUid: true, firmwareState: { select: { fwHash: true } } },
+                },
+                state: true,
+                deliveredAt: true,
+                confirmedAt: true,
+                resultCode: true,
+                resultMessage: true,
+              },
+              orderBy: { createdAt: "asc" },
+            },
+          },
+        });
+        if (!job) {
+          set.status = 404;
+          return { error: "not_found", message: "job does not exist" };
+        }
+        if (!(await userCanAccessProject(prisma, authUser.user.id, job.projectId))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this project" };
+        }
+        const summary: Record<string, number> = {};
+        for (const t of job.targets) {
+          summary[t.state] = (summary[t.state] ?? 0) + 1;
+        }
+        return {
+          job_id: job.id,
+          release_id: job.releaseId,
+          created_at: job.createdAt,
+          targets: job.targets.map((t) => ({
+            device_id: t.deviceId,
+            device_uid: t.device.deviceUid,
+            state: t.state,
+            delivered_at: t.deliveredAt,
+            confirmed_at: t.confirmedAt,
+            result_code: t.resultCode,
+            result_message: t.resultMessage,
+            current_fw: t.device.firmwareState?.fwHash ?? null,
+          })),
+          summary,
+        };
+      } catch (error) {
+        return handleApiError(error, set);
+      }
+    })
+
     // --- download (Bearer for humans, per-device JWT for devices) ----------
 
     .get("/firmware-releases/:id/bin", async ({ request, params, set }) => {
@@ -469,6 +541,10 @@ export function createFirmwareRoutes(
             set.status = 403;
             return { error: "invalid_download_token", message: "invalid download token" };
           }
+          // the download request itself is the strongest "device received
+          // the notice" evidence: advance the target to delivering
+          // (idempotent; downloads are never blocked by state)
+          await markOtaTargetDelivering(prisma, claims.jobId, claims.deviceUid);
         }
         set.status = 200;
         set.headers["content-type"] = "application/octet-stream";

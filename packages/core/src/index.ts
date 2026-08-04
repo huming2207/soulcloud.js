@@ -9,6 +9,7 @@
 export * from "./protocol/topic";
 export * from "./protocol/command";
 export * from "./protocol/stat";
+export * from "./protocol/ota-result";
 export * from "./queue/errors";
 export * from "./queue/enqueue";
 export * from "./queue/lease";

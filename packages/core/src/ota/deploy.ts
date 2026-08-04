@@ -46,6 +46,8 @@ export interface OtaTokenPayload {
   deviceUid: string;
   /** Release the token may download. */
   releaseId: string;
+  /** Job the token belongs to (precise target lookup). */
+  jobId: string;
 }
 
 /** Signs a per-device OTA download credential (HS256, short-lived). */
@@ -55,7 +57,7 @@ export async function signOtaToken(
   ttlSeconds: number,
 ): Promise<string> {
   const key = new TextEncoder().encode(secret);
-  return new SignJWT({ releaseId: payload.releaseId })
+  return new SignJWT({ releaseId: payload.releaseId, jobId: payload.jobId })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.deviceUid)
     .setIssuedAt()
@@ -75,10 +77,14 @@ export async function verifyOtaToken(
   try {
     const key = new TextEncoder().encode(secret);
     const { payload } = await jwtVerify(token, key, { algorithms: ["HS256"] });
-    if (typeof payload.sub !== "string" || typeof payload.releaseId !== "string") {
+    if (
+      typeof payload.sub !== "string" ||
+      typeof payload.releaseId !== "string" ||
+      typeof payload.jobId !== "string"
+    ) {
       return null;
     }
-    return { deviceUid: payload.sub, releaseId: payload.releaseId };
+    return { deviceUid: payload.sub, releaseId: payload.releaseId, jobId: payload.jobId };
   } catch {
     return null;
   }
@@ -210,6 +216,7 @@ export async function expireOtaTargets(prisma: PrismaClient): Promise<number> {
 
 export interface LeasedOtaTarget {
   id: string;
+  jobId: string;
   deviceUid: string;
   releaseId: string;
   projectId: string;
@@ -231,6 +238,7 @@ export async function leaseNextOtaTarget(
     const rows = await tx.$queryRaw<
       Array<{
         id: string;
+        job_id: string;
         device_uid: string;
         release_id: string;
         project_id: string;
@@ -239,7 +247,7 @@ export async function leaseNextOtaTarget(
         version: string | null;
       }>
     >`
-      SELECT t.id, d.device_uid, r.id AS release_id, r.project_id,
+      SELECT t.id, j.id AS job_id, d.device_uid, r.id AS release_id, r.project_id,
              r.bin_hash, r.bin_size, r.version
       FROM ota_targets t
       INNER JOIN devices d ON d.id = t.device_id
@@ -263,6 +271,7 @@ export async function leaseNextOtaTarget(
     `;
     return {
       id: row.id,
+      jobId: row.job_id,
       deviceUid: row.device_uid,
       releaseId: row.release_id,
       projectId: row.project_id,
@@ -298,4 +307,137 @@ export async function releaseOtaTarget(
       availableAt: new Date(Date.now() + offlineRetryMs),
     },
   });
+}
+
+/** Terminal target states (immutable once reached). */
+const TERMINAL_OTA_STATES = ["completed", "failed"] as const;
+
+/** Intermediate states that may still transition (delivered + successors). */
+const OTA_RESULT_ACCEPTING_STATES = [
+  "delivered",
+  "delivering",
+  "downloaded",
+] as const;
+
+/**
+ * Marks a target as `delivering` when the device actually starts the HTTP
+ * download (the download request is the strongest "device received the
+ * notice" evidence). Idempotent: repeated downloads of an already
+ * delivering target update nothing, and downloads themselves are never
+ * blocked by state.
+ */
+export async function markOtaTargetDelivering(
+  prisma: PrismaClient,
+  jobId: string,
+  deviceUid: string,
+): Promise<number> {
+  const device = await prisma.device.findUnique({
+    where: { deviceUid },
+    select: { id: true },
+  });
+  if (!device) return 0;
+  const result = await prisma.otaTarget.updateMany({
+    where: { jobId, deviceId: device.id, state: "delivered" },
+    data: { state: "delivering" },
+  });
+  return result.count;
+}
+
+export interface RecordOtaResultInput {
+  deviceUid: string;
+  jobId: string;
+  releaseId: string;
+  state: "downloaded" | "installed" | "failed";
+  code: number;
+  message?: string;
+}
+
+/**
+ * Records a device ota/result acknowledgement. Terminal states are
+ * immutable: only intermediate targets transition, and the first
+ * acknowledgement wins (QoS1 duplicates update nothing).
+ *
+ * - downloaded: delivered/delivering -> downloaded
+ * - installed:  delivered/delivering/downloaded -> installed (awaiting
+ *   run confirmation; completed is driven by stat.fw, see
+ *   confirmOtaTargetByFirmware)
+ * - failed:     delivered/delivering/downloaded -> failed (code < 0)
+ *
+ * @returns 1 when a target transitioned, 0 when ignored (unknown job,
+ * terminal state, or replay).
+ */
+export async function recordOtaResult(
+  prisma: PrismaClient,
+  input: RecordOtaResultInput,
+): Promise<number> {
+  const device = await prisma.device.findUnique({
+    where: { deviceUid: input.deviceUid },
+    select: { id: true },
+  });
+  if (!device) return 0;
+
+  // the target is located by job + device; the release must match the job's
+  // release (release_id lives on ota_jobs, not ota_targets)
+  const target = await prisma.otaTarget.findFirst({
+    where: { jobId: input.jobId, deviceId: device.id },
+    select: { id: true, job: { select: { releaseId: true } } },
+  });
+  if (!target || target.job.releaseId !== input.releaseId) return 0;
+
+  if (input.state === "failed") {
+    const result = await prisma.otaTarget.updateMany({
+      where: { id: target.id, state: { in: [...OTA_RESULT_ACCEPTING_STATES] } },
+      data: {
+        state: "failed",
+        confirmedAt: new Date(),
+        resultCode: input.code < 0 ? input.code : -5, // failed requires a negative code
+        resultMessage: input.message ?? null,
+      },
+    });
+    return result.count;
+  }
+
+  const targetState = input.state === "installed" ? "installed" : "downloaded";
+  const accepting =
+    input.state === "installed"
+      ? ["delivered", "delivering", "downloaded"]
+      : ["delivered", "delivering"];
+  const result = await prisma.otaTarget.updateMany({
+    where: { id: target.id, state: { in: accepting } },
+    data: {
+      state: targetState,
+      // intermediate states carry no result fields (CHECK constraint)
+    },
+  });
+  return result.count;
+}
+
+/**
+ * stat.fw fallback (fact layer): when a device reports a firmware hash
+ * that matches a release's ELF build id, any of its non-terminal targets
+ * for that release are confirmed as `completed`. This is the ONLY driver
+ * of `completed` — the platform never guesses, it requires the new
+ * firmware to have actually booted (proposal 18, D6).
+ *
+ * @returns the number of targets confirmed.
+ */
+export async function confirmOtaTargetByFirmware(
+  prisma: PrismaClient,
+  deviceId: string,
+  fwHash: string,
+): Promise<number> {
+  const result = await prisma.$executeRaw`
+    UPDATE ota_targets t
+    SET state = 'completed',
+        confirmed_at = now(),
+        result_code = 0
+    FROM ota_jobs j
+    INNER JOIN firmware_releases r ON r.id = j.release_id
+    INNER JOIN firmware_artifacts a ON a.id = r.artifact_id
+    WHERE t.job_id = j.id
+      AND t.device_id = ${deviceId}
+      AND t.state IN ('delivered', 'delivering', 'downloaded', 'installed')
+      AND a."buildId" = ${fwHash}
+  `;
+  return result;
 }

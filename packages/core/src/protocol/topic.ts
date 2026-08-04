@@ -8,6 +8,7 @@
  *   Platform to device: soulcloud/v1/devices/{dev_uid}/ota
  *                       soulcloud/v1/devices/{dev_uid}/cmd/exec
  *   Device to platform: soulcloud/v1/devices/{dev_uid}/cmd/result
+ *                       soulcloud/v1/devices/{dev_uid}/ota/result
  *                       soulcloud/v1/devices/{dev_uid}/log
  *                       soulcloud/v1/devices/{dev_uid}/stat
  */
@@ -17,11 +18,12 @@ export const TOPIC_PREFIX = "soulcloud/v1/devices";
 /** Device-to-platform subscription filters (all QoS 1). */
 export const DEVICE_TO_PLATFORM_FILTERS = [
   `${TOPIC_PREFIX}/+/cmd/result`,
+  `${TOPIC_PREFIX}/+/ota/result`,
   `${TOPIC_PREFIX}/+/log`,
   `${TOPIC_PREFIX}/+/stat`,
 ] as const;
 
-export type DeviceMessageKind = "cmd/result" | "log" | "stat";
+export type DeviceMessageKind = "cmd/result" | "ota/result" | "log" | "stat";
 
 export interface DeviceTopic {
   deviceUid: string;
@@ -85,6 +87,8 @@ export function parseDeviceTopic(topic: string): DeviceTopic {
     kind = segments[4] as DeviceMessageKind;
   } else if (segments.length === 6 && segments[4] === "cmd" && segments[5] === "result") {
     kind = "cmd/result";
+  } else if (segments.length === 6 && segments[4] === "ota" && segments[5] === "result") {
+    kind = "ota/result";
   }
   if (!kind) {
     throw new TopicError(`topic does not match the Soulcloud v1 device topic scheme: ${JSON.stringify(topic)}`);
