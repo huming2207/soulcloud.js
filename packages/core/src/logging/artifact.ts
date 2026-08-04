@@ -134,28 +134,6 @@ export async function importArtifact(
   }
 
   const buildId = computeBuildId(options.elf);
-  const existing = await prisma.firmwareArtifact.findUnique({
-    where: { buildId },
-    select: { id: true },
-  });
-  if (existing) {
-    // idempotent: the same build was already uploaded
-    const counts = await prisma.firmwareLogString.groupBy({
-      by: ["kind"],
-      where: { artifactId: existing.id },
-      _count: true,
-    });
-    const tagCount =
-      counts.find((c) => c.kind === "tag")?._count ?? 0;
-    const formatCount =
-      counts.find((c) => c.kind === "format")?._count ?? 0;
-    return {
-      artifactId: existing.id,
-      buildId,
-      tagCount,
-      formatCount,
-    };
-  }
 
   // parse before touching the database so invalid ELFs never create rows
   let extracted: ExtractedStrings;
@@ -170,46 +148,101 @@ export async function importArtifact(
   }
 
   try {
-    const artifact = await prisma.firmwareArtifact.create({
-      data: {
-        projectId: options.projectId,
+    return await prisma.$transaction(async (tx) => {
+      // M3: idempotency is scoped per project (build identity is unique
+      // per project, never global across tenants)
+      const existing = await tx.firmwareArtifact.findUnique({
+        where: { projectId_buildId: { projectId: options.projectId, buildId } },
+        select: { id: true },
+      });
+      if (existing) {
+        const counts = await tx.firmwareLogString.groupBy({
+          by: ["kind"],
+          where: { artifactId: existing.id },
+          _count: true,
+        });
+        const tagCount = counts.find((c) => c.kind === "tag")?._count ?? 0;
+        const formatCount = counts.find((c) => c.kind === "format")?._count ?? 0;
+        return {
+          artifactId: existing.id,
+          buildId,
+          tagCount,
+          formatCount,
+        };
+      }
+
+      const artifact = await tx.firmwareArtifact.create({
+        data: {
+          projectId: options.projectId,
+          buildId,
+          version: options.version ?? null,
+          elfBytes: Buffer.from(options.elf),
+          elfSize: options.elf.byteLength,
+          importState: "imported",
+        },
+      });
+
+      await tx.firmwareLogString.createMany({
+        data: [
+          ...extracted.tags.map((s) => ({
+            artifactId: artifact.id,
+            address: BigInt(s.addr),
+            kind: "tag" as const,
+            value: s.value,
+          })),
+          ...extracted.formats.map((s) => ({
+            artifactId: artifact.id,
+            address: BigInt(s.addr),
+            kind: "format" as const,
+            value: s.value,
+          })),
+        ],
+      });
+
+      return {
+        artifactId: artifact.id,
         buildId,
-        version: options.version ?? null,
-        elfBytes: Buffer.from(options.elf),
-        elfSize: options.elf.byteLength,
-        importState: "imported",
-      },
+        tagCount: extracted.tags.length,
+        formatCount: extracted.formats.length,
+      };
     });
-
-    await prisma.firmwareLogString.createMany({
-      data: [
-        ...extracted.tags.map((s) => ({
-          artifactId: artifact.id,
-          address: s.addr,
-          kind: "tag" as const,
-          value: s.value,
-        })),
-        ...extracted.formats.map((s) => ({
-          artifactId: artifact.id,
-          address: s.addr,
-          kind: "format" as const,
-          value: s.value,
-        })),
-      ],
-    });
-
-    return {
-      artifactId: artifact.id,
-      buildId,
-      tagCount: extracted.tags.length,
-      formatCount: extracted.formats.length,
-    };
   } catch (error) {
+    // M1: concurrent uploads of the same build race the unique index; the
+    // loser gets P2002 and should return the idempotent existing row
+    if (isUniqueViolation(error)) {
+      const existing = await prisma.firmwareArtifact.findUnique({
+        where: { projectId_buildId: { projectId: options.projectId, buildId } },
+        select: { id: true },
+      });
+      if (existing) {
+        const counts = await prisma.firmwareLogString.groupBy({
+          by: ["kind"],
+          where: { artifactId: existing.id },
+          _count: true,
+        });
+        return {
+          artifactId: existing.id,
+          buildId,
+          tagCount: counts.find((c) => c.kind === "tag")?._count ?? 0,
+          formatCount: counts.find((c) => c.kind === "format")?._count ?? 0,
+        };
+      }
+    }
     throw new ArtifactImportError(
       "database",
       `artifact import failed: ${(error as Error).message}`,
     );
   }
+}
+
+/** Detects a Prisma unique-constraint violation (P2002). */
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2002"
+  );
 }
 
 /**

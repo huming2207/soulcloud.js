@@ -53,6 +53,7 @@ export async function ingestLogPacket(
   }
 
   // resolve the decoding artifact from the device's latest reported firmware
+  // (project-scoped: buildId is unique per project, not global)
   let artifactId: string | null = null;
   try {
     const state = await prisma.deviceFirmwareState.findUnique({
@@ -60,11 +61,19 @@ export async function ingestLogPacket(
       select: { fwHash: true },
     });
     if (state) {
-      const artifact = await prisma.firmwareArtifact.findUnique({
-        where: { buildId: state.fwHash },
-        select: { id: true },
+      const device = await prisma.device.findUnique({
+        where: { id: deviceId },
+        select: { projectId: true },
       });
-      artifactId = artifact?.id ?? null;
+      if (device) {
+        const artifact = await prisma.firmwareArtifact.findUnique({
+          where: {
+            projectId_buildId: { projectId: device.projectId, buildId: state.fwHash },
+          },
+          select: { id: true },
+        });
+        artifactId = artifact?.id ?? null;
+      }
     }
   } catch (error) {
     // association failure must not drop the raw event
@@ -76,15 +85,15 @@ export async function ingestLogPacket(
       data: {
         deviceId,
         artifactId,
-        deviceTimeMs: packet.header.timeMs,
+        deviceTimeMs: BigInt(packet.header.timeMs),
         sequence: packet.header.seq,
         packetType: packet.header.type,
         level:
           packet.header.type === On9logPacketType.Log
             ? packet.header.level
             : null,
-        tagId: packet.header.type === On9logPacketType.Log ? packet.header.tagId : null,
-        fmtId: packet.header.type === On9logPacketType.Log ? packet.header.fmtId : null,
+        tagId: packet.header.type === On9logPacketType.Log ? BigInt(packet.header.tagId) : null,
+        fmtId: packet.header.type === On9logPacketType.Log ? BigInt(packet.header.fmtId) : null,
         rawPacket: Buffer.from(packetBytes),
         decodeState: artifactId ? "decodable" : "unknown_fw",
       },

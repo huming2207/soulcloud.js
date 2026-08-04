@@ -80,6 +80,52 @@ function waitForConnect(client: MqttClient): Promise<void> {
 }
 
 describe("device authentication", () => {
+  test("rejects clientId that differs from username (impersonation)", async () => {
+    // attacker holds device credentials but connects with another clientId
+    const device = mqtt.connect(`mqtt://127.0.0.1:${BROKER_PORT}`, {
+      clientId: "some-other-device",
+      username: DEVICE_UID,
+      password: DEVICE_PASSWORD,
+    });
+    const result = await new Promise<string>((resolve) => {
+      device.once("connect", () => resolve("connected"));
+      device.once("error", (err) => resolve(`error: ${err.message}`));
+      setTimeout(() => resolve("timeout"), 5000);
+    });
+    expect(result.startsWith("error")).toBe(true);
+    device.end(true);
+  });
+
+  test("rejects clientId containing MQTT wildcards", async () => {
+    const device = mqtt.connect(`mqtt://127.0.0.1:${BROKER_PORT}`, {
+      clientId: "+",
+      username: "+",
+      password: DEVICE_PASSWORD,
+    });
+    const result = await new Promise<string>((resolve) => {
+      device.once("connect", () => resolve("connected"));
+      device.once("error", (err) => resolve(`error: ${err.message}`));
+      setTimeout(() => resolve("timeout"), 5000);
+    });
+    expect(result.startsWith("error")).toBe(true);
+    device.end(true);
+  });
+
+  test("rejects clientId with topic separator", async () => {
+    const device = mqtt.connect(`mqtt://127.0.0.1:${BROKER_PORT}`, {
+      clientId: "dev/other",
+      username: "dev/other",
+      password: DEVICE_PASSWORD,
+    });
+    const result = await new Promise<string>((resolve) => {
+      device.once("connect", () => resolve("connected"));
+      device.once("error", (err) => resolve(`error: ${err.message}`));
+      setTimeout(() => resolve("timeout"), 5000);
+    });
+    expect(result.startsWith("error")).toBe(true);
+    device.end(true);
+  });
+
   test("accepts valid credentials", async () => {
     const device = connectDevice();
     await waitForConnect(device);

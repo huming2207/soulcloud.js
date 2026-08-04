@@ -264,13 +264,19 @@ describe("GET /v1/devices/:id/logs", () => {
     expect(await res.json()).toMatchObject({ error: "device_not_found" });
   });
 
-  test("limit is capped", async () => {
+  test("limit above the cap is rejected (400)", async () => {
     const res = await app.handle(
       new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=99999`),
     );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_request" });
+  });
+
+  test("limit=500 is accepted", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=500`),
+    );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { events: unknown[] };
-    expect(body.events.length).toBeLessThanOrEqual(500);
   });
 });
 

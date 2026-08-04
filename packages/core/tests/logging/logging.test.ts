@@ -262,3 +262,33 @@ describe("summarizeArgs", () => {
     expect(summarizeArgs(dropped)).toBeNull();
   });
 });
+
+describe("S4: unsigned 32-bit wire values (int4 overflow regression)", () => {
+  test("stores timeMs above 2^31 (24.8 days uptime)", async () => {
+    // header time_ms = 0x8FFFFFFF (2415919103, above int4 max 2147483647)
+    const packet = new Uint8Array([
+      0x9a, 0x03, 0x00, 0x00, 0xff, 0xff, 0xff, 0x8f, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00,
+    ]);
+    const outcome = await ingestLogPacket(prisma, deviceId, packet);
+    const event = await prisma.rawLogEvent.findFirstOrThrow({
+      where: { id: outcome.eventId! },
+    });
+    expect(event.deviceTimeMs).toBe(0x8fffffffn);
+    expect(event.deviceTimeMs).toBeGreaterThan(2147483647n);
+  });
+
+  test("stores tag/fmt addresses above 2^31", async () => {
+    // tag_id = 0x80001000, fmt_id = 0x80002000 (ELF addresses in high range)
+    const packet = new Uint8Array([
+      0x9a, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80,
+      0x00, 0x20, 0x00, 0x80, 0xff, 0xff, 0x00,
+    ]);
+    const outcome = await ingestLogPacket(prisma, deviceId, packet);
+    const event = await prisma.rawLogEvent.findFirstOrThrow({
+      where: { id: outcome.eventId! },
+    });
+    expect(event.tagId).toBe(0x80001000n);
+    expect(event.fmtId).toBe(0x80002000n);
+  });
+});

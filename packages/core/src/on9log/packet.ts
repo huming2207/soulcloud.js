@@ -112,11 +112,22 @@ export interface On9logBufferPacket {
   chunk: Uint8Array;
 }
 
+/**
+ * A BOOT event packet. The payload layout is not part of the agreed wire
+ * contract yet, so it is stored opaquely (raw bytes) and never parsed.
+ */
+export interface On9logBootPacket {
+  header: On9logPacketHeader;
+  kind: "boot";
+  payload: Uint8Array;
+}
+
 export type On9logPacket =
   | On9logLogPacket
   | On9logDroppedPacket
   | On9logTimeSyncPacket
-  | On9logBufferPacket;
+  | On9logBufferPacket
+  | On9logBootPacket;
 
 export class On9logParseError extends Error {
   constructor(message: string) {
@@ -225,6 +236,9 @@ export function parseOn9logPacket(packet: Uint8Array): On9logPacket {
       return parseTimeSyncPacket(header, payload);
     case On9logPacketType.Buffer:
       return parseBufferPacket(header, payload);
+    case On9logPacketType.Boot:
+      // payload contract undefined: keep the raw bytes, never parse them
+      return { header, kind: "boot", payload };
     default:
       throw new On9logParseError(
         `unknown on9log packet type ${header.type}`,
@@ -236,6 +250,9 @@ function parseLogPacket(
   header: On9logPacketHeader,
   payload: Uint8Array,
 ): On9logLogPacket {
+  if (header.level > 5) {
+    throw new On9logParseError(`invalid on9log level ${header.level}`);
+  }
   const reader = new Reader(payload);
   const argCount = reader.u8();
   // The type table is NUL-terminated: decoding stops at the NONE sentinel
@@ -299,6 +316,7 @@ function parseDroppedPacket(
 ): On9logDroppedPacket {
   const reader = new Reader(payload);
   const droppedCount = reader.u32();
+  expectExactLength(header, payload, reader.pos, "DROPPED");
   return { header, kind: "dropped", droppedCount };
 }
 
@@ -309,6 +327,7 @@ function parseTimeSyncPacket(
   const reader = new Reader(payload);
   const bootTimeMs = reader.u32();
   const utcUnixMs = reader.u32();
+  expectExactLength(header, payload, reader.pos, "TIME_SYNC");
   return { header, kind: "time_sync", bootTimeMs, utcUnixMs };
 }
 
@@ -320,8 +339,28 @@ function parseBufferPacket(
   const totalLen = reader.u32();
   const offset = reader.u32();
   const chunkLen = reader.u32();
+  if (chunkLen > totalLen || offset > totalLen || offset + chunkLen > totalLen) {
+    throw new On9logParseError(
+      `on9log BUFFER chunk [${offset}, ${offset + chunkLen}) exceeds total length ${totalLen}`,
+    );
+  }
   const chunk = reader.bytes(chunkLen);
+  expectExactLength(header, payload, reader.pos, "BUFFER");
   return { header, kind: "buffer", totalLen, offset, chunk };
+}
+
+/** Non-streaming control packets must consume the payload exactly. */
+function expectExactLength(
+  header: On9logPacketHeader,
+  payload: Uint8Array,
+  consumed: number,
+  what: string,
+): void {
+  if (header.payloadLen !== ON9LOG_PAYLOAD_LEN_STREAMING && consumed !== payload.length) {
+    throw new On9logParseError(
+      `on9log ${what} payload has ${payload.length - consumed} trailing bytes`,
+    );
+  }
 }
 
 /** 16-bit sequence gap detection (modular arithmetic, handles wrap). */

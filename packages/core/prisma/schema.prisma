@@ -137,8 +137,8 @@ model FirmwareArtifact {
   id          String   @id @default(uuid()) @db.Uuid
   projectId   String   @map("project_id") @db.Uuid
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  /// ELF SHA-256 (exact build identity)
-  buildId     String   @unique @db.VarChar(64)
+  /// ELF SHA-256 (exact build identity, unique per project)
+  buildId     String   @db.VarChar(64)
   /// Human-readable version label (reference only, never identity)
   version     String?  @db.VarChar(255)
   /// ELF binary (DB storage for the initial stage)
@@ -152,6 +152,7 @@ model FirmwareArtifact {
   logStrings  FirmwareLogString[]
   logEvents   RawLogEvent[]
 
+  @@unique([projectId, buildId], map: "firmware_artifacts_project_build_unique")
   @@index([projectId, uploadedAt])
   @@map("firmware_artifacts")
 }
@@ -161,8 +162,9 @@ model FirmwareLogString {
   id         String           @id @default(uuid()) @db.Uuid
   artifactId String           @map("artifact_id") @db.Uuid
   artifact   FirmwareArtifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
-  /// 32-bit ELF virtual address (tag_id / fmt_id)
-  address    Int
+  /// 32-bit ELF virtual address (tag_id / fmt_id); BigInt because ELF
+  /// addresses are unsigned 32-bit and can exceed int4 (2^31-1)
+  address    BigInt
   /// tag | format
   kind       String           @db.VarChar(16)
   value      String           @db.Text
@@ -182,15 +184,16 @@ model RawLogEvent {
   artifact     FirmwareArtifact? @relation(fields: [artifactId], references: [id], onDelete: SetNull)
   /// Server UTC receive time (cross-device query baseline)
   receivedAt   DateTime          @default(now()) @map("received_at") @db.Timestamptz()
-  /// Boot-relative milliseconds from the packet (in-session ordering)
-  deviceTimeMs Int               @map("device_time_ms")
+  /// Boot-relative milliseconds from the packet (in-session ordering);
+  /// unsigned 32-bit on the wire, exceeds int4 after ~24.8 days uptime
+  deviceTimeMs BigInt            @map("device_time_ms")
   /// 16-bit sequence (wrap detection)
   sequence     Int
   packetType   Int               @map("packet_type")
   /// 0..5 for LOG packets, null otherwise
   level        Int?
-  tagId        Int?              @map("tag_id")
-  fmtId        Int?              @map("fmt_id")
+  tagId        BigInt?           @map("tag_id")
+  fmtId        BigInt?           @map("fmt_id")
   /// Complete raw packet (header + payload)
   rawPacket    Bytes             @map("raw_packet")
   /// unknown_fw | decodable

@@ -14,6 +14,16 @@ import {
 } from "../on9log/packet";
 import { renderFormat } from "../on9log/render";
 
+/** A raw event as required for decoding. */
+export interface RawEventForDecode {
+  id: bigint;
+  artifactId: string | null;
+  packetType: number;
+  tagId: bigint | null;
+  fmtId: bigint | null;
+  rawPacket: Uint8Array;
+}
+
 export interface DecodedEvent {
   /** null when the packet cannot be decoded (unknown firmware / malformed). */
   message: string | null;
@@ -29,14 +39,7 @@ export interface DecodedEvent {
  */
 export async function decodeRawEvent(
   prisma: PrismaClient,
-  event: {
-    id: bigint;
-    artifactId: string | null;
-    packetType: number;
-    tagId: number | null;
-    fmtId: number | null;
-    rawPacket: Uint8Array;
-  },
+  event: RawEventForDecode,
 ): Promise<DecodedEvent> {
   if (event.packetType !== On9logPacketType.Log) {
     // DROPPED / TIME_SYNC / BUFFER have no tag/format rendering here
@@ -52,7 +55,7 @@ export async function decodeRawEvent(
       where: {
         artifactId_address_kind: {
           artifactId: event.artifactId,
-          address: event.tagId,
+          address: BigInt(event.tagId),
           kind: "tag",
         },
       },
@@ -62,7 +65,7 @@ export async function decodeRawEvent(
       where: {
         artifactId_address_kind: {
           artifactId: event.artifactId,
-          address: event.fmtId,
+          address: BigInt(event.fmtId),
           kind: "format",
         },
       },
@@ -119,4 +122,62 @@ export function summarizeArgs(packetBytes: Uint8Array): DecodedArgsSummary | nul
   } catch {
     return null;
   }
+}
+
+
+/**
+ * Decodes a page of events with bounded dictionary queries (avoids the
+ * N+1 query storm of per-event lookups): dictionaries are loaded once per
+ * artifact, then events are matched in memory.
+ */
+export async function decodeEventsBatch(
+  prisma: PrismaClient,
+  events: RawEventForDecode[],
+): Promise<DecodedEvent[]> {
+  const out: DecodedEvent[] = [];
+  const artifactIds = new Set(
+    events.filter((e) => e.artifactId !== null).map((e) => e.artifactId!),
+  );
+  const dictionaries = new Map<string, Map<string, string>>();
+  for (const artifactId of artifactIds) {
+    const rows = await prisma.firmwareLogString.findMany({
+      where: { artifactId },
+      select: { kind: true, address: true, value: true },
+    });
+    const map = new Map<string, string>();
+    for (const row of rows) {
+      map.set(`${row.kind}:${row.address.toString()}`, row.value);
+    }
+    dictionaries.set(artifactId, map);
+  }
+
+  for (const event of events) {
+    if (
+      event.packetType !== On9logPacketType.Log ||
+      event.artifactId === null ||
+      event.tagId === null ||
+      event.fmtId === null
+    ) {
+      out.push({ tag: null, message: null });
+      continue;
+    }
+    const dict = dictionaries.get(event.artifactId);
+    const tag = dict?.get(`tag:${event.tagId.toString()}`);
+    const fmt = dict?.get(`format:${event.fmtId.toString()}`);
+    if (!dict || tag === undefined || fmt === undefined) {
+      out.push({ tag: null, message: null });
+      continue;
+    }
+    try {
+      const packet = parseOn9logPacket(event.rawPacket);
+      if (packet.kind !== "log") {
+        out.push({ tag: null, message: null });
+        continue;
+      }
+      out.push({ tag, message: renderFormat(fmt, packet.args) });
+    } catch {
+      out.push({ tag: null, message: null });
+    }
+  }
+  return out;
 }

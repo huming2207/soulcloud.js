@@ -17,7 +17,12 @@
 import { Aedes, type Client } from "aedes";
 import { createServer, type Server } from "node:net";
 import type { PrismaClient } from "@soulcloud/core";
-import { parseDeviceTopic, TOPIC_PREFIX } from "@soulcloud/core";
+import { isValidDeviceUid, parseDeviceTopic, TOPIC_PREFIX } from "@soulcloud/core";
+
+/** Absolute upper bound for a device publish (MQTT spec allows 256MB; the
+ * dispatch layer applies the configurable UPLINK_MAX_PACKET_BYTES limit,
+ * this is the early-reject ceiling before dispatch runs). */
+const MAX_PUBLISH_BYTES = 256 * 1024;
 export interface BrokerHandle {
   /** The raw Aedes instance (for aedes.publish and event listeners). */
   aedes: Aedes;
@@ -38,24 +43,36 @@ export async function startBroker(
   // persistence) and starts it; the constructor alone does not fully start.
   const aedes = await Aedes.createBroker();
 
-  aedes.authenticate = (
-    _client,
-    username,
-    password,
-    callback,
-  ) => {
-    authenticateDevice(prisma, username ?? "", password)
+  // Identity binding (S1/S2): the MQTT clientId MUST equal the username
+  // (the device UID), and the clientId must be a valid device UID. All
+  // authorization below trusts client.id; without this binding any holder
+  // of one device's credentials could impersonate any other device.
+  aedes.authenticate = (client, username, password, callback) => {
+    if (!username || client.id !== username || !isValidDeviceUid(client.id)) {
+      callback(null, false);
+      return;
+    }
+    authenticateDevice(prisma, username, password)
       .then((ok) => callback(null, ok))
-      .catch((error) =>
-        callback(Object.assign(error as Error, { returnCode: 4 }), null),
-      );
+      .catch((error) => {
+        // database failure is a server problem, not bad credentials:
+        // returnCode 3 (server unavailable) so clients do not stop retrying
+        callback(Object.assign(error as Error, { returnCode: 3 }), null);
+      });
   };
 
   // Devices may only publish to their own device-to-platform topics
   // (cmd/result, log, stat). Server-side publishes (client === null) pass.
+  // Packet size is checked here (before the full payload is buffered further)
+  // as an early DoS guard; dispatch re-checks with the configured limit.
   aedes.authorizePublish = (client, packet, callback) => {
     if (client === null) {
       callback(null);
+      return;
+    }
+    const size = packet.payload?.length ?? 0;
+    if (size > MAX_PUBLISH_BYTES) {
+      callback(new Error("packet too large"));
       return;
     }
     callback(isAllowedUplink(client, packet.topic) ? null : new Error("topic not allowed"));

@@ -24,6 +24,10 @@ export const MAX_FORMAT_WIDTH = 4096;
 /** Maximum total rendered output length. */
 export const MAX_RENDER_OUTPUT = 1_000_000;
 
+/** Maximum field precision (toFixed/toPrecision reject values above 100;
+ * rejecting earlier keeps the error typed instead of a raw RangeError). */
+export const MAX_FORMAT_PRECISION = 100;
+
 export class FormatRenderError extends Error {
   constructor(message: string) {
     super(message);
@@ -43,15 +47,24 @@ export function renderFormat(
   args: On9logArg[],
 ): string {
   const out: string[] = [];
+  let totalOutput = 0;
   const state = { argIndex: 0, positional: false };
   let i = 0;
+
+  const push = (text: string): void => {
+    totalOutput += text.length;
+    if (totalOutput > MAX_RENDER_OUTPUT) {
+      throw new FormatRenderError("rendered output exceeds limit");
+    }
+    out.push(text);
+  };
 
   while (i < format.length) {
     const ch = format[i]!;
 
     if (ch === "{") {
       if (format[i + 1] === "{") {
-        out.push("{");
+        push("{");
         i += 2;
         continue;
       }
@@ -82,15 +95,13 @@ export function renderFormat(
       if (!arg) {
         throw new FormatRenderError(`missing argument for {${inner}}`);
       }
-      const rendered = renderFmtArg(arg, spec);
-      checkOutputLimit(out, rendered.length);
-      out.push(rendered);
+      push(renderFmtArg(arg, spec));
       continue;
     }
 
     if (ch === "}") {
       if (format[i + 1] === "}") {
-        out.push("}");
+        push("}");
         i += 2;
         continue;
       }
@@ -98,12 +109,12 @@ export function renderFormat(
     }
 
     if (ch !== "%") {
-      out.push(ch);
+      push(ch);
       i++;
       continue;
     }
     if (format[i + 1] === "%") {
-      out.push("%");
+      push("%");
       i += 2;
       continue;
     }
@@ -146,10 +157,16 @@ export function renderFormat(
         let p = 0;
         while (j < format.length && /\d/.test(format[j]!)) {
           p = p * 10 + Number(format[j]);
+          if (p > MAX_FORMAT_PRECISION) {
+            throw new FormatRenderError("field precision exceeds limit");
+          }
           j++;
         }
         precision = p;
       }
+    }
+    if (precision !== null && precision > MAX_FORMAT_PRECISION) {
+      throw new FormatRenderError("field precision exceeds limit");
     }
 
     while (j < format.length && "hlLjzt".includes(format[j]!)) j++;
@@ -164,18 +181,18 @@ export function renderFormat(
       case "d":
       case "i": {
         const v = nextIntArg(args, state.argIndex++, `%${conv}`);
-        out.push(formatSigned(v, width, flags, false));
+        push(formatSigned(v, width, flags, false));
         break;
       }
       case "u": {
         const v = nextIntArg(args, state.argIndex++, "%u");
-        out.push(formatSigned(v, width, flags, true));
+        push(formatSigned(v, width, flags, true));
         break;
       }
       case "x":
       case "X": {
         const v = nextIntArg(args, state.argIndex++, `%${conv}`);
-        out.push(formatHex(v, width, flags, conv === "X"));
+        push(formatHex(v, width, flags, conv === "X"));
         break;
       }
       case "p": {
@@ -184,12 +201,12 @@ export function renderFormat(
           throw new FormatRenderError("%p requires a pointer/32-bit argument");
         }
         const hex = (arg.value >>> 0).toString(16).padStart(8, "0");
-        out.push(`0x${hex}`);
+        push(`0x${hex}`);
         break;
       }
       case "c": {
         const v = nextIntArg(args, state.argIndex++, "%c");
-        out.push(String.fromCodePoint(Number(v) & 0xff));
+        push(String.fromCodePoint(Number(v) & 0xff));
         break;
       }
       case "s": {
@@ -203,14 +220,14 @@ export function renderFormat(
         const text = argToString(arg);
         let s = text;
         if (precision !== null) s = s.slice(0, precision);
-        out.push(padString(s, width, flags));
+        push(padString(s, width, flags));
         break;
       }
       case "f":
       case "F": {
         const arg = nextArg(args, state.argIndex++, `%${conv}`);
         const value = doubleArgValue(arg, `%${conv}`);
-        out.push(formatFloat(value, width, precision, flags));
+        push(formatFloat(value, width, precision, flags));
         break;
       }
       case "e":
@@ -221,7 +238,7 @@ export function renderFormat(
         const value = doubleArgValue(arg, `%${conv}`);
         let rendered = value.toExponential(precision ?? 6);
         if (conv === "E" || conv === "G") rendered = rendered.toUpperCase();
-        out.push(padString(rendered, width, flags));
+        push(padString(rendered, width, flags));
         break;
       }
       default:
@@ -235,12 +252,6 @@ export function renderFormat(
     );
   }
   return out.join("");
-}
-
-function checkOutputLimit(out: string[], added: number): void {
-  if (out.reduce((n, s) => n + s.length, 0) + added > MAX_RENDER_OUTPUT) {
-    throw new FormatRenderError("rendered output exceeds limit");
-  }
 }
 
 /** Finds the closing brace matching the brace at `start - 1`, honoring nested placeholders. */
@@ -422,9 +433,6 @@ export function parseFmtSpec(
   if (out.width > MAX_FORMAT_WIDTH) {
     throw new FormatRenderError("field width exceeds limit");
   }
-  if (out.precision !== null && out.precision > MAX_FORMAT_WIDTH) {
-    throw new FormatRenderError("field precision exceeds limit");
-  }
   if (s[0] === ".") {
     s = s.slice(1);
     if (s[0] === "{") {
@@ -441,6 +449,9 @@ export function parseFmtSpec(
     out.type = s;
   } else if (s.length > 1) {
     throw new FormatRenderError(`unsupported fmt spec '{${raw}}'`);
+  }
+  if (out.precision !== null && out.precision > MAX_FORMAT_PRECISION) {
+    throw new FormatRenderError("field precision exceeds limit");
   }
   return out;
 }
@@ -510,7 +521,8 @@ export function renderFmtArg(arg: On9logArg, spec: FmtSpec): string {
       } else if (type === "e" || type === "E") {
         s = value.toExponential(spec.precision ?? 6);
       } else {
-        s = value.toPrecision(spec.precision ?? 6).replace(/\.?0+$/, "");
+        s = value.toPrecision(spec.precision ?? 6);
+        s = s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s;
       }
       if (spec.sign === "+" && !s.startsWith("-")) s = `+${s}`;
       if (spec.alternate && !s.includes(".")) s += ".";

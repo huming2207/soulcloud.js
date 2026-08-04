@@ -260,3 +260,32 @@ describe("printf float paths", () => {
     expect(renderFormat("%.1f", [FLOAT(-3.5)])).toBe("-3.5");
   });
 });
+
+describe("S3: {:g} trailing-zero regression", () => {
+  test("integer-valued floats keep significant zeros", () => {
+    expect(renderFormat("{:g}", [FLOAT(100000.0)])).toBe("100000");
+    expect(renderFormat("{:g}", [FLOAT(250000.0)])).toBe("250000");
+    expect(renderFormat("{:g}", [FLOAT(42.0)])).toBe("42");
+  });
+
+  test("fractional values still trim", () => {
+    expect(renderFormat("{:g}", [FLOAT(3.14159)])).toBe("3.14159");
+    expect(renderFormat("{:g}", [FLOAT(3.0)])).toBe("3");
+    expect(renderFormat("{:g}", [FLOAT(0.5)])).toBe("0.5");
+  });
+});
+
+describe("M10: precision/output guards", () => {
+  test("excessive fmt precision is rejected, not RangeError", () => {
+    expect(() => renderFormat("{:.500f}", [FLOAT(3.14)])).toThrow(
+      FormatRenderError,
+    );
+    expect(() => renderFormat("{:.200}", [B32(1)])).toThrow(FormatRenderError);
+  });
+
+  test("excessive printf precision is rejected, not RangeError", () => {
+    expect(() => renderFormat("%.500f", [FLOAT(3.14)])).toThrow(
+      FormatRenderError,
+    );
+  });
+});

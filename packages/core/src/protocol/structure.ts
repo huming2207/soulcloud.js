@@ -14,6 +14,10 @@
  * done by the Zod schemas in command.ts / stat.ts.
  */
 
+/** Maximum nesting depth accepted (guards against stack overflow from
+ * deeply nested arrays/maps; 512 is far beyond any legitimate payload). */
+export const MAX_STRUCTURE_DEPTH = 512;
+
 export class MessagePackStructureError extends Error {
   constructor(message: string) {
     super(message);
@@ -90,7 +94,7 @@ class Reader {
  */
 export function validateMessagePackStructure(payload: Uint8Array): void {
   const reader = new Reader(payload);
-  walkValue(reader, null);
+  walkValue(reader, null, 0);
   if (reader.pos !== payload.length) {
     throw new MessagePackStructureError(
       `MessagePack payload contains ${payload.length - reader.pos} trailing bytes`,
@@ -98,7 +102,12 @@ export function validateMessagePackStructure(payload: Uint8Array): void {
   }
 }
 
-function walkValue(reader: Reader, mapState: MapKeyState | null): void {
+function walkValue(reader: Reader, mapState: MapKeyState | null, depth: number): void {
+  if (depth > MAX_STRUCTURE_DEPTH) {
+    throw new MessagePackStructureError(
+      `MessagePack nesting exceeds limit ${MAX_STRUCTURE_DEPTH}`,
+    );
+  }
   const marker = reader.byte();
 
   if (marker <= 0x7f || marker >= 0xe0) {
@@ -125,7 +134,7 @@ function walkValue(reader: Reader, mapState: MapKeyState | null): void {
     case 0x8d:
     case 0x8e:
     case 0x8f:
-      walkMap(reader, marker & 0x0f, mapState);
+      walkMap(reader, marker & 0x0f, mapState, depth);
       return;
     case 0x90:
     case 0x91:
@@ -143,7 +152,7 @@ function walkValue(reader: Reader, mapState: MapKeyState | null): void {
     case 0x9d:
     case 0x9e:
     case 0x9f:
-      walkArray(reader, marker & 0x0f, mapState);
+      walkArray(reader, marker & 0x0f, mapState, depth);
       return;
     case 0xa0:
     case 0xa1:
@@ -240,16 +249,16 @@ function walkValue(reader: Reader, mapState: MapKeyState | null): void {
       reader.take(readU32(reader) + 1);
       return;
     case Type.Array16:
-      walkArray(reader, readU16(reader), mapState);
+      walkArray(reader, readU16(reader), mapState, depth);
       return;
     case Type.Array32:
-      walkArray(reader, readU32(reader), mapState);
+      walkArray(reader, readU32(reader), mapState, depth);
       return;
     case Type.Map16:
-      walkMap(reader, readU16(reader), mapState);
+      walkMap(reader, readU16(reader), mapState, depth);
       return;
     case Type.Map32:
-      walkMap(reader, readU32(reader), mapState);
+      walkMap(reader, readU32(reader), mapState, depth);
       return;
     default:
       throw new MessagePackStructureError(
@@ -258,17 +267,17 @@ function walkValue(reader: Reader, mapState: MapKeyState | null): void {
   }
 }
 
-function walkArray(reader: Reader, length: number, mapState: MapKeyState | null): void {
+function walkArray(reader: Reader, length: number, mapState: MapKeyState | null, depth: number): void {
   for (let i = 0; i < length; i++) {
-    walkValue(reader, mapState);
+    walkValue(reader, mapState, depth + 1);
   }
 }
 
-function walkMap(reader: Reader, length: number, parent: MapKeyState | null): void {
+function walkMap(reader: Reader, length: number, parent: MapKeyState | null, depth: number): void {
   const state: MapKeyState = { keys: new Set(), parent };
   for (let i = 0; i < length; i++) {
     const keyStart = reader.pos;
-    walkValue(reader, state);
+    walkValue(reader, state, depth + 1);
     const key = decodeStringKey(reader.buf, keyStart, reader.pos);
     if (state.keys.has(key)) {
       throw new MessagePackStructureError(
@@ -276,7 +285,7 @@ function walkMap(reader: Reader, length: number, parent: MapKeyState | null): vo
       );
     }
     state.keys.add(key);
-    walkValue(reader, state);
+    walkValue(reader, state, depth + 1);
   }
 }
 

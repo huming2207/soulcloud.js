@@ -35,7 +35,9 @@ const CommandIdSchema = z
 const SequenceSchema = z
   .union([z.bigint(), z.number().int().min(0)])
   .transform((v) => (typeof v === "number" ? BigInt(v) : v))
-  .refine((v) => v <= UINT64_MAX, { message: "sequence must be an unsigned 64-bit integer" });
+  .refine((v) => v >= 0n && v <= UINT64_MAX, {
+    message: "sequence must be an unsigned 64-bit integer",
+  });
 
 /** A scalar value permitted in a command argument or result payload. */
 export const CommandArgumentValueSchema = z.union([
