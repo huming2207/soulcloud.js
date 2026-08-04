@@ -20,9 +20,9 @@ packages/
                                strict MessagePack codecs, durable command queue
   api/      @soulcloud/api     REST API server (Elysia) for humans: health
                                checks, command batches. No MQTT event loop.
-  broker/   @soulcloud/broker  Device-facing MQTT broker process (Aedes):
-                               device auth/ACL, uplink dispatch, command
-                               publication poller. No HTTP API.
+  broker/   @soulcloud/broker  Device-facing MQTT-over-WebSocket broker
+                               process (Aedes): device auth/ACL, uplink
+                               dispatch, command poller. No HTTP API.
 ```
 
 Both processes share the same PostgreSQL database, which is the only
@@ -48,7 +48,7 @@ PostgreSQL insufficient; `LISTEN/NOTIFY` may later serve as a wake-up hint
 | Language      | TypeScript (strict)                        |
 | ORM           | Prisma + PostgreSQL                        |
 | HTTP          | ElysiaJS (`@soulcloud/api`)                |
-| MQTT broker   | Aedes, embedded in `@soulcloud/broker`     |
+| MQTT broker   | Aedes over WebSocket, in `@soulcloud/broker` |
 | Serialization | @msgpack/msgpack + strict token validator  |
 | Validation    | Zod                                        |
 
@@ -65,7 +65,7 @@ Run the processes separately if preferred:
 
 ```sh
 bun run dev:api        # REST API on :8080
-bun run dev:broker     # MQTT broker on :1883
+bun run dev:broker     # MQTT broker (WS) on :1883/mqtt
 ```
 
 The Compose PostgreSQL binds only to `127.0.0.1` for development. Stop it with

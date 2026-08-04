@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import mqtt, { type MqttClient } from "mqtt";
 import { enqueueBatch, prisma } from "@soulcloud/core";
+import { MqttTestClient, type MqttTestClientOptions } from "../helpers/mqtt-client";
 import { startBroker, type BrokerHandle } from "../../src/mqtt/broker";
 import { attachDispatch } from "../../src/mqtt/dispatch";
 import { pollOnce } from "../../src/mqtt/publish";
@@ -15,6 +15,7 @@ import {
 // Requires: docker compose up -d postgres && bunx prisma migrate deploy
 
 const BROKER_PORT = 18883;
+const BROKER_URL = `ws://127.0.0.1:${BROKER_PORT}/mqtt`;
 const DEVICE_UID = `mqtt-test-${randomUUID().slice(0, 8)}`;
 const DEVICE_PASSWORD = "secret";
 
@@ -44,7 +45,7 @@ beforeAll(async () => {
   });
   deviceId = device.id;
 
-  broker = await startBroker(prisma, BROKER_PORT);
+  broker = await startBroker(prisma, { port: BROKER_PORT });
   attachDispatch(broker.aedes, prisma, silentLog);
 });
 
@@ -62,13 +63,17 @@ beforeEach(async () => {
   await prisma.$executeRaw`DELETE FROM command_batches`;
 });
 
-function connectDevice(overrides: Record<string, unknown> = {}): MqttClient {
-  return mqtt.connect(`mqtt://127.0.0.1:${BROKER_PORT}`, {
+function connectDevice(overrides: Partial<MqttTestClientOptions> = {}): MqttTestClient {
+  const client = new MqttTestClient(BROKER_URL, {
     clientId: DEVICE_UID,
     username: DEVICE_UID,
     password: DEVICE_PASSWORD,
     ...overrides,
   });
+  // the mini client needs an explicit connect() (unlike mqtt.js which
+  // connects on construction); errors surface via the "error" event
+  void client.connect().catch(() => {});
+  return client;
 }
 
 /** Polls a predicate until it is true (replaces fixed sleeps; avoids flaky
@@ -82,7 +87,7 @@ async function waitFor(predicate: () => Promise<boolean>, what: string, timeoutM
   throw new Error(`timeout waiting for ${what}`);
 }
 
-function waitForConnect(client: MqttClient): Promise<void> {
+function waitForConnect(client: MqttTestClient): Promise<void> {
   return new Promise((resolve, reject) => {
     client.once("connect", () => resolve());
     client.once("error", reject);
@@ -90,51 +95,31 @@ function waitForConnect(client: MqttClient): Promise<void> {
   });
 }
 
+/** Attempts a connection and returns the outcome string (connect/error/timeout). */
+async function tryConnect(overrides: Partial<MqttTestClientOptions> = {}): Promise<string> {
+  const client = connectDevice(overrides);
+  return new Promise<string>((resolve) => {
+    client.once("connect", () => resolve("connected"));
+    client.once("error", (err: Error) => resolve(`error: ${err.message}`));
+    setTimeout(() => resolve("timeout"), 5000);
+  });
+}
+
 describe("device authentication", () => {
   test("rejects clientId that differs from username (impersonation)", async () => {
     // attacker holds device credentials but connects with another clientId
-    const device = mqtt.connect(`mqtt://127.0.0.1:${BROKER_PORT}`, {
-      clientId: "some-other-device",
-      username: DEVICE_UID,
-      password: DEVICE_PASSWORD,
-    });
-    const result = await new Promise<string>((resolve) => {
-      device.once("connect", () => resolve("connected"));
-      device.once("error", (err) => resolve(`error: ${err.message}`));
-      setTimeout(() => resolve("timeout"), 5000);
-    });
+    const result = await tryConnect({ clientId: "some-other-device" });
     expect(result.startsWith("error")).toBe(true);
-    device.end(true);
   });
 
   test("rejects clientId containing MQTT wildcards", async () => {
-    const device = mqtt.connect(`mqtt://127.0.0.1:${BROKER_PORT}`, {
-      clientId: "+",
-      username: "+",
-      password: DEVICE_PASSWORD,
-    });
-    const result = await new Promise<string>((resolve) => {
-      device.once("connect", () => resolve("connected"));
-      device.once("error", (err) => resolve(`error: ${err.message}`));
-      setTimeout(() => resolve("timeout"), 5000);
-    });
+    const result = await tryConnect({ clientId: "+", username: "+" });
     expect(result.startsWith("error")).toBe(true);
-    device.end(true);
   });
 
   test("rejects clientId with topic separator", async () => {
-    const device = mqtt.connect(`mqtt://127.0.0.1:${BROKER_PORT}`, {
-      clientId: "dev/other",
-      username: "dev/other",
-      password: DEVICE_PASSWORD,
-    });
-    const result = await new Promise<string>((resolve) => {
-      device.once("connect", () => resolve("connected"));
-      device.once("error", (err) => resolve(`error: ${err.message}`));
-      setTimeout(() => resolve("timeout"), 5000);
-    });
+    const result = await tryConnect({ clientId: "dev/other", username: "dev/other" });
     expect(result.startsWith("error")).toBe(true);
-    device.end(true);
   });
 
   test("accepts valid credentials", async () => {
@@ -144,29 +129,17 @@ describe("device authentication", () => {
   });
 
   test("rejects wrong password", async () => {
-    const device = connectDevice({ password: "wrong" });
-    const result = await new Promise<string>((resolve) => {
-      device.once("connect", () => resolve("connected"));
-      device.once("error", (err) => resolve(`error: ${err.message}`));
-      setTimeout(() => resolve("timeout"), 5000);
-    });
+    const result = await tryConnect({ password: "wrong" });
     expect(result.startsWith("error")).toBe(true);
-    device.end(true);
   });
 
   test("rejects unknown device UID", async () => {
-    const device = mqtt.connect(`mqtt://127.0.0.1:${BROKER_PORT}`, {
+    const result = await tryConnect({
       clientId: "unknown-dev",
       username: "unknown-dev",
       password: "x",
     });
-    const result = await new Promise<string>((resolve) => {
-      device.once("connect", () => resolve("connected"));
-      device.once("error", (err) => resolve(`error: ${err.message}`));
-      setTimeout(() => resolve("timeout"), 5000);
-    });
     expect(result.startsWith("error")).toBe(true);
-    device.end(true);
   });
 });
 
@@ -174,13 +147,7 @@ describe("topic authorization", () => {
   test("device can subscribe to its own cmd/exec", async () => {
     const device = connectDevice();
     await waitForConnect(device);
-    const sub = await new Promise((resolve, reject) => {
-      device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`, { qos: 1 }, (err) =>
-        err ? reject(err) : resolve(null),
-      );
-      setTimeout(() => reject(new Error("subscribe timeout")), 5000);
-    });
-    expect(sub).toBeNull();
+    await device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
     device.end(true);
   });
 
@@ -192,12 +159,7 @@ describe("topic authorization", () => {
       device.once("close", () => resolve(true));
       setTimeout(() => resolve(false), 3000);
     });
-    await new Promise<void>((resolve) => {
-      device.subscribe("soulcloud/v1/devices/other-dev/cmd/exec", { qos: 1 }, () =>
-        resolve(),
-      );
-      setTimeout(resolve, 1000);
-    });
+    await device.subscribe("soulcloud/v1/devices/other-dev/cmd/exec").catch(() => {});
     expect(await disconnected).toBe(true);
     device.end(true);
   });
@@ -209,12 +171,7 @@ describe("topic authorization", () => {
       device.once("close", () => resolve(true));
       setTimeout(() => resolve(false), 3000);
     });
-    await new Promise<void>((resolve) => {
-      device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/log`, { qos: 1 }, () =>
-        resolve(),
-      );
-      setTimeout(resolve, 1000);
-    });
+    await device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/log`).catch(() => {});
     expect(await disconnected).toBe(true);
     device.end(true);
   });
@@ -226,10 +183,7 @@ describe("topic authorization", () => {
       device.once("close", () => resolve(true));
       setTimeout(() => resolve(false), 3000);
     });
-    await new Promise<void>((resolve) => {
-      device.publish(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`, Buffer.from("x"), { qos: 0 }, () => resolve());
-      setTimeout(resolve, 1000);
-    });
+    await device.publish(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`, Buffer.from("x"), 0);
     expect(await disconnected).toBe(true);
     device.end(true);
   });
@@ -244,17 +198,9 @@ describe("command delivery loop", () => {
 
     const device = connectDevice();
     await waitForConnect(device);
-    await new Promise<void>((resolve, reject) => {
-      device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`, { qos: 1 }, (err) =>
-        err ? reject(err) : resolve(),
-      );
-      setTimeout(() => reject(new Error("subscribe timeout")), 5000);
-    });
+    await device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
 
-    const received = new Promise<{ topic: string; payload: Buffer }>((resolve) => {
-      device.once("message", (topic, payload) => resolve({ topic, payload }));
-      setTimeout(() => resolve({ topic: "", payload: Buffer.alloc(0) }), 5000);
-    });
+    const received = device.waitMessage(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
 
     await pollOnce(broker.aedes, prisma, {
       pollIntervalMs: 100,
@@ -262,7 +208,10 @@ describe("command delivery loop", () => {
       retain: false,
     }, silentLog);
 
-    const msg = await received;
+    const msg = await received.then((payload) => ({
+      topic: `soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`,
+      payload,
+    }));
     expect(msg.topic).toBe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
     expect(msg.payload.length).toBeGreaterThan(0);
 
@@ -303,18 +252,20 @@ describe("command delivery loop", () => {
       }),
     );
 
-    await new Promise<void>((resolve, reject) => {
-      device.publish(
-        `soulcloud/v1/devices/${DEVICE_UID}/cmd/result`,
-        resultPacket,
-        { qos: 1 },
-        (err) => (err ? reject(err) : resolve()),
-      );
-      setTimeout(() => reject(new Error("publish timeout")), 5000);
-    });
+    await device.publish(
+      `soulcloud/v1/devices/${DEVICE_UID}/cmd/result`,
+      resultPacket,
+      1,
+    );
 
     // wait for the async dispatch to persist
-    await new Promise((r) => setTimeout(r, 300));
+    await waitFor(
+      async () => {
+        const row2 = await prisma.deviceCommand.findUnique({ where: { id: row.id } });
+        return row2?.state === "device_completed";
+      },
+      "result persisted",
+    );
     const completed = await prisma.deviceCommand.findUniqueOrThrow({
       where: { id: row.id },
     });
@@ -333,17 +284,9 @@ describe("command delivery loop", () => {
 
     const device = connectDevice();
     await waitForConnect(device);
-    await new Promise<void>((resolve, reject) => {
-      device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`, { qos: 1 }, (err) =>
-        err ? reject(err) : resolve(),
-      );
-      setTimeout(() => reject(new Error("subscribe timeout")), 5000);
-    });
+    await device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
 
-    const received = new Promise<Buffer>((resolve) => {
-      device.once("message", (_t, payload) => resolve(payload));
-      setTimeout(() => resolve(Buffer.alloc(0)), 5000);
-    });
+    const received = device.waitMessage(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
 
     await pollOnce(broker.aedes, prisma, {
       pollIntervalMs: 100,
@@ -359,14 +302,18 @@ describe("command delivery loop", () => {
     const resultPacket = Buffer.from(
       encodeDeviceCommandResult({ id: exec.id, seq: exec.seq, code: 0 }),
     );
-    await new Promise<void>((resolve, reject) => {
-      device.publish(`soulcloud/v1/devices/${DEVICE_UID}/cmd/result`, resultPacket, { qos: 1 }, (err) =>
-        err ? reject(err) : resolve(),
-      );
-      setTimeout(() => reject(new Error("result publish timeout")), 5000);
-    });
-
-    await new Promise((r) => setTimeout(r, 300));
+    await device.publish(
+      `soulcloud/v1/devices/${DEVICE_UID}/cmd/result`,
+      resultPacket,
+      1,
+    );
+    await waitFor(
+      async () => {
+        const r = await prisma.deviceCommand.findUnique({ where: { id: row.id } });
+        return r?.state === "device_completed";
+      },
+      "full loop completion",
+    );
     const completed = await prisma.deviceCommand.findUniqueOrThrow({
       where: { id: row.id },
     });
@@ -387,12 +334,7 @@ describe("log/stat uplink ingestion", () => {
     ]);
     const device = connectDevice();
     await waitForConnect(device);
-    await new Promise<void>((resolve, reject) => {
-      device.publish(`soulcloud/v1/devices/${DEVICE_UID}/log`, Buffer.from(packet), { qos: 1 }, (e) =>
-        e ? reject(e) : resolve(),
-      );
-      setTimeout(() => reject(new Error("log publish timeout")), 5000);
-    });
+    await device.publish(`soulcloud/v1/devices/${DEVICE_UID}/log`, Buffer.from(packet), 1);
     await waitFor(
       async () =>
         (await prisma.rawLogEvent.count({ where: { device: { deviceUid: DEVICE_UID } } })) > 0,
@@ -420,12 +362,7 @@ describe("log/stat uplink ingestion", () => {
     });
     const device = connectDevice();
     await waitForConnect(device);
-    await new Promise<void>((resolve) => {
-      device.publish(`soulcloud/v1/devices/${DEVICE_UID}/log`, Buffer.from([0x00, 0x01]), { qos: 0 }, () =>
-        resolve(),
-      );
-      setTimeout(resolve, 1000);
-    });
+    await device.publish(`soulcloud/v1/devices/${DEVICE_UID}/log`, Buffer.from([0x00, 0x01]), 0);
     // give dispatch a couple of poll cycles, then confirm nothing was stored
     await waitFor(
       async () => {
@@ -446,22 +383,18 @@ describe("log/stat uplink ingestion", () => {
     const fw = new Uint8Array([0xaa, 0xbb, 0xcc]);
     const device = connectDevice();
     await waitForConnect(device);
-    await new Promise<void>((resolve, reject) => {
-      device.publish(
-        `soulcloud/v1/devices/${DEVICE_UID}/stat`,
-        Buffer.from(
-          encodeDeviceStat({
-            sn: new Uint8Array(4),
-            fw,
-            up: 5n,
-            rst: "watchdog",
-          }),
-        ),
-        { qos: 1 },
-        (e) => (e ? reject(e) : resolve()),
-      );
-      setTimeout(() => reject(new Error("stat publish timeout")), 5000);
-    });
+    await device.publish(
+      `soulcloud/v1/devices/${DEVICE_UID}/stat`,
+      Buffer.from(
+        encodeDeviceStat({
+          sn: new Uint8Array(4),
+          fw,
+          up: 5n,
+          rst: "watchdog",
+        }),
+      ),
+      1,
+    );
     await waitFor(
       async () => (await prisma.deviceFirmwareState.count({ where: { device: { deviceUid: DEVICE_UID } } })) > 0,
       "firmware state persisted",
@@ -473,22 +406,18 @@ describe("log/stat uplink ingestion", () => {
     expect(state.fwHash).toBe("aabbcc");
 
     // second stat updates the hash
-    await new Promise<void>((resolve, reject) => {
-      device.publish(
-        `soulcloud/v1/devices/${DEVICE_UID}/stat`,
-        Buffer.from(
-          encodeDeviceStat({
-            sn: new Uint8Array(4),
-            fw: new Uint8Array([0x01]),
-            up: 6n,
-            rst: "power-on",
-          }),
-        ),
-        { qos: 1 },
-        (e) => (e ? reject(e) : resolve()),
-      );
-      setTimeout(() => reject(new Error("stat publish timeout")), 5000);
-    });
+    await device.publish(
+      `soulcloud/v1/devices/${DEVICE_UID}/stat`,
+      Buffer.from(
+        encodeDeviceStat({
+          sn: new Uint8Array(4),
+          fw: new Uint8Array([0x01]),
+          up: 6n,
+          rst: "power-on",
+        }),
+      ),
+      1,
+    );
     await waitFor(
       async () => {
         const s = await prisma.deviceFirmwareState.findFirst({ where: { device: { deviceUid: DEVICE_UID } } });

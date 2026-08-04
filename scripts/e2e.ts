@@ -10,11 +10,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import mqtt from "mqtt";
+import { MqttTestClient } from "../packages/broker/tests/helpers/mqtt-client";
 import { prisma } from "@soulcloud/core";
 
 const API = "http://localhost:8080";
-const MQTT_URL = "mqtt://127.0.0.1:1883";
+const MQTT_URL = "ws://127.0.0.1:1883/mqtt";
 const DEVICE_UID = `e2e-${randomUUID().slice(0, 8)}`;
 const PASSWORD = "e2e-secret";
 
@@ -49,24 +49,16 @@ console.log(`device ${DEVICE_UID} created`);
 try {
   // --- connect the device ---------------------------------------------------
 
-  const client = mqtt.connect(MQTT_URL, {
+  const client = new MqttTestClient(MQTT_URL, {
     clientId: DEVICE_UID,
     username: DEVICE_UID,
     password: PASSWORD,
   });
-  await new Promise<void>((resolve, reject) => {
-    client.once("connect", () => resolve());
-    client.once("error", reject);
-    setTimeout(() => reject(new Error("connect timeout")), 5000);
-  });
+  client.on("error", (e) => console.log("mqtt error:", e.message));
+  await client.connect();
   console.log("device connected to MQTT");
 
-  await new Promise<void>((resolve, reject) => {
-    client.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`, { qos: 1 }, (e) =>
-      e ? reject(e) : resolve(),
-    );
-    setTimeout(() => reject(new Error("subscribe timeout")), 5000);
-  });
+  await client.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
   console.log("device subscribed to cmd/exec");
 
   // --- enqueue via HTTP API --------------------------------------------------
@@ -85,11 +77,7 @@ try {
 
   // --- device receives the command via MQTT ----------------------------------
 
-  const received = new Promise<Buffer>((resolve) => {
-    client.once("message", (_t, payload) => resolve(payload));
-    setTimeout(() => resolve(Buffer.alloc(0)), 8000);
-  });
-  const payload = await received;
+  const payload = await client.waitMessage(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
   check("device received command via MQTT", payload.length > 0);
 
   const { decodeDeviceCommandExecution, encodeDeviceCommandResult } = await import(
@@ -101,15 +89,11 @@ try {
   const resultPacket = Buffer.from(
     encodeDeviceCommandResult({ id: exec.id, seq: exec.seq, code: 0 }),
   );
-  await new Promise<void>((resolve, reject) => {
-    client.publish(
-      `soulcloud/v1/devices/${DEVICE_UID}/cmd/result`,
-      resultPacket,
-      { qos: 1 },
-      (e) => (e ? reject(e) : resolve()),
-    );
-    setTimeout(() => reject(new Error("result publish timeout")), 5000);
-  });
+  await client.publish(
+    `soulcloud/v1/devices/${DEVICE_UID}/cmd/result`,
+    resultPacket,
+    1,
+  );
 
   // --- verify the command completed in the database --------------------------
 

@@ -10,13 +10,13 @@
 
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import mqtt from "mqtt";
+import { MqttTestClient } from "../packages/broker/tests/helpers/mqtt-client";
 import { encodeDeviceStat, prisma } from "@soulcloud/core";
 import { SlipDecoder } from "../packages/core/tests/helpers/slip";
 import { ON9LOG_FRAME_TYPE_ON9LOG } from "../packages/core/tests/helpers/slip";
 
 const API = "http://localhost:8080";
-const MQTT_URL = "mqtt://127.0.0.1:1883";
+const MQTT_URL = "ws://127.0.0.1:1883/mqtt";
 const DEMO_ELF = "/tmp/on9log_unix_demo";
 const DEMO_OUTPUT = "/tmp/on9log_demo_output.bin";
 const DEVICE_UID = `e2e-log-${randomUUID().slice(0, 8)}`;
@@ -83,43 +83,32 @@ try {
 
   // --- 2. device: connect, report fw, publish logs ----------------------------
 
-  const client = mqtt.connect(MQTT_URL, {
+  const client = new MqttTestClient(MQTT_URL, {
     clientId: DEVICE_UID,
     username: DEVICE_UID,
     password: PASSWORD,
   });
-  await new Promise<void>((resolve, reject) => {
-    client.once("connect", () => resolve());
-    client.once("error", reject);
-    setTimeout(() => reject(new Error("connect timeout")), 5000);
-  });
+  client.on("error", (e) => console.log("mqtt error:", e.message));
+  await client.connect();
 
   // report firmware (stat.fw = firmware hash bytes)
-  await new Promise<void>((resolve, reject) => {
-    client.publish(
-      `soulcloud/v1/devices/${DEVICE_UID}/stat`,
-      Buffer.from(
-        encodeDeviceStat({
-          sn: new Uint8Array(4),
-          fw: Buffer.from(fwHash, "hex"),
-          up: 1n,
-          rst: "power-on",
-        }),
-      ),
-      { qos: 1 },
-      (e) => (e ? reject(e) : resolve()),
-    );
-    setTimeout(() => reject(new Error("stat publish timeout")), 5000);
-  });
+  await client.publish(
+    `soulcloud/v1/devices/${DEVICE_UID}/stat`,
+    Buffer.from(
+      encodeDeviceStat({
+        sn: new Uint8Array(4),
+        fw: Buffer.from(fwHash, "hex"),
+        up: 1n,
+        rst: "power-on",
+      }),
+    ),
+    1,
+  );
   await new Promise((r) => setTimeout(r, 300));
 
   // publish a few real on9log packets
   for (const packet of packets.slice(0, 5)) {
-    await new Promise<void>((resolve, reject) => {
-      client.publish(`soulcloud/v1/devices/${DEVICE_UID}/log`, Buffer.from(packet), { qos: 1 }, (e) =>
-        e ? reject(e) : resolve(),
-      );
-    });
+    await client.publish(`soulcloud/v1/devices/${DEVICE_UID}/log`, Buffer.from(packet), 1);
   }
   await new Promise((r) => setTimeout(r, 500));
   client.end(true);

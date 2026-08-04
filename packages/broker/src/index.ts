@@ -28,7 +28,10 @@ const logger = {
   },
 };
 
-const { aedes, close: closeBroker } = await startBroker(prisma, config.MQTT_BROKER_PORT);
+const { aedes, close: closeBroker } = await startBroker(prisma, {
+  port: config.MQTT_BROKER_PORT,
+  path: config.MQTT_BROKER_PATH,
+});
 attachDispatch(aedes, prisma, logger, {
   maxPacketBytes: config.UPLINK_MAX_PACKET_BYTES,
   ratePerSecond: config.UPLINK_RATE_PER_SECOND,

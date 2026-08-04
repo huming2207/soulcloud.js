@@ -4,6 +4,8 @@ import { z } from "zod";
 const envSchema = z.object({
   ...SharedEnv,
   MQTT_BROKER_PORT: z.coerce.number().int().positive().default(1883),
+  /// WebSocket path for MQTT (reverse proxy terminates TLS in front of this)
+  MQTT_BROKER_PATH: z.string().startsWith("/").default("/mqtt"),
   MQTT_COMMAND_RETAIN: z
     .string()
     .transform((v) => v === "true")

@@ -1,9 +1,11 @@
 /**
  * Embedded Aedes MQTT broker factory.
  *
- * The broker is embedded in the API process (single-process architecture):
- * devices connect directly over TCP, authenticate against the `devices`
- * table, and are restricted to their own topics by authorization handlers.
+ * The broker runs in its own process and serves devices over MQTT over
+ * WebSocket only (raw TCP was removed in the S8 audit fix; TLS termination
+ * is expected to be provided by a reverse proxy in front of the WS path).
+ * Devices authenticate against the `devices` table and are restricted to
+ * their own topics by authorization handlers.
  *
  * Key Aedes behaviors verified in the phase-0 spike:
  *   - `aedes.publish()` callback success IS broker acceptance; no external
@@ -15,9 +17,9 @@
  */
 
 import { Aedes, type Client } from "aedes";
-import { createServer, type Server } from "node:net";
 import type { PrismaClient } from "@soulcloud/core";
 import { isValidDeviceUid, parseDeviceTopic, TOPIC_PREFIX } from "@soulcloud/core";
+import { startWsBroker, type WsBrokerHandle } from "./ws-adapter";
 
 /** Delay before answering a failed authentication attempt. */
 const AUTH_FAIL_DELAY_MS = 100;
@@ -29,19 +31,27 @@ const MAX_PUBLISH_BYTES = 256 * 1024;
 export interface BrokerHandle {
   /** The raw Aedes instance (for aedes.publish and event listeners). */
   aedes: Aedes;
-  /** TCP server bound to the broker port. */
-  server: Server;
-  /** Closes the broker and the TCP server. */
+  /** WebSocket server bound to the broker port. */
+  server: WsBrokerHandle["server"];
+  /** Closes the broker and the WebSocket server. */
   close: () => Promise<void>;
 }
 
+export interface StartBrokerOptions {
+  /** WS listen port. */
+  port: number;
+  /** WS path, e.g. "/mqtt". */
+  path?: string;
+}
+
 /**
- * Creates and starts the embedded MQTT broker on the given port.
+ * Creates and starts the embedded MQTT-over-WebSocket broker.
  */
 export async function startBroker(
   prisma: PrismaClient,
-  port: number,
+  options: StartBrokerOptions,
 ): Promise<BrokerHandle> {
+  const { port, path = "/mqtt" } = options;
   // Aedes 1.x: createBroker() initialises the broker (including its internal
   // persistence) and starts it; the constructor alone does not fully start.
   const aedes = await Aedes.createBroker();
@@ -99,21 +109,20 @@ export async function startBroker(
     callback(allowed ? null : new Error("topic not allowed"), subscription);
   };
 
-  const server = createServer(aedes.handle);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, resolve);
-  });
+  const { server } = await startWsBroker(aedes, { port, path });
 
   return {
     aedes,
     server,
     close: () =>
       new Promise<void>((resolve) => {
-        server.close(() => {
-          aedes.close();
-          resolve();
-        });
+        try {
+          server.stop(true);
+        } catch {
+          // already stopped
+        }
+        aedes.close();
+        resolve();
       }),
   };
 }
