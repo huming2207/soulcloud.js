@@ -38,24 +38,11 @@ describe("password hashing (argon2id)", () => {
     expect(await verifyDevicePassword("x", "not-a-hash")).toBe(false);
   });
 
-  test("accepts legacy plaintext hashes (development data)", async () => {
-    expect(await verifyDevicePassword("plain", "plain")).toBe(true);
-    expect(await verifyDevicePassword("wrong", "plain")).toBe(false);
-  });
-
-  test("still verifies legacy scrypt hashes", async () => {
-    // a scrypt hash produced by the previous format
-    const legacy = "scrypt$16384$8$1$LOsnxOhc1rl1+tUZZ4A4tA==$9HKjVYVzLwQcP0pV5d/3EqzG5K7aHsVt4h8UFAJqYFY=";
-    // verification against this exact blob must not throw; wrong password false
-    expect(await verifyDevicePassword("anything", legacy)).toBe(false);
-    // and a freshly computed scrypt hash still verifies
-    const { randomBytes, scrypt: scryptCb } = await import("node:crypto");
-    const { promisify } = await import("node:util");
-    const scrypt = promisify(scryptCb) as (p: string, s: Buffer, k: number, o: { N: number; r: number; p: number }) => Promise<Buffer>;
-    const salt = randomBytes(16);
-    const hash = await scrypt("pw", salt, 32, { N: 16384, r: 8, p: 1 });
-    const stored = `scrypt$16384$8$1$${salt.toString("base64")}$${hash.toString("base64")}`;
-    expect(await verifyDevicePassword("pw", stored)).toBe(true);
+  test("legacy formats are rejected (no scrypt/plaintext compatibility)", async () => {
+    expect(await verifyDevicePassword("plain", "plain")).toBe(false);
+    expect(await verifyDevicePassword("pw", "scrypt$16384$8$1$c2FsdA==$aGVsbG8=")).toBe(false);
+    expect(await verifyDevicePassword("pw", "$2b$10$abcdefghijklmnopqrstuv")).toBe(false);
+    expect(await verifyDevicePassword("pw", "")).toBe(false);
   });
 
   test("generateDevicePassword returns a strong random value", () => {

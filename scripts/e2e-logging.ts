@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { MqttTestClient } from "../packages/broker/tests/helpers/mqtt-client";
-import { encodeDeviceStat, prisma } from "@soulcloud/core";
+import { encodeDeviceStat, hashDevicePassword, prisma } from "@soulcloud/core";
 import { SlipDecoder } from "../packages/core/tests/helpers/slip";
 import { ON9LOG_FRAME_TYPE_ON9LOG } from "../packages/core/tests/helpers/slip";
 
@@ -58,7 +58,7 @@ const device = await prisma.device.create({
     id: randomUUID(),
     deviceUid: DEVICE_UID,
     assignedId: "e2e-log",
-    passwordHash: PASSWORD,
+    passwordHash: await hashDevicePassword(PASSWORD),
     projectId: project.id,
   },
 });

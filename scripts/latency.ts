@@ -7,7 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import mqtt from "mqtt";
-import { decodeDeviceCommandExecution, encodeDeviceCommandResult, prisma } from "@soulcloud/core";
+import { decodeDeviceCommandExecution, encodeDeviceCommandResult, hashDevicePassword, prisma } from "@soulcloud/core";
 
 const API = "http://localhost:8080";
 const MQTT_URL = "mqtt://127.0.0.1:1883";
@@ -22,7 +22,7 @@ const device = await prisma.device.create({
     id: randomUUID(),
     deviceUid: DEVICE_UID,
     assignedId: "lat-assigned",
-    passwordHash: PASSWORD,
+    passwordHash: await hashDevicePassword(PASSWORD),
     projectId: project.id,
   },
 });

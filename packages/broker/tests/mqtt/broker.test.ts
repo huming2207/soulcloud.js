@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { enqueueBatch, prisma } from "@soulcloud/core";
+import { enqueueBatch, hashDevicePassword, prisma } from "@soulcloud/core";
 import { MqttTestClient, type MqttTestClientOptions } from "../helpers/mqtt-client";
 import { startBroker, type BrokerHandle } from "../../src/mqtt/broker";
 import { attachDispatch } from "../../src/mqtt/dispatch";
@@ -39,7 +39,7 @@ beforeAll(async () => {
       id: randomUUID(),
       deviceUid: DEVICE_UID,
       assignedId: "assigned-mqtt",
-      passwordHash: DEVICE_PASSWORD, // plaintext until hashing is decided
+      passwordHash: await hashDevicePassword(DEVICE_PASSWORD),
       projectId,
     },
   });
