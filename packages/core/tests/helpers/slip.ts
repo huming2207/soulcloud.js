@@ -107,6 +107,8 @@ export class SlipDecoder {
           };
           const decoded = map[next];
           if (decoded === undefined) {
+            // consume the bad escape so the stream can resync
+            this.buf.splice(0, j + 2);
             throw new SlipParseError(`invalid SLIP escape 0xdb 0x${next.toString(16)}`);
           }
           if (type === null) {
@@ -129,6 +131,8 @@ export class SlipDecoder {
       const payload = Uint8Array.from(raw);
       // last two payload bytes are the little-endian CRC
       if (payload.length < 2) {
+        // consume the bad frame so the stream can resync
+        this.buf.splice(0, j + 1);
         throw new SlipParseError("SLIP frame payload too short (no CRC)");
       }
       const crcBytes = payload.subarray(payload.length - 2);

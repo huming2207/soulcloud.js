@@ -149,7 +149,7 @@ export class MqttTestClient extends EventEmitter {
     });
   }
 
-  /** Publishes a message (resolves after the broker acknowledges QoS 1). */
+  /** Publishes a message (resolves on send; no PUBACK tracking). */
   publish(topic: string, payload: Uint8Array, qos = 1): Promise<void> {
     return new Promise((resolve) => {
       const packetId = this.packetId++;
@@ -192,7 +192,7 @@ export class MqttTestClient extends EventEmitter {
   }
 
   /** Closes the connection (sends DISCONNECT, then closes the socket). */
-  end(_force = false): void {
+  end(): void {
     try {
       this.ws?.send(generate({ cmd: "disconnect" }));
     } catch {

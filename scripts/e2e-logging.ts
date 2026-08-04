@@ -111,7 +111,7 @@ try {
     await client.publish(`soulcloud/v1/devices/${DEVICE_UID}/log`, Buffer.from(packet), 1);
   }
   await new Promise((r) => setTimeout(r, 500));
-  client.end(true);
+  client.end();
 
   // --- 3. query the logs API ---------------------------------------------------
 

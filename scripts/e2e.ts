@@ -105,7 +105,7 @@ try {
   check("result code stored", row.resultCode === 0);
   check("result packet stored verbatim", Buffer.from(row.resultPacket!).equals(resultPacket));
 
-  client.end(true);
+  client.end();
 } finally {
   await prisma.$executeRaw`DELETE FROM command_batches`;
   await prisma.device.deleteMany({ where: { id: device.id } });

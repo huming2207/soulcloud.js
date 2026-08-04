@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ON9LOG_DIR="${1:-$HOME/Projects/on9log_demo/components/on9log}"
-OUT_DIR="${2:-/tmp}"
+OUT_DIR="${2:-$(dirname "$0")/../packages/core/tests/fixtures}"
 BUILD_DIR="$(mktemp -d)"
 
 echo "building on9log unix demo from $ON9LOG_DIR"
@@ -18,5 +18,6 @@ g++ -no-pie -pthread "$BUILD_DIR"/*.o -o "$OUT_DIR/on9log_unix_demo"
 echo "capturing SLIP output"
 "$OUT_DIR/on9log_unix_demo" > "$OUT_DIR/on9log_demo_output.bin" 2>/dev/null
 
+mkdir -p "$OUT_DIR"
 echo "fixtures ready:"
 ls -la "$OUT_DIR/on9log_unix_demo" "$OUT_DIR/on9log_demo_output.bin"

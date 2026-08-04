@@ -35,7 +35,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await prisma.$executeRaw`DELETE FROM command_batches`;
+  await prisma.deviceCommand.deleteMany({ where: { deviceId } });
+  await prisma.commandBatch.deleteMany({ where: { commands: { none: {} } } });
   await prisma.device.deleteMany({ where: { projectId } });
   await prisma.project.delete({ where: { id: projectId } });
   await prisma.$disconnect();
@@ -119,26 +120,23 @@ describe("M9: notifier reconnection", () => {
     // pg connections from this app (the dedicated LISTEN connection drops)
     await prisma.$executeRaw`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'pg' AND pid <> pg_backend_pid()`;
 
-    // wait for the reconnect (1s delay) then publish again
-    await new Promise((r) => setTimeout(r, 1500));
+    // wait for the notifier to reconnect (1s retry delay): poll until the
+    // original connection has been replaced, then publish again
     const before = wakeups.length;
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      // the reconnect creates a new LISTEN; we cannot observe it directly,
+      // so publish repeatedly until one lands (idempotent wakeups)
+      const publisher = new Client({ connectionString: process.env.DATABASE_URL });
+      await publisher.connect();
+      await publisher.query(`SELECT pg_notify($1, 'poll')`, [COMMAND_NOTIFY_CHANNEL]);
+      await publisher.end();
+      if (wakeups.length > before) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
     const publisher = new Client({ connectionString: process.env.DATABASE_URL });
     await publisher.connect();
-    await publisher.query(`SELECT pg_notify($1, 'after-reconnect')`, [COMMAND_NOTIFY_CHANNEL]);
-
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("no wake after reconnect")), 4000);
-      const check = setInterval(() => {
-        if (wakeups.length > before) {
-          clearTimeout(timer);
-          clearInterval(check);
-          resolve();
-        }
-      }, 50);
-    });
-
     expect(wakeups.length).toBeGreaterThan(before);
-    await publisher.end();
     await notifier.close();
   });
 });

@@ -31,14 +31,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await prisma.$executeRaw`DELETE FROM command_batches`;
+  await prisma.deviceCommand.deleteMany({ where: { deviceId: { in: deviceIds } } });
+  await prisma.commandBatch.deleteMany({ where: { commands: { none: {} } } });
   await prisma.device.deleteMany({ where: { projectId } });
   await prisma.project.delete({ where: { id: projectId } });
   await prisma.$disconnect();
 });
 
 beforeEach(async () => {
-  await prisma.$executeRaw`DELETE FROM command_batches`;
+  await prisma.deviceCommand.deleteMany({ where: { deviceId: { in: deviceIds } } });
+  await prisma.commandBatch.deleteMany({ where: { commands: { none: {} } } });
 });
 
 async function postBatch(body: unknown): Promise<Response> {

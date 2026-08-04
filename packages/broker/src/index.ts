@@ -1,7 +1,8 @@
 /**
  * Soulcloud MQTT broker process entry point.
  *
- * Embeds the Aedes MQTT broker (device-facing, TCP :1883), authenticates
+ * Embeds the Aedes MQTT broker (device-facing, MQTT over WebSocket;
+ * TLS termination is expected at the reverse proxy), authenticates
  * devices against the shared PostgreSQL database, routes device uplink
  * messages, and runs the durable command publication poller. It does not
  * expose a human-facing HTTP API (that is @soulcloud/api).

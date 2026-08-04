@@ -36,17 +36,49 @@ export function createLoggingRoutes(prisma: PrismaClient) {
 
     .post("/firmware-artifacts", async ({ request, set }) => {
       try {
-        // S5: reject oversized uploads by declared length BEFORE reading the
-        // body (formData() buffers the whole request in memory)
+        // S5: reject oversized uploads BEFORE buffering the body. For
+        // declared lengths this is a cheap header check; for chunked
+        // requests the body stream is read with a hard cap and aborted.
         const declared = request.headers.get("content-length");
-        if (declared && Number(declared) > MAX_ELF_BYTES + 64 * 1024) {
+        const limit = MAX_ELF_BYTES + 64 * 1024;
+        if (declared && Number(declared) > limit) {
           set.status = 413;
           return {
             error: "payload_too_large",
             message: `ELF exceeds ${MAX_ELF_BYTES} bytes`,
           };
         }
-        const form = await request.formData().catch(() => null);
+        let body: Uint8Array;
+        if (declared === null && request.body) {
+          // chunked: stream with a cap; abort (413) the moment it is passed
+          const reader = request.body.getReader();
+          const chunks: Uint8Array[] = [];
+          let total = 0;
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              total += value.byteLength;
+              if (total > limit) {
+                await reader.cancel();
+                set.status = 413;
+                return {
+                  error: "payload_too_large",
+                  message: `ELF exceeds ${MAX_ELF_BYTES} bytes`,
+                };
+              }
+              chunks.push(value);
+            }
+          } finally {
+            reader.releaseLock();
+          }
+          body = Buffer.concat(chunks);
+        } else {
+          body = new Uint8Array(await request.arrayBuffer());
+        }
+        const form = await new Response(body, {
+          headers: { "content-type": request.headers.get("content-type") ?? "multipart/form-data" },
+        }).formData().catch(() => null);
         if (!form) {
           set.status = 400;
           return { error: "invalid_request", message: "expected multipart/form-data" };

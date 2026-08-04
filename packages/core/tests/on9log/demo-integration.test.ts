@@ -13,20 +13,11 @@ import {
 } from "../../src/elf/parser";
 import { renderFormat } from "../../src/on9log/render";
 
-// Integration fixtures: captured output of the on9log Unix demo (checked in
-// under tests/fixtures) and its compiled ELF (regenerated with
-// scripts/build-on9log-fixtures.sh; skipped when absent).
+// Integration fixtures: captured output of the on9log Unix demo and its
+// compiled ELF, both checked in under tests/fixtures (regenerate with
+// scripts/build-on9log-fixtures.sh when the demo changes).
 const DEMO_OUTPUT = new URL("../fixtures/on9log_demo_output.bin", import.meta.url).pathname;
-const DEMO_ELF = "/tmp/on9log_unix_demo";
-
-const hasFixtures = (() => {
-  try {
-    readFileSync(DEMO_ELF);
-    return true;
-  } catch {
-    return false;
-  }
-})();
+const DEMO_ELF = new URL("../fixtures/on9log_unix_demo", import.meta.url).pathname;
 
 describe("SLIP framing against real demo output", () => {
   const decoder = new SlipDecoder();
@@ -34,7 +25,6 @@ describe("SLIP framing against real demo output", () => {
   let packets: ReturnType<typeof parseOn9logPacket>[] = [];
 
   test("decodes SLIP frames and on9log packets", () => {
-    if (!hasFixtures) return; // fixtures missing: skip
     decoder.push(readFileSync(DEMO_OUTPUT));
     frames = decoder.frames();
     expect(frames.length).toBeGreaterThan(5);
@@ -49,7 +39,6 @@ describe("SLIP framing against real demo output", () => {
   });
 
   test("CRC matches the documented algorithm", () => {
-    if (!hasFixtures) return;
     const frame = frames.find((f) => f.type === ON9LOG_FRAME_TYPE_ON9LOG);
     expect(frame).toBeDefined();
     // recompute: crc over type byte + payload, init 0xffff
@@ -71,7 +60,6 @@ describe("ELF parsing against real demo ELF", () => {
   let data: Uint8Array;
 
   test("parses the ELF header and sections", () => {
-    if (!hasFixtures) return;
     data = readFileSync(DEMO_ELF);
     elf = parseElf(data);
     expect(elf.bits).toBe(64);
@@ -81,7 +69,6 @@ describe("ELF parsing against real demo ELF", () => {
   });
 
   test("extracts strings from .noload_keep_in_elf.* sections", () => {
-    if (!hasFixtures) return;
     const noload = elf.sections.filter((s) => s.name.startsWith(".noload_keep_in_elf"));
     expect(noload.length).toBeGreaterThan(0);
     const all: string[] = [];
@@ -96,7 +83,6 @@ describe("ELF parsing against real demo ELF", () => {
   });
 
   test("resolves tag/format addresses from a parsed packet", () => {
-    if (!hasFixtures) return;
     const decoder = new SlipDecoder();
     decoder.push(readFileSync(DEMO_OUTPUT));
     const frames = decoder.frames();
@@ -110,7 +96,6 @@ describe("ELF parsing against real demo ELF", () => {
       })
       .find((p) => p !== null && p.header.type === On9logPacketType.Log)!;
 
-    if (packet === undefined) return; // no LOG packets captured
     expect(packet.header.tagId).toBeGreaterThan(0);
     expect(packet.header.fmtId).toBeGreaterThan(0);
 
@@ -123,7 +108,6 @@ describe("ELF parsing against real demo ELF", () => {
   });
 
   test("renders a decoded log line end-to-end", () => {
-    if (!hasFixtures) return;
     const decoder = new SlipDecoder();
     decoder.push(readFileSync(DEMO_OUTPUT));
     const frames = decoder.frames();

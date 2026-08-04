@@ -177,15 +177,12 @@ async function handleLog(
   log: DispatchLog,
 ): Promise<void> {
   try {
-    const device = await prisma.device.findUnique({
-      where: { deviceUid },
-      select: { id: true },
-    });
-    if (!device) {
+    const deviceId = await resolveDeviceId(prisma, deviceUid);
+    if (!deviceId) {
       log.warn("ignored log from unknown device", { deviceUid });
       return;
     }
-    const outcome = await ingestLogPacket(prisma, device.id, payload);
+    const outcome = await ingestLogPacket(prisma, deviceId, payload);
     log.debug("stored device log packet", {
       deviceUid,
       eventId: outcome.eventId?.toString(),

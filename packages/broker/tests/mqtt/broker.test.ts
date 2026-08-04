@@ -51,16 +51,23 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await broker.close();
-  await prisma.$executeRaw`DELETE FROM command_batches`;
+  await prisma.deviceCommand.deleteMany({
+    where: { device: { deviceUid: DEVICE_UID } },
+  });
+  await prisma.commandBatch.deleteMany({ where: { commands: { none: {} } } });
   await prisma.device.deleteMany({ where: { projectId } });
   await prisma.project.delete({ where: { id: projectId } });
   await prisma.$disconnect();
 });
 
-// Each test starts with an empty command queue (previous tests may leave
-// broker_accepted rows that would block new commands for the same device).
+// Each test starts with an empty command queue for THIS test's device
+// (previous tests may leave broker_accepted rows that would block new
+// commands; scoping avoids touching other test files' rows).
 beforeEach(async () => {
-  await prisma.$executeRaw`DELETE FROM command_batches`;
+  await prisma.deviceCommand.deleteMany({
+    where: { device: { deviceUid: DEVICE_UID } },
+  });
+  await prisma.commandBatch.deleteMany({ where: { commands: { none: {} } } });
 });
 
 function connectDevice(overrides: Partial<MqttTestClientOptions> = {}): MqttTestClient {
@@ -125,7 +132,7 @@ describe("device authentication", () => {
   test("accepts valid credentials", async () => {
     const device = connectDevice();
     await waitForConnect(device);
-    device.end(true);
+    device.end();
   });
 
   test("rejects wrong password", async () => {
@@ -148,7 +155,7 @@ describe("topic authorization", () => {
     const device = connectDevice();
     await waitForConnect(device);
     await device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
-    device.end(true);
+    device.end();
   });
 
   test("device cannot subscribe to another device's topic", async () => {
@@ -161,7 +168,7 @@ describe("topic authorization", () => {
     });
     await device.subscribe("soulcloud/v1/devices/other-dev/cmd/exec").catch(() => {});
     expect(await disconnected).toBe(true);
-    device.end(true);
+    device.end();
   });
 
   test("device cannot subscribe to its own uplink topics (no echo)", async () => {
@@ -173,7 +180,7 @@ describe("topic authorization", () => {
     });
     await device.subscribe(`soulcloud/v1/devices/${DEVICE_UID}/log`).catch(() => {});
     expect(await disconnected).toBe(true);
-    device.end(true);
+    device.end();
   });
 
   test("device cannot publish to its own downlink topic", async () => {
@@ -185,7 +192,7 @@ describe("topic authorization", () => {
     });
     await device.publish(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`, Buffer.from("x"), 0);
     expect(await disconnected).toBe(true);
-    device.end(true);
+    device.end();
   });
 });
 
@@ -227,7 +234,7 @@ describe("command delivery loop", () => {
     expect(updated.state).toBe("broker_accepted");
     expect(updated.brokerAcceptedAt).not.toBeNull();
 
-    device.end(true);
+    device.end();
   });
 
   test("device result completes the command end-to-end", async () => {
@@ -273,7 +280,7 @@ describe("command delivery loop", () => {
     expect(completed.resultCode).toBe(0);
     expect(completed.resultPacket).toEqual(resultPacket);
 
-    device.end(true);
+    device.end();
   });
 
   test("full loop: enqueue -> publish -> device result -> completed", async () => {
@@ -321,7 +328,7 @@ describe("command delivery loop", () => {
     expect(completed.resultCode).toBe(0);
     expect(completed.resultPacket).toEqual(resultPacket);
 
-    device.end(true);
+    device.end();
   });
 });
 
@@ -353,7 +360,7 @@ describe("log/stat uplink ingestion", () => {
     await prisma.rawLogEvent.deleteMany({
       where: { device: { deviceUid: DEVICE_UID } },
     });
-    device.end(true);
+    device.end();
   });
 
   test("invalid log packets are dropped without storage", async () => {
@@ -376,7 +383,7 @@ describe("log/stat uplink ingestion", () => {
       where: { device: { deviceUid: DEVICE_UID } },
     });
     expect(after).toBe(before);
-    device.end(true);
+    device.end();
   });
 
   test("stat updates the device firmware state", async () => {
@@ -433,7 +440,7 @@ describe("log/stat uplink ingestion", () => {
     await prisma.deviceFirmwareState.deleteMany({
       where: { device: { deviceUid: DEVICE_UID } },
     });
-    device.end(true);
+    device.end();
   });
 });
 
@@ -486,7 +493,7 @@ describe("WS-specific behavior", () => {
     const client = new MqttTestClient(BROKER_URL, { clientId: uid, username: uid, password: "hashed-pw" });
     void client.connect().catch(() => {});
     await waitForConnect(client);
-    client.end(true);
+    client.end();
     await prisma.device.deleteMany({ where: { deviceUid: uid } });
   });
 });
