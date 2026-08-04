@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
-import { COMMAND_NOTIFY_CHANNEL, enqueueBatch, prisma } from "@soulcloud/core";
-import { startCommandNotifier } from "../../src/mqtt/notify";
+import { COMMAND_NOTIFY_CHANNEL, CREDENTIAL_REVOKED_CHANNEL, enqueueBatch, prisma } from "@soulcloud/core";
+import { startNotifier } from "../../src/mqtt/notify";
 
 // Integration test for the LISTEN/NOTIFY wake-up.
 // Requires: docker compose up -d postgres && bunx prisma migrate deploy
@@ -45,9 +45,9 @@ afterAll(async () => {
 describe("command notifier", () => {
   test("receives a notification published by another connection", async () => {
     const wakeups: string[] = [];
-    const notifier = await startCommandNotifier(
+    const notifier = await startNotifier(
       process.env.DATABASE_URL!,
-      () => wakeups.push("wake"),
+      { onCommand: () => wakeups.push("wake"), onCredentialRevoked: () => {} },
       silentLog,
     );
     notifierClose = notifier.close;
@@ -78,9 +78,9 @@ describe("command notifier", () => {
 
   test("enqueueBatch wakes the notifier after commit", async () => {
     const wakeups: string[] = [];
-    const notifier = await startCommandNotifier(
+    const notifier = await startNotifier(
       process.env.DATABASE_URL!,
-      () => wakeups.push("wake"),
+      { onCommand: () => wakeups.push("wake"), onCredentialRevoked: () => {} },
       silentLog,
     );
     notifierClose = notifier.close;
@@ -109,9 +109,9 @@ describe("command notifier", () => {
 describe("M9: notifier reconnection", () => {
   test("recovers after the connection is killed", async () => {
     const wakeups: string[] = [];
-    const notifier = await startCommandNotifier(
+    const notifier = await startNotifier(
       process.env.DATABASE_URL!,
-      () => wakeups.push("wake"),
+      { onCommand: () => wakeups.push("wake"), onCredentialRevoked: () => {} },
       silentLog,
     );
     await new Promise((r) => setTimeout(r, 100));

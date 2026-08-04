@@ -29,6 +29,22 @@ import { startWsBroker, type WsBrokerHandle } from "./ws-adapter";
 /** Delay before answering a failed authentication attempt. */
 const AUTH_FAIL_DELAY_MS = 100;
 
+/**
+ * Kills a device's live MQTT session (credential revocation).
+ *
+ * aedes exposes `clients` as a plain object keyed by clientId; with the
+ * S1/S2 identity binding the clientId IS the device UID. The client's
+ * `close()` tears down the connection; on reconnect the revoked credential
+ * is refused by authenticate.
+ */
+export function kickDeviceSession(aedes: Aedes, deviceUid: string): boolean {
+  const clients = (aedes as unknown as { clients?: Record<string, Client> }).clients;
+  const client = clients?.[deviceUid];
+  if (!client) return false; // not connected
+  client.close();
+  return true;
+}
+
 /** Absolute upper bound for a device publish (MQTT spec allows 256MB; the
  * dispatch layer applies the configurable UPLINK_MAX_PACKET_BYTES limit,
  * this is the early-reject ceiling before dispatch runs). */

@@ -135,8 +135,9 @@ POST /v1/devices/:id/credentials/revoke       refuse new connections
 ```
 
 - device connects with `username = device_uid` (clientId MUST equal it) and
-  the issued password; revocation refuses new connections (an open session
-  keeps running until disconnect)
+  the issued password; revocation refuses new connections AND kills the
+  device's live session (API -> PostgreSQL NOTIFY -> broker kicks the
+  Aedes client; if the notification is lost, reconnect is still refused)
 - passwords (human + device) are argon2id via Bun.password; legacy scrypt /
   plaintext hashes still verify for development data
 

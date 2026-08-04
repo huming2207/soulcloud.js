@@ -18,6 +18,7 @@ import {
   ArtifactImportError,
   backfillDecodeState,
   computeBuildId,
+  CREDENTIAL_REVOKED_CHANNEL,
   decodeEventsBatch,
   generateDevicePassword,
   hashPassword,
@@ -386,7 +387,7 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
         }
         const device = await prisma.device.findUnique({
           where: { id: deviceId.data },
-          select: { projectId: true },
+          select: { projectId: true, deviceUid: true },
         });
         if (!device) {
           set.status = 404;
@@ -396,11 +397,17 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 403;
           return { error: "forbidden", message: "not a member of this device's project" };
         }
-        await prisma.device.update({
-          where: { id: deviceId.data },
-          data: { authRevoked: true },
-        });
-        return { device_id: deviceId.data, revoked: true };
+        // revoke + wake the broker so the device's LIVE session is killed
+        // (not just refused on reconnect); pg_notify inside the transaction
+        // is delivered only after commit
+        await prisma.$transaction([
+          prisma.device.update({
+            where: { id: deviceId.data },
+            data: { authRevoked: true },
+          }),
+          prisma.$executeRaw`SELECT pg_notify(${CREDENTIAL_REVOKED_CHANNEL}, ${device.deviceUid})`,
+        ]);
+        return { device_id: deviceId.data, revoked: true, session_killed: true };
       } catch (error) {
         return handleApiError(error, set);
       }

@@ -1,9 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { enqueueBatch, hashDevicePassword, prisma } from "@soulcloud/core";
+import {
+  CREDENTIAL_REVOKED_CHANNEL,
+  enqueueBatch,
+  hashDevicePassword,
+  prisma,
+} from "@soulcloud/core";
 import { MqttTestClient, type MqttTestClientOptions } from "../helpers/mqtt-client";
-import { startBroker, type BrokerHandle } from "../../src/mqtt/broker";
+import { kickDeviceSession, startBroker, type BrokerHandle } from "../../src/mqtt/broker";
 import { attachDispatch } from "../../src/mqtt/dispatch";
+import { startNotifier, type Notifier } from "../../src/mqtt/notify";
 import { pollOnce } from "../../src/mqtt/publish";
 import {
   decodeDeviceCommandExecution,
@@ -26,6 +32,7 @@ const silentLog = {
 };
 
 let broker: BrokerHandle;
+let notifier: Notifier;
 let projectId: string;
 let deviceId: string;
 
@@ -47,9 +54,21 @@ beforeAll(async () => {
 
   broker = await startBroker(prisma, { port: BROKER_PORT });
   attachDispatch(broker.aedes, prisma, silentLog);
+  // production wiring: revocation notifications kill live sessions
+  notifier = await startNotifier(
+    process.env.DATABASE_URL!,
+    {
+      onCommand: () => {},
+      onCredentialRevoked: (deviceUid) => {
+        kickDeviceSession(broker.aedes, deviceUid);
+      },
+    },
+    silentLog,
+  );
 });
 
 afterAll(async () => {
+  await notifier.close();
   await broker.close();
   await prisma.deviceCommand.deleteMany({
     where: { device: { deviceUid: DEVICE_UID } },
@@ -549,6 +568,65 @@ describe("G group: device credential revocation", () => {
     void client.connect().catch(() => {});
     await waitForConnect(client);
     client.end();
+    await prisma.device.deleteMany({ where: { deviceUid: uid } });
+  });
+});
+
+
+describe("G group: credential revocation kills live sessions", () => {
+  test("a connected device is disconnected when its credentials are revoked", async () => {
+    const { startNotifier } = await import("../../src/mqtt/notify");
+    const uid = `kill-${randomUUID().slice(0, 8)}`;
+    await prisma.device.create({
+      data: {
+        id: randomUUID(),
+        deviceUid: uid,
+        assignedId: "kill",
+        passwordHash: await hashDevicePassword("pw-123"),
+        projectId,
+      },
+    });
+
+    // connect a real device over WS
+    const client = new MqttTestClient(BROKER_URL, {
+      clientId: uid,
+      username: uid,
+      password: "pw-123",
+    });
+    void client.connect().catch(() => {});
+    await new Promise<void>((resolve, reject) => {
+      client.once("connect", () => resolve());
+      client.once("error", reject);
+      setTimeout(() => reject(new Error("connect timeout")), 5000);
+    });
+
+    // listen for the revocation notification
+    const revoked: string[] = [];
+    const notifier = await startNotifier(
+      process.env.DATABASE_URL!,
+      { onCommand: () => {}, onCredentialRevoked: (d) => revoked.push(d) },
+      silentLog,
+    );
+    await new Promise((r) => setTimeout(r, 100));
+
+    // revoke via the database + notify (the API endpoint does exactly this)
+    await prisma.$transaction([
+      prisma.device.update({ where: { deviceUid: uid }, data: { authRevoked: true } }),
+      prisma.$executeRaw`SELECT pg_notify(${CREDENTIAL_REVOKED_CHANNEL}, ${uid})`,
+    ]);
+
+    // the live session must be killed
+    const disconnected = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), 4000);
+      client.once("close", () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+    expect(disconnected).toBe(true);
+    expect(revoked).toContain(uid);
+
+    await notifier.close();
     await prisma.device.deleteMany({ where: { deviceUid: uid } });
   });
 });

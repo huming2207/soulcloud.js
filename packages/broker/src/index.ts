@@ -9,10 +9,10 @@
  */
 
 import { prisma } from "@soulcloud/core";
-import { startBroker } from "./mqtt/broker";
+import { kickDeviceSession, startBroker } from "./mqtt/broker";
 import { attachDispatch } from "./mqtt/dispatch";
 import { startCommandPoller } from "./mqtt/publish";
-import { startCommandNotifier } from "./mqtt/notify";
+import { startNotifier } from "./mqtt/notify";
 import { loadBrokerConfig } from "./config";
 
 const config = loadBrokerConfig();
@@ -49,8 +49,19 @@ const poller = startCommandPoller(
   logger,
 );
 // Wake the poller immediately when the API process enqueues commands
-// (lossy hint; the poll interval remains the correctness fallback).
-const notifier = await startCommandNotifier(config.DATABASE_URL, () => poller.wake(), logger);
+// (lossy hint; the poll interval remains the correctness fallback) and
+// kill live sessions when credentials are revoked.
+const notifier = await startNotifier(
+  config.DATABASE_URL,
+  {
+    onCommand: () => poller.wake(),
+    onCredentialRevoked: (deviceUid) => {
+      const kicked = kickDeviceSession(aedes, deviceUid);
+      logger.info("revoked device session", { deviceUid, kicked });
+    },
+  },
+  logger,
+);
 console.log(
   `[soulcloud-broker] MQTT broker listening on ws://0.0.0.0:${config.MQTT_BROKER_PORT}${config.MQTT_BROKER_PATH}`,
 );

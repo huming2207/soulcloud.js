@@ -14,3 +14,7 @@
  */
 
 export const COMMAND_NOTIFY_CHANNEL = "soulcloud_commands";
+
+
+/** Wake-up channel for device credential revocation (session kill). */
+export const CREDENTIAL_REVOKED_CHANNEL = "soulcloud_credentials_revoked";

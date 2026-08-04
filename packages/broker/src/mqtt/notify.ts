@@ -1,17 +1,27 @@
 /**
- * PostgreSQL LISTEN/NOTIFY wake-up listener for the broker process.
+ * PostgreSQL LISTEN/NOTIFY listener for the broker process.
  *
- * A dedicated pg connection LISTENs on the command channel. Every
- * notification triggers the poller to run immediately instead of waiting
- * for the next poll interval. The notification is a lossy hint: the poller
- * always recovers work from the durable `device_commands` rows, so a
- * dropped notification only costs latency, never correctness.
+ * One dedicated pg connection LISTENs on multiple channels:
+ *
+ *   - `soulcloud_commands`: lossy wake-up for the command poller (the
+ *     poller always recovers from the durable rows; a dropped notification
+ *     only costs latency)
+ *   - `soulcloud_credentials_revoked`: device session kill (payload is the
+ *     device UID); if it is dropped, the revocation still refuses
+ *     reconnects, so a live session may outlive the revoke until it
+ *     disconnects - correctness is preserved, only immediacy is lost
+ *
+ * The connection reconnects automatically after failures (LISTEN state is
+ * re-established). Callbacks must never throw.
  */
 
 import { Client } from "pg";
-import { COMMAND_NOTIFY_CHANNEL } from "@soulcloud/core";
+import {
+  COMMAND_NOTIFY_CHANNEL,
+  CREDENTIAL_REVOKED_CHANNEL,
+} from "@soulcloud/core";
 
-export interface CommandNotifier {
+export interface Notifier {
   /** Stops listening and closes the connection. */
   close: () => Promise<void>;
 }
@@ -21,22 +31,27 @@ export interface NotifierLog {
   info: (msg: string, fields?: Record<string, unknown>) => void;
 }
 
+export interface NotifierHandlers {
+  /** Called for every command-channel notification (payload = batch id). */
+  onCommand: (batchId: string | null) => void;
+  /** Called for every credential-revocation notification (payload = device UID). */
+  onCredentialRevoked: (deviceUid: string) => void;
+}
+
 const RECONNECT_DELAY_MS = 1000;
 
 /**
- * Starts listening for command notifications.
+ * Starts listening for notifications on the broker channels.
  *
- * The connection reconnects automatically after failures (LISTEN state is
- * re-established). The wake-up callback must never throw.
+ * A pg Client cannot be re-connected after an error; each reconnect
+ * creates a fresh Client (the previous one is ended first).
  */
-export async function startCommandNotifier(
+export async function startNotifier(
   databaseUrl: string,
-  onWakeup: () => void,
+  handlers: NotifierHandlers,
   log: NotifierLog,
-): Promise<CommandNotifier> {
+): Promise<Notifier> {
   let closed = false;
-  // M9: a pg Client cannot be re-connected after an error; each reconnect
-  // creates a fresh Client (the previous one is ended first).
   let client: Client | null = null;
 
   async function listen(): Promise<void> {
@@ -47,13 +62,20 @@ export async function startCommandNotifier(
         log.info("command notification received", {
           batchId: message.payload ?? undefined,
         });
-        onWakeup();
+        handlers.onCommand(message.payload ?? null);
+      } else if (message.channel === CREDENTIAL_REVOKED_CHANNEL) {
+        if (message.payload) {
+          log.info("credential revocation notification received", {
+            deviceUid: message.payload,
+          });
+          handlers.onCredentialRevoked(message.payload);
+        }
       }
     });
 
     // a broken connection emits 'error' then 'end'; schedule a fresh listen
     c.on("error", (error) => {
-      log.warn("command notify connection error; will reconnect", {
+      log.warn("notify connection error; will reconnect", {
         error: error.message,
       });
       void c.end().catch(() => {});
@@ -61,9 +83,13 @@ export async function startCommandNotifier(
     });
 
     await c.connect();
+    // PostgreSQL LISTEN accepts one channel per statement
     await c.query(`LISTEN ${COMMAND_NOTIFY_CHANNEL}`);
+    await c.query(`LISTEN ${CREDENTIAL_REVOKED_CHANNEL}`);
     client = c;
-    log.info(`listening for command notifications on "${COMMAND_NOTIFY_CHANNEL}"`);
+    log.info(
+      `listening for notifications on "${COMMAND_NOTIFY_CHANNEL}" and "${CREDENTIAL_REVOKED_CHANNEL}"`,
+    );
   }
 
   async function scheduleReconnect(): Promise<void> {
@@ -73,7 +99,7 @@ export async function startCommandNotifier(
     try {
       await listen();
     } catch (error) {
-      log.warn("command notify reconnect failed; retrying", {
+      log.warn("notify reconnect failed; retrying", {
         error: (error as Error).message,
       });
       void scheduleReconnect();
