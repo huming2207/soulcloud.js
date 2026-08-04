@@ -497,3 +497,58 @@ describe("WS-specific behavior", () => {
     await prisma.device.deleteMany({ where: { deviceUid: uid } });
   });
 });
+
+describe("G group: device credential revocation", () => {
+  test("revoked devices are refused at CONNECT", async () => {
+    // create a device, mark it revoked, attempt connection
+    const uid = `revoked-${randomUUID().slice(0, 8)}`;
+    const { hashDevicePassword } = await import("@soulcloud/core");
+    const hash = await hashDevicePassword("pw-123");
+    await prisma.device.create({
+      data: {
+        id: randomUUID(),
+        deviceUid: uid,
+        assignedId: "revoked",
+        passwordHash: hash,
+        authRevoked: true,
+        projectId,
+      },
+    });
+    const client = new MqttTestClient(BROKER_URL, { clientId: uid, username: uid, password: "pw-123" });
+    void client.connect().catch(() => {});
+    const outcome = await new Promise<string>((resolve) => {
+      client.once("connect", () => resolve("connected"));
+      client.once("error", (err: Error) => resolve(`error: ${err.message}`));
+      setTimeout(() => resolve("timeout"), 5000);
+    });
+    expect(outcome.startsWith("error")).toBe(true);
+    await prisma.device.deleteMany({ where: { deviceUid: uid } });
+  });
+
+  test("re-issued credentials connect again", async () => {
+    const uid = `reissue-${randomUUID().slice(0, 8)}`;
+    const { hashDevicePassword } = await import("@soulcloud/core");
+    const hash = await hashDevicePassword("pw-123");
+    await prisma.device.create({
+      data: {
+        id: randomUUID(),
+        deviceUid: uid,
+        assignedId: "reissue",
+        passwordHash: hash,
+        authRevoked: true,
+        projectId,
+      },
+    });
+    // revoke cleared by re-issue (new hash)
+    const newHash = await hashDevicePassword("pw-new");
+    await prisma.device.update({
+      where: { deviceUid: uid },
+      data: { passwordHash: newHash, authRevoked: false },
+    });
+    const client = new MqttTestClient(BROKER_URL, { clientId: uid, username: uid, password: "pw-new" });
+    void client.connect().catch(() => {});
+    await waitForConnect(client);
+    client.end();
+    await prisma.device.deleteMany({ where: { deviceUid: uid } });
+  });
+});

@@ -8,6 +8,12 @@
  */
 
 import { z } from "zod";
+import {
+  verifyAccessToken,
+  type AccessTokenPayload,
+  type JwtConfig,
+  type PrismaClient,
+} from "@soulcloud/core";
 
 /** UUID path/query parameter. */
 export const UuidParam = z.string().uuid();
@@ -60,4 +66,45 @@ export function parseQueryParam<T>(
     return null;
   }
   return result.data;
+}
+
+
+/**
+ * Extracts the Bearer access token from a request; returns null when absent
+ * or invalid (the caller decides the status mapping).
+ */
+export async function authenticateRequest(
+  prisma: PrismaClient,
+  jwt: JwtConfig,
+  request: Request,
+): Promise<{ user: { id: string; username: string } } | null> {
+  const header = request.headers.get("authorization");
+  if (!header?.startsWith("Bearer ")) return null;
+  const token = header.slice("Bearer ".length).trim();
+  if (!token) return null;
+  let payload: AccessTokenPayload;
+  try {
+    payload = await verifyAccessToken(jwt, token);
+  } catch {
+    return null;
+  }
+  const user = await prisma.user.findUnique({
+    where: { id: payload.sub },
+    select: { id: true, username: true },
+  });
+  if (!user) return null;
+  return { user };
+}
+
+/** Checks that a user can access a project (personal project membership). */
+export async function userCanAccessProject(
+  prisma: PrismaClient,
+  userId: string,
+  projectId: string,
+): Promise<boolean> {
+  const link = await prisma.userProject.findUnique({
+    where: { userId_projectId: { userId, projectId } },
+    select: { userId: true },
+  });
+  return link !== null;
 }

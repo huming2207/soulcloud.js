@@ -19,23 +19,33 @@ import {
   backfillDecodeState,
   computeBuildId,
   decodeEventsBatch,
+  generateDevicePassword,
+  hashPassword,
   importArtifact,
   MAX_ELF_BYTES,
+  type JwtConfig,
   type PrismaClient,
 } from "@soulcloud/core";
 import {
   CursorParam,
   LimitParam,
   UuidParam,
+  authenticateRequest,
   handleApiError,
+  userCanAccessProject,
 } from "./validate";
 
-export function createLoggingRoutes(prisma: PrismaClient) {
+export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
   return new Elysia({ prefix: "/v1" })
     // --- firmware artifacts ------------------------------------------------
 
     .post("/firmware-artifacts", async ({ request, set }) => {
       try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
         // S5: reject oversized uploads BEFORE buffering the body. For
         // declared lengths this is a cheap header check; for chunked
         // requests the body stream is read with a hard cap and aborted.
@@ -105,6 +115,10 @@ export function createLoggingRoutes(prisma: PrismaClient) {
           set.status = 404;
           return { error: "project_not_found", message: "project does not exist" };
         }
+        if (!(await userCanAccessProject(prisma, authUser.user.id, projectId.data))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this project" };
+        }
 
         const elf = new Uint8Array(await (file as File).arrayBuffer());
         const buildId = computeBuildId(elf);
@@ -151,8 +165,13 @@ export function createLoggingRoutes(prisma: PrismaClient) {
       }
     })
 
-    .get("/firmware-artifacts", async ({ query, set }) => {
+    .get("/firmware-artifacts", async ({ query, request, set }) => {
       try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
         const projectId = UuidParam.safeParse(String(query.project_id ?? ""));
         if (!projectId.success) {
           set.status = 400;
@@ -195,8 +214,13 @@ export function createLoggingRoutes(prisma: PrismaClient) {
 
     // --- log query with on-demand decoding --------------------------------
 
-    .get("/devices/:deviceId/logs", async ({ params, query, set }) => {
+    .get("/devices/:deviceId/logs", async ({ params, query, request, set }) => {
       try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
         const deviceId = UuidParam.safeParse(String(params.deviceId ?? ""));
         if (!deviceId.success) {
           set.status = 400;
@@ -220,11 +244,15 @@ export function createLoggingRoutes(prisma: PrismaClient) {
 
         const device = await prisma.device.findUnique({
           where: { id: deviceId.data },
-          select: { id: true },
+          select: { id: true, projectId: true },
         });
         if (!device) {
           set.status = 404;
           return { error: "device_not_found", message: "device does not exist" };
+        }
+        if (!(await userCanAccessProject(prisma, authUser.user.id, device.projectId))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this device's project" };
         }
 
         const events = await prisma.rawLogEvent.findMany({
@@ -260,8 +288,13 @@ export function createLoggingRoutes(prisma: PrismaClient) {
 
     // --- device firmware state ---------------------------------------------
 
-    .get("/devices/:deviceId/firmware-state", async ({ params, set }) => {
+    .get("/devices/:deviceId/firmware-state", async ({ params, request, set }) => {
       try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
         const deviceId = UuidParam.safeParse(String(params.deviceId ?? ""));
         if (!deviceId.success) {
           set.status = 400;
@@ -294,8 +327,92 @@ export function createLoggingRoutes(prisma: PrismaClient) {
       }
     })
 
-    .post("/devices/:deviceId/firmware-state", async ({ params, body, set }) => {
+    // --- device credentials (G group: MQTT per-session auth) ---------------
+
+    .post("/devices/:deviceId/credentials", async ({ params, request, set }) => {
       try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
+        const deviceId = UuidParam.safeParse(String(params.deviceId ?? ""));
+        if (!deviceId.success) {
+          set.status = 400;
+          return { error: "invalid_request", message: "deviceId must be a UUID" };
+        }
+        const device = await prisma.device.findUnique({
+          where: { id: deviceId.data },
+          select: { projectId: true, deviceUid: true },
+        });
+        if (!device) {
+          set.status = 404;
+          return { error: "device_not_found", message: "device does not exist" };
+        }
+        if (!(await userCanAccessProject(prisma, authUser.user.id, device.projectId))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this device's project" };
+        }
+        // issue fresh credentials (the device_uid stays the MQTT username;
+        // the password is returned exactly once)
+        const password = generateDevicePassword();
+        const passwordHash = await hashPassword(password);
+        await prisma.device.update({
+          where: { id: deviceId.data },
+          data: { passwordHash, authRevoked: false },
+        });
+        return {
+          device_id: deviceId.data,
+          mqtt_username: device.deviceUid,
+          mqtt_password: password,
+          note: "the password is shown only once; the device must store it",
+        };
+      } catch (error) {
+        return handleApiError(error, set);
+      }
+    })
+
+    .post("/devices/:deviceId/credentials/revoke", async ({ params, request, set }) => {
+      try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
+        const deviceId = UuidParam.safeParse(String(params.deviceId ?? ""));
+        if (!deviceId.success) {
+          set.status = 400;
+          return { error: "invalid_request", message: "deviceId must be a UUID" };
+        }
+        const device = await prisma.device.findUnique({
+          where: { id: deviceId.data },
+          select: { projectId: true },
+        });
+        if (!device) {
+          set.status = 404;
+          return { error: "device_not_found", message: "device does not exist" };
+        }
+        if (!(await userCanAccessProject(prisma, authUser.user.id, device.projectId))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this device's project" };
+        }
+        await prisma.device.update({
+          where: { id: deviceId.data },
+          data: { authRevoked: true },
+        });
+        return { device_id: deviceId.data, revoked: true };
+      } catch (error) {
+        return handleApiError(error, set);
+      }
+    })
+
+    .post("/devices/:deviceId/firmware-state", async ({ params, body, request, set }) => {
+      try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
         const deviceId = UuidParam.safeParse(String(params.deviceId ?? ""));
         if (!deviceId.success) {
           set.status = 400;

@@ -21,8 +21,40 @@ model User {
   /// CHECK users_email_not_blank: btrim(email) <> ''
   email        String              @unique @db.VarChar(254)
   memberships  OrganisationUser[]
+  projects     UserProject[]
+  refreshTokens RefreshToken[]
 
   @@map("users")
+}
+
+/// Refresh tokens (server-side, revocable). Only the SHA-256 of the token
+/// is stored; rotation chains are tracked for reuse detection.
+model RefreshToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique @map("token_hash") @db.VarChar(64)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz()
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz()
+  /// id of the token this one rotated from (reuse detection chain)
+  rotatedFrom String?   @map("rotated_from") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+/// Direct user -> project membership (personal projects; organisations
+/// remain a future multi-tenant layer).
+model UserProject {
+  userId    String  @map("user_id") @db.Uuid
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String  @map("project_id") @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([userId, projectId], map: "user_projects_pkey")
+  @@index([projectId])
+  @@map("user_projects")
 }
 
 model Organisation {
@@ -44,6 +76,7 @@ model Project {
   orgLinks     OrganisationProject[]
   devices      Device[]
   artifacts    FirmwareArtifact[]
+  userLinks    UserProject[]
 
   @@map("projects")
 }
@@ -58,6 +91,8 @@ model Device {
   assignedId       String           @map("assigned_id") @db.VarChar(128)
   /// CHECK devices_password_hash_not_blank: btrim(password_hash) <> ''
   passwordHash     String           @map("password_hash") @db.Text
+  /// Revoked credentials: new MQTT connections are refused until re-issued
+  authRevoked      Boolean          @default(false) @map("auth_revoked")
   projectId        String           @map("project_id") @db.Uuid
   project          Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
   /// CHECK devices_next_command_sequence_positive: next_command_sequence > 0

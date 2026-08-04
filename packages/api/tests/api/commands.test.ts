@@ -3,18 +3,52 @@ import { randomUUID } from "node:crypto";
 import { prisma, type PrismaClient } from "@soulcloud/core";
 import { createApp } from "../../src/api/app";
 
+// G group: the command API requires a logged-in user (JWT access token).
+const TEST_JWT = {
+  secret: "test-secret-0123456789-0123456789-0123456789",
+  accessTtlSeconds: 3600,
+  refreshTtlSeconds: 3600,
+};
+
 // API integration tests against the local development PostgreSQL.
 // Requires: docker compose up -d postgres && bunx prisma migrate deploy
 
-const app = createApp(prisma);
+const app = createApp(prisma, TEST_JWT);
 
 let projectId: string;
+let accessToken = "";
 const deviceIds: string[] = [];
+
+/** Registers a fresh user and returns their access token. */
+async function registerUser(): Promise<{ userId: string; accessToken: string }> {
+  const username = `cmd-user-${randomUUID().slice(0, 8)}`;
+  const res = await app.handle(
+    new Request("http://localhost/v1/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, password: "test-password-123", email: `${username}@example.com` }),
+    }),
+  );
+  expect(res.status).toBe(201);
+  const body = (await res.json()) as { user_id: string; access_token: string };
+  return { userId: body.user_id, accessToken: body.access_token };
+}
+
+function authHeaders(): Record<string, string> {
+  return { "content-type": "application/json", authorization: `Bearer ${accessToken}` };
+}
 
 beforeAll(async () => {
   projectId = randomUUID();
   await prisma.project.create({
     data: { id: projectId, name: "api-test-project" },
+  });
+  const { userId, accessToken: token } = await registerUser();
+  accessToken = token;
+  // bind the user to this project (registration creates its own project;
+  // the test reuses this one for device setup)
+  await prisma.userProject.create({
+    data: { userId, projectId },
   });
   for (let i = 0; i < 2; i++) {
     const device = await prisma.device.create({
@@ -43,11 +77,11 @@ beforeEach(async () => {
   await prisma.commandBatch.deleteMany({ where: { commands: { none: {} } } });
 });
 
-async function postBatch(body: unknown): Promise<Response> {
+async function postBatch(body: unknown, token = accessToken): Promise<Response> {
   return app.handle(
     new Request("http://localhost/v1/command-batches", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(body),
     }),
   );
@@ -149,15 +183,27 @@ describe("POST /v1/command-batches", () => {
     expect(await res.json()).toMatchObject({ error: "invalid_request" });
   });
 
+  test("missing token -> 401 unauthorized", async () => {
+    const res = await postBatch(
+      { device_ids: deviceIds, command: { cmd: "reboot" } },
+      "", // no token
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: "unauthorized" });
+  });
+
   test("database failure -> 500 command_queue_unavailable", async () => {
     const brokenPrisma = {
+      user: {
+        findUnique: async () => ({ id: "some-user", username: "x" }),
+      },
       $transaction: () => Promise.reject(new Error("boom")),
     } as unknown as PrismaClient;
-    const brokenApp = createApp(brokenPrisma);
+    const brokenApp = createApp(brokenPrisma, TEST_JWT);
     const res = await brokenApp.handle(
       new Request("http://localhost/v1/command-batches", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ device_ids: deviceIds, command: { cmd: "reboot" } }),
       }),
     );

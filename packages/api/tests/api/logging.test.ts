@@ -1,22 +1,45 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../../src/api/app";
-import {
-  prisma,
-  type PrismaClient,
-} from "@soulcloud/core";
+import { prisma } from "@soulcloud/core";
 import { buildNoloadElf } from "../../../core/tests/helpers/elf-builder";
+
+// G group: these endpoints require a logged-in user.
+const TEST_JWT = {
+  secret: "test-secret-0123456789-0123456789-0123456789",
+  accessTtlSeconds: 3600,
+  refreshTtlSeconds: 3600,
+};
 
 // HTTP-level tests for the logging routes (ELF upload, log query,
 // firmware-state). Uses synthetic ELFs, no external fixtures.
 
-const app = createApp(prisma);
+const app = createApp(prisma, TEST_JWT);
 
 let projectId: string;
 let deviceId: string;
 let deviceUid: string;
 let artifactId: string;
 let buildId: string;
+let accessToken = "";
+
+async function registerUser(): Promise<{ userId: string; accessToken: string }> {
+  const username = `log-user-${randomUUID().slice(0, 8)}`;
+  const res = await app.handle(
+    new Request("http://localhost/v1/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, password: "test-password-123", email: `${username}@example.com` }),
+    }),
+  );
+  expect(res.status).toBe(201);
+  const body = (await res.json()) as { user_id: string; access_token: string };
+  return { userId: body.user_id, accessToken: body.access_token };
+}
+
+function authHeaders(): Record<string, string> {
+  return { authorization: `Bearer ${accessToken}` };
+}
 
 /** A minimal ELF with one format and one tag in .noload. */
 const testElf = buildNoloadElf(["value=%d"], ["demo"], 32, true);
@@ -30,6 +53,9 @@ beforeAll(async () => {
   await prisma.project.create({
     data: { id: projectId, name: "api-logging-test" },
   });
+  const { userId, accessToken: token } = await registerUser();
+  accessToken = token;
+  await prisma.userProject.create({ data: { userId, projectId } });
   deviceUid = `api-log-${randomUUID().slice(0, 8)}`;
   const device = await prisma.device.create({
     data: {
@@ -70,6 +96,7 @@ describe("POST /v1/firmware-artifacts", () => {
     const res = await app.handle(
       new Request("http://localhost/v1/firmware-artifacts", {
         method: "POST",
+        headers: authHeaders(),
         body: uploadForm(),
       }),
     );
@@ -92,6 +119,7 @@ describe("POST /v1/firmware-artifacts", () => {
     const res = await app.handle(
       new Request("http://localhost/v1/firmware-artifacts", {
         method: "POST",
+        headers: authHeaders(),
         body: uploadForm(),
       }),
     );
@@ -105,6 +133,7 @@ describe("POST /v1/firmware-artifacts", () => {
     form.append("project_id", projectId);
     const res = await app.handle(
       new Request("http://localhost/v1/firmware-artifacts", {
+        headers: authHeaders(),
         method: "POST",
         body: form,
       }),
@@ -116,6 +145,7 @@ describe("POST /v1/firmware-artifacts", () => {
   test("unknown project -> 404", async () => {
     const res = await app.handle(
       new Request("http://localhost/v1/firmware-artifacts", {
+        headers: authHeaders(),
         method: "POST",
         body: uploadForm({ project_id: randomUUID() }),
       }),
@@ -127,6 +157,7 @@ describe("POST /v1/firmware-artifacts", () => {
   test("non-ELF file -> 422 invalid_elf", async () => {
     const res = await app.handle(
       new Request("http://localhost/v1/firmware-artifacts", {
+        headers: authHeaders(),
         method: "POST",
         body: uploadForm({ elf: new TextEncoder().encode("not an elf") }),
       }),
@@ -140,6 +171,7 @@ describe("POST /v1/firmware-artifacts", () => {
     big.set([0x7f, 0x45, 0x4c, 0x46], 0);
     const res = await app.handle(
       new Request("http://localhost/v1/firmware-artifacts", {
+        headers: authHeaders(),
         method: "POST",
         body: uploadForm({ elf: big }),
       }),
@@ -152,7 +184,9 @@ describe("POST /v1/firmware-artifacts", () => {
 describe("GET /v1/firmware-artifacts", () => {
   test("lists artifacts for a project", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/v1/firmware-artifacts?project_id=${projectId}`),
+      new Request(`http://localhost/v1/firmware-artifacts?project_id=${projectId}`, {
+        headers: authHeaders(),
+      }),
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { artifacts: Array<{ artifact_id: string }> };
@@ -162,7 +196,7 @@ describe("GET /v1/firmware-artifacts", () => {
 
   test("missing project_id -> 400", async () => {
     const res = await app.handle(
-      new Request("http://localhost/v1/firmware-artifacts"),
+      new Request("http://localhost/v1/firmware-artifacts", { headers: authHeaders() }),
     );
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ error: "invalid_request" });
@@ -188,7 +222,9 @@ describe("GET /v1/devices/:id/logs", () => {
     });
 
     const res = await app.handle(
-      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=10`),
+      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=10`, {
+        headers: authHeaders(),
+      }),
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -213,7 +249,9 @@ describe("GET /v1/devices/:id/logs", () => {
 
   test("include_raw=1 returns the raw packet", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=10&include_raw=1`),
+      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=10&include_raw=1`, {
+        headers: authHeaders(),
+      }),
     );
     const body = (await res.json()) as {
       events: Array<{ raw_packet_b64?: string }>;
@@ -238,7 +276,9 @@ describe("GET /v1/devices/:id/logs", () => {
     });
 
     const res = await app.handle(
-      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=1`),
+      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=1`, {
+        headers: authHeaders(),
+      }),
     );
     const body = (await res.json()) as {
       events: Array<{ id: string }>;
@@ -249,7 +289,9 @@ describe("GET /v1/devices/:id/logs", () => {
 
     // second page via cursor
     const res2 = await app.handle(
-      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=1&cursor=${body.next_cursor}`),
+      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=1&cursor=${body.next_cursor}`, {
+        headers: authHeaders(),
+      }),
     );
     const body2 = (await res2.json()) as { events: Array<{ id: string }> };
     expect(body2.events).toHaveLength(1);
@@ -258,7 +300,7 @@ describe("GET /v1/devices/:id/logs", () => {
 
   test("unknown device -> 404", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/v1/devices/${randomUUID()}/logs`),
+      new Request(`http://localhost/v1/devices/${randomUUID()}/logs`, { headers: authHeaders() }),
     );
     expect(res.status).toBe(404);
     expect(await res.json()).toMatchObject({ error: "device_not_found" });
@@ -266,7 +308,7 @@ describe("GET /v1/devices/:id/logs", () => {
 
   test("limit above the cap is rejected (400)", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=99999`),
+      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=99999`, { headers: authHeaders() }),
     );
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ error: "invalid_request" });
@@ -274,7 +316,7 @@ describe("GET /v1/devices/:id/logs", () => {
 
   test("limit=500 is accepted", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=500`),
+      new Request(`http://localhost/v1/devices/${deviceId}/logs?limit=500`, { headers: authHeaders() }),
     );
     expect(res.status).toBe(200);
   });
@@ -283,7 +325,7 @@ describe("GET /v1/devices/:id/logs", () => {
 describe("device firmware state", () => {
   test("GET returns 404 before any report", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`),
+      new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, { headers: authHeaders() }),
     );
     expect(res.status).toBe(404);
   });
@@ -292,7 +334,7 @@ describe("device firmware state", () => {
     const res = await app.handle(
       new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders() },
         body: JSON.stringify({ artifact_id: artifactId }),
       }),
     );
@@ -302,7 +344,9 @@ describe("device firmware state", () => {
 
     // now GET resolves the artifact
     const getRes = await app.handle(
-      new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`),
+      new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, {
+        headers: authHeaders(),
+      }),
     );
     const state = (await getRes.json()) as {
       fw_hash: string;
@@ -318,7 +362,7 @@ describe("device firmware state", () => {
     const res = await app.handle(
       new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders() },
         body: JSON.stringify({ artifact_id: randomUUID() }),
       }),
     );
@@ -330,7 +374,7 @@ describe("device firmware state", () => {
     const res = await app.handle(
       new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders() },
         body: JSON.stringify({}),
       }),
     );
@@ -342,7 +386,7 @@ describe("device firmware state", () => {
 describe("audit regressions", () => {
   test("cursor=abc -> 400 (no internal error leak)", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/v1/devices/${deviceId}/logs?cursor=abc`),
+      new Request(`http://localhost/v1/devices/${deviceId}/logs?cursor=abc`, { headers: authHeaders() }),
     );
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
@@ -351,9 +395,9 @@ describe("audit regressions", () => {
 
   test("concurrent uploads of the same ELF create one artifact", async () => {
     const results = await Promise.allSettled([
-      app.handle(new Request("http://localhost/v1/firmware-artifacts", { method: "POST", body: uploadForm() })),
-      app.handle(new Request("http://localhost/v1/firmware-artifacts", { method: "POST", body: uploadForm() })),
-      app.handle(new Request("http://localhost/v1/firmware-artifacts", { method: "POST", body: uploadForm() })),
+      app.handle(new Request("http://localhost/v1/firmware-artifacts", { method: "POST", headers: authHeaders(), body: uploadForm() })),
+      app.handle(new Request("http://localhost/v1/firmware-artifacts", { method: "POST", headers: authHeaders(), body: uploadForm() })),
+      app.handle(new Request("http://localhost/v1/firmware-artifacts", { method: "POST", headers: authHeaders(), body: uploadForm() })),
     ]);
     const statuses = results.map((r) => (r.status === "fulfilled" ? r.value.status : -1));
     // at least one 201/200 and no 500s
@@ -367,19 +411,29 @@ describe("audit regressions", () => {
   test("POST firmware-state with cross-project artifact -> 403", async () => {
     const otherProject = randomUUID();
     await prisma.project.create({ data: { id: otherProject, name: "other-project" } });
+    // a user of the OTHER project uploads its artifact
+    const otherUser = await registerUser();
+    await prisma.userProject.create({
+      data: { userId: otherUser.userId, projectId: otherProject },
+    });
     const otherElf = buildNoloadElf(["x=%d"], ["other"], 32, true);
     const otherForm = new FormData();
     otherForm.append("project_id", otherProject);
     otherForm.append("file", new Blob([otherElf]), "f.elf");
     const up = await app.handle(
-      new Request("http://localhost/v1/firmware-artifacts", { method: "POST", body: otherForm }),
+      new Request("http://localhost/v1/firmware-artifacts", {
+        method: "POST",
+        headers: { authorization: `Bearer ${otherUser.accessToken}` },
+        body: otherForm,
+      }),
     );
+    expect(up.status).toBe(201);
     const upBody = (await up.json()) as { artifact_id: string };
 
     const res = await app.handle(
       new Request(`http://localhost/v1/devices/${deviceId}/firmware-state`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders() },
         body: JSON.stringify({ artifact_id: upBody.artifact_id }),
       }),
     );

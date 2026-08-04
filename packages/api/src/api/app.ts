@@ -21,9 +21,12 @@ import {
   CommandQueueError,
   DeviceCommandSchema,
   enqueueBatch,
+  type JwtConfig,
   type PrismaClient,
 } from "@soulcloud/core";
+import { createAuthRoutes } from "./auth";
 import { createLoggingRoutes } from "./logging";
+import { authenticateRequest } from "./validate";
 
 const MAX_BATCH_TARGETS = 1000;
 
@@ -39,7 +42,12 @@ const CreateCommandBatchBody = z
   })
   .strict();
 
-export function createApp(prisma: PrismaClient) {
+export function createApp(prisma: PrismaClient, jwt?: JwtConfig) {
+  const auth = jwt ?? {
+    secret: "dev-only-secret-change-me-0123456789",
+    accessTtlSeconds: 15 * 60,
+    refreshTtlSeconds: 30 * 24 * 3600,
+  };
   return new Elysia()
     .get("/health/live", () => ({ status: "ok" }))
     .get("/health/ready", async ({ set }) => {
@@ -51,7 +59,13 @@ export function createApp(prisma: PrismaClient) {
         return { status: "not_ready" };
       }
     })
-    .post("/v1/command-batches", async ({ body, set }) => {
+    .post("/v1/command-batches", async ({ body, request, set }) => {
+      // G group: authenticated users only
+      const authUser = await authenticateRequest(prisma, auth, request);
+      if (!authUser) {
+        set.status = 401;
+        return { error: "unauthorized", message: "authentication required" };
+      }
       const parsed = CreateCommandBatchBody.safeParse(body);
       if (!parsed.success) {
         set.status = 400;
@@ -75,7 +89,8 @@ export function createApp(prisma: PrismaClient) {
         return mapQueueError(error, set);
       }
     })
-    .use(createLoggingRoutes(prisma));
+    .use(createAuthRoutes(prisma, auth))
+    .use(createLoggingRoutes(prisma, auth));
 }
 
 function formatZodIssues(

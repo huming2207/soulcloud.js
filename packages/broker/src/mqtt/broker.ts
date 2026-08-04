@@ -147,9 +147,12 @@ async function authenticateDevice(
   if (!username || password === undefined) return false;
   const device = await prisma.device.findUnique({
     where: { deviceUid: username },
-    select: { passwordHash: true },
+    select: { passwordHash: true, authRevoked: true },
   });
   if (!device) return false;
+  // G group: revoked credentials refuse new connections (an already-open
+  // session keeps running until it disconnects; documented limitation)
+  if (device.authRevoked) return false;
   return verifyDevicePassword(password.toString(), device.passwordHash);
 }
 
