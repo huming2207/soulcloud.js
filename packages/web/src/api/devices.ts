@@ -1,6 +1,5 @@
 import { http } from "./http";
 import type {
-  ArtifactListResponse,
   BindFirmwareResponse,
   CommandBatchDetail,
   CommandBatchRequest,
@@ -92,15 +91,5 @@ export async function bindFirmwareState(
     `/v1/devices/${deviceId}/firmware-state`,
     { artifact_id: artifactId },
   );
-  return res.data;
-}
-
-export async function fetchArtifacts(
-  projectId: string,
-  limit = 100,
-): Promise<ArtifactListResponse> {
-  const res = await http.get<ArtifactListResponse>("/v1/firmware-artifacts", {
-    params: { project_id: projectId, limit },
-  });
   return res.data;
 }

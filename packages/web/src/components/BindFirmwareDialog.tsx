@@ -11,7 +11,8 @@ import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { bindFirmwareState, fetchArtifacts } from "../api/devices";
+import { bindFirmwareState } from "../api/devices";
+import { fetchArtifacts } from "../api/firmware";
 import { errorMessage } from "../api/http";
 import { useProject } from "../layout/ProjectContext";
 
