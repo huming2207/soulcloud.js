@@ -46,5 +46,11 @@ jobs:
       - name: Test
         run: bun test
 
+      - name: E2E (both processes)
+        run: bash scripts/run-e2e.sh
+        env:
+          # CI-only value; a real deployment must set its own (fail-fast)
+          JWT_SECRET: ci-e2e-jwt-secret-0123456789-0123456789
+
       # ELF-dependent demo integration tests skip when the demo ELF is
       # absent (it is regenerated locally with scripts/build-on9log-fixtures.sh)
