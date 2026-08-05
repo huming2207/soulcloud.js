@@ -36,6 +36,22 @@ many, cap 1000), `404 target_devices_not_found`, `422 invalid_device_uid`,
 `400 invalid_request`, `500 command_queue_unavailable` (details logged only),
 `401 unauthorized`, `403 forbidden`.
 
+### Current user (`packages/api/src/api/me.ts`)
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /v1/me` | current user + project list: `{user_id, username, projects: [{project_id, name, device_count}]}` (registration creates a personal project); `401` without auth |
+
+### Devices (`packages/api/src/api/devices.ts`)
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /v1/projects/:id/devices?limit=&offset=` | offset-paginated device list with per-device firmware state and `total` (devices have no timestamp column, so offset pagination instead of keyset); `404 project_not_found`, `403` non-member |
+| `GET /v1/devices/:id` | device detail: uid, assigned_id, project, auth_revoked, next_command_sequence, firmware state; `404`/`403` |
+| `POST /v1/devices` | `{project_id, assigned_id, device_uid}` → `201` with one-time `mqtt_password` (argon2id stored, same contract as credentials issue); `422 invalid_device_uid` (unsafe for MQTT topics), `409 device_uid_taken` / `409 assigned_id_taken` |
+| `GET /v1/devices/:id/commands?limit=&cursor=` | per-device command history, newest first, keyset on per-device `sequence`; payloads decoded to `{cmd, args}` (bigint → string, bytes → base64), terminal results decoded to `{code, payload}` |
+| `GET /v1/command-batches/:id` | batch detail: `summary` per state + per-device decoded commands; a batch may span several of the caller's projects (403 if any target project is inaccessible) |
+
 ### Firmware artifacts & logs (`packages/api/src/api/logging.ts`)
 
 | Endpoint | Behavior |
@@ -48,12 +64,25 @@ many, cap 1000), `404 target_devices_not_found`, `422 invalid_device_uid`,
 | `POST /v1/devices/:id/credentials` | issue device credentials (password returned once, argon2id hash stored, clears revocation) |
 | `POST /v1/devices/:id/credentials/revoke` | refuse new connections AND kill the live session (NOTIFY) |
 
+### Firmware releases & OTA jobs (`packages/api/src/api/firmware.ts`)
+
+| Endpoint | Behavior |
+| --- | --- |
+| `POST /v1/firmware-releases` | multipart `bin` (required) + `elf` (optional) + `project_id` (+ optional `version`); `201`/`200` idempotent; `413`/`422` |
+| `GET /v1/firmware-releases?project_id=&limit=&cursor=` | cursor-paginated release list (`<createdAt>|<releaseId>` composite keyset) |
+| `GET /v1/firmware-releases/:id` | detail incl. linked artifact build id + dictionary entries |
+| `POST /v1/firmware-releases/:id/deploy` | `{device_ids}` → `201 {job_id, targets}`; fan-out of per-device download credentials over MQTT |
+| `GET /v1/firmware-releases/:id/bin` | binary download (Bearer for humans, per-device short JWT for devices, legacy `?token=` kept) |
+| `GET /v1/ota-jobs/:id` | job detail with per-target states and current firmware |
+| `GET /v1/ota-jobs?project_id=&limit=&offset=` | job list with `target_count` and per-state `summary` (aggregated via groupBy) |
+
 ### Rollouts (`packages/api/src/api/rollout.ts`)
 
 | Endpoint | Behavior |
 | --- | --- |
 | `POST /v1/firmware-releases/:id/rollouts` | create a phased deployment: `strategy: auto` (server-randomized pool + ratios, default 5/25/100%) or `grouped` (client groups); per-rollout settings `success_ratio` (0.9), `min_sample` (10), `phase_timeout_hours` (24), `stuck_hours` (6), `manual_approval`; optional `from_release_id` for rollback |
 | `GET /v1/ota-rollouts/:id` | detail: state, settings, per-phase job summaries, pool size |
+| `GET /v1/ota-rollouts?project_id=&limit=&offset=` | rollout list with `pool_size`, strategy/state and cross-phase `progress` per state |
 | `POST /v1/ota-rollouts/:id/pause` | stop advancing (in-flight deliveries untouched); `409` wrong state |
 | `POST /v1/ota-rollouts/:id/resume` | resume a paused rollout or a manual-approval wait (activates the next phase) |
 | `POST /v1/ota-rollouts/:id/abort` | stop advancing; delivered devices keep their firmware; pending phases cancelled |

@@ -26,6 +26,7 @@ import {
 } from "@soulcloud/core";
 import {
   LimitParam,
+  OffsetParam,
   UuidParam,
   authenticateRequest,
   handleApiError,
@@ -583,6 +584,88 @@ export function createFirmwareRoutes(
         set.headers["content-type"] = "application/octet-stream";
         set.headers["content-length"] = String(release.binSize);
         return new Uint8Array(release.binBytes);
+      } catch (error) {
+        return handleApiError(error, set);
+      }
+    })
+
+    // --- job list (P0 UI prerequisite) ------------------------------------
+
+    .get("/ota-jobs", async ({ request, set }) => {
+      try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
+        const url = new URL(request.url);
+        const projectId = UuidParam.safeParse(url.searchParams.get("project_id") ?? "");
+        if (!projectId.success) {
+          set.status = 400;
+          return { error: "invalid_request", message: "project_id must be a UUID" };
+        }
+        const limit = LimitParam.safeParse(url.searchParams.get("limit") ?? "100");
+        if (!limit.success) {
+          set.status = 400;
+          return { error: "invalid_request", message: "limit must be an integer 1..500" };
+        }
+        const offset = OffsetParam.safeParse(url.searchParams.get("offset") ?? "0");
+        if (!offset.success) {
+          set.status = 400;
+          return { error: "invalid_request", message: "offset must be a non-negative integer" };
+        }
+        const project = await prisma.project.findUnique({
+          where: { id: projectId.data },
+          select: { id: true },
+        });
+        if (!project) {
+          set.status = 404;
+          return { error: "project_not_found", message: "project does not exist" };
+        }
+        if (!(await userCanAccessProject(prisma, authUser.user.id, projectId.data))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this project" };
+        }
+        const [total, jobs] = await Promise.all([
+          prisma.otaJob.count({ where: { projectId: projectId.data } }),
+          prisma.otaJob.findMany({
+            where: { projectId: projectId.data },
+            orderBy: { createdAt: "desc" },
+            skip: offset.data,
+            take: limit.data,
+            select: {
+              id: true,
+              releaseId: true,
+              createdAt: true,
+              _count: { select: { targets: true } },
+            },
+          }),
+        ]);
+        const jobIds = jobs.map((j) => j.id);
+        const grouped = jobIds.length
+          ? await prisma.otaTarget.groupBy({
+              by: ["jobId", "state"],
+              _count: { _all: true },
+              where: { jobId: { in: jobIds } },
+            })
+          : [];
+        const summaryByJob = new Map<string, Record<string, number>>();
+        for (const g of grouped) {
+          const s = summaryByJob.get(g.jobId) ?? {};
+          // groupBy returns one row per (jobId, state) with the count in _count._all
+          s[g.state] = (s[g.state] ?? 0) + g._count._all;
+          summaryByJob.set(g.jobId, s);
+        }
+        return {
+          total,
+          jobs: jobs.map((j) => ({
+            job_id: j.id,
+            release_id: j.releaseId,
+            created_at: j.createdAt,
+            target_count: j._count.targets,
+            summary: summaryByJob.get(j.id) ?? {},
+          })),
+        };
       } catch (error) {
         return handleApiError(error, set);
       }

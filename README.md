@@ -59,6 +59,7 @@ docker compose up -d --wait postgres
 bun install
 bun run db:migrate
 bun run dev            # starts API + broker with --watch
+bun run dev:web        # starts the web UI (Vite, :5173, proxies /v1 to :8080)
 ```
 
 Run the processes separately if preferred:

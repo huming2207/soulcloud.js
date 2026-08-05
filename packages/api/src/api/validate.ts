@@ -32,6 +32,9 @@ export const LimitParam = z.coerce
   .min(1)
   .max(500);
 
+/** Offset for offset-paginated lists (devices, jobs, rollouts). */
+export const OffsetParam = z.coerce.number().int().min(0);
+
 /** Standard error response shape. */
 export interface ApiErrorResponse {
   error: string;

@@ -37,6 +37,7 @@ let accessToken = "";
 let otherAccessToken = "";
 let deviceId = "";
 let deviceUid = "";
+let secondDeviceId = "";
 let otherProjectDeviceId = "";
 
 async function registerUser(prefix: string): Promise<{ userId: string; token: string }> {
@@ -98,6 +99,16 @@ beforeAll(async () => {
     },
   });
   deviceId = device.id;
+  const second = await prisma.device.create({
+    data: {
+      id: randomUUID(),
+      deviceUid: `ota-api-2-${randomUUID().slice(0, 8)}`,
+      assignedId: "assigned-ota-api-2",
+      passwordHash: "unused",
+      projectId,
+    },
+  });
+  secondDeviceId = second.id;
   const cross = await prisma.device.create({
     data: {
       id: randomUUID(),
@@ -114,7 +125,7 @@ afterAll(async () => {
   await prisma.otaTarget.deleteMany({ where: { job: { projectId: { in: [projectId, otherProjectId] } } } });
   await prisma.otaJob.deleteMany({ where: { projectId: { in: [projectId, otherProjectId] } } });
   await prisma.device.deleteMany({
-    where: { id: { in: [deviceId, otherProjectDeviceId] } },
+    where: { id: { in: [deviceId, secondDeviceId, otherProjectDeviceId] } },
   });
   await prisma.firmwareRelease.deleteMany({
     where: { projectId: { in: [projectId, otherProjectId] } },
@@ -759,5 +770,69 @@ describe("round-5 edge coverage", () => {
       new Request(`http://localhost/v1/firmware-releases/${release_id}/bin?token=${encodeURIComponent(token)}`),
     );
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /v1/ota-jobs (list)", () => {
+  test("lists jobs with per-state target summaries", async () => {
+    // own release: never depends on earlier tests having run
+    const release = await prisma.firmwareRelease.create({
+      data: {
+        id: randomUUID(),
+        projectId,
+        binHash: "cc".repeat(32),
+        binBytes: Buffer.from(makeBin(64)),
+        binSize: 64,
+        version: "ota-jobs-list-test",
+      },
+    });
+    const deploy = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${release.id}/deploy`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ device_ids: [deviceId, secondDeviceId] }),
+      }),
+    );
+    expect(deploy.status).toBe(201);
+    const { job_id } = (await deploy.json()) as { job_id: string };
+
+    const res = await app.handle(
+      new Request(`http://localhost/v1/ota-jobs?project_id=${projectId}`, {
+        headers: authHeaders(),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      total: number;
+      jobs: Array<{
+        job_id: string;
+        release_id: string;
+        created_at: string;
+        target_count: number;
+        summary: Record<string, number>;
+      }>;
+    };
+    expect(body.total).toBeGreaterThanOrEqual(1);
+    const job = body.jobs.find((j) => j.job_id === job_id);
+    expect(job).toBeTruthy();
+    expect(job!.target_count).toBe(2);
+    expect(job!.summary.pending).toBe(2);
+  });
+
+  test("requires project_id, membership and auth", async () => {
+    const missing = await app.handle(
+      new Request("http://localhost/v1/ota-jobs", { headers: authHeaders() }),
+    );
+    expect(missing.status).toBe(400);
+    const denied = await app.handle(
+      new Request(`http://localhost/v1/ota-jobs?project_id=${projectId}`, {
+        headers: authHeaders(otherAccessToken),
+      }),
+    );
+    expect(denied.status).toBe(403);
+    const noAuth = await app.handle(
+      new Request(`http://localhost/v1/ota-jobs?project_id=${projectId}`),
+    );
+    expect(noAuth.status).toBe(401);
   });
 });

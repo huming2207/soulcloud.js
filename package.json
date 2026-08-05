@@ -10,6 +10,8 @@
     "dev": "bun run dev:api & bun run dev:broker & wait",
     "dev:api": "bun run --watch packages/api/src/index.ts",
     "dev:broker": "bun run --watch packages/broker/src/index.ts",
+    "dev:web": "bun run --cwd packages/web dev",
+    "build:web": "bun run --cwd packages/web build",
     "start:api": "bun run packages/api/src/index.ts",
     "start:broker": "bun run packages/broker/src/index.ts",
     "test": "bun test",

@@ -329,3 +329,68 @@ describe("rollout lifecycle endpoints", () => {
     expect(await res.json()).toMatchObject({ error: "rollback_unavailable" });
   });
 });
+
+describe("GET /v1/ota-rollouts (list)", () => {
+  test("lists rollouts with pool size and per-state progress", async () => {
+    const created = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${releaseId}/rollouts`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          strategy: "auto",
+          device_ids: deviceIds.slice(0, 2),
+          ratios: [1.0],
+        }),
+      }),
+    );
+    expect(created.status).toBe(201);
+    const { rollout_id } = (await created.json()) as { rollout_id: string };
+
+    const res = await app.handle(
+      new Request(`http://localhost/v1/ota-rollouts?project_id=${projectId}`, {
+        headers: auth(),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      total: number;
+      rollouts: Array<{
+        rollout_id: string;
+        release_id: string;
+        from_release_id: string | null;
+        state: string;
+        strategy: string;
+        manual_approval: boolean;
+        created_at: string;
+        pool_size: number;
+        progress: Record<string, number>;
+      }>;
+    };
+    expect(body.total).toBeGreaterThanOrEqual(1);
+    const rollout = body.rollouts.find((r) => r.rollout_id === rollout_id);
+    expect(rollout).toBeTruthy();
+    expect(rollout!.release_id).toBe(releaseId);
+    expect(rollout!.state).toBe("running");
+    expect(rollout!.strategy).toBe("auto");
+    expect(rollout!.pool_size).toBe(2);
+    // phase 1 activated at creation; both targets are still pending
+    expect(rollout!.progress.pending).toBe(2);
+  });
+
+  test("requires project_id, membership and auth", async () => {
+    const missing = await app.handle(
+      new Request("http://localhost/v1/ota-rollouts", { headers: auth() }),
+    );
+    expect(missing.status).toBe(400);
+    const denied = await app.handle(
+      new Request(`http://localhost/v1/ota-rollouts?project_id=${projectId}`, {
+        headers: auth(outsiderToken),
+      }),
+    );
+    expect(denied.status).toBe(403);
+    const noAuth = await app.handle(
+      new Request(`http://localhost/v1/ota-rollouts?project_id=${projectId}`),
+    );
+    expect(noAuth.status).toBe(401);
+  });
+});

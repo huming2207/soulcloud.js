@@ -21,5 +21,12 @@
         "./packages/core/src/index.ts"
       ]
     }
-  }
+  },
+  "include": [
+    "packages/core",
+    "packages/api",
+    "packages/broker",
+    "scripts",
+    "tests"
+  ]
 }
