@@ -24,6 +24,12 @@ import {
 } from "../../src/ota/deploy";
 import { buildNoloadElf } from "../helpers/elf-builder";
 import { createFirmwareRelease } from "../../src/ota/release";
+// Serialises this file against the other global-lease test files
+// (queue, broker): ota_targets leasing is a global FIFO over a shared
+// dev database. Held for the whole process; the advisory lock dies with
+// the connection (crash-safe).
+import { acquireLeaseLock } from "../helpers/lease-lock";
+await acquireLeaseLock(prisma);
 
 const SECRET = "ota-test-secret-0123456789-0123456789-0123456789";
 

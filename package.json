@@ -14,7 +14,7 @@
     "build:web": "bun run --cwd packages/web build",
     "start:api": "bun run packages/api/src/index.ts",
     "start:broker": "bun run packages/broker/src/index.ts",
-    "test": "bun test",
+    "test": "bash scripts/test.sh",
     "typecheck": "tsc --noEmit",
     "db:migrate": "bun run --cwd packages/core db:migrate",
     "db:deploy": "bun run --cwd packages/core db:deploy",

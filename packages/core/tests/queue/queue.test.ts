@@ -8,6 +8,12 @@ import { recordDeviceResult } from "../../src/queue/result";
 import { CommandQueueError } from "../../src/queue/errors";
 import type { PrismaClient } from "../../src/db";
 import { decodeDeviceCommandExecution, encodeDeviceCommandResult } from "../../src/protocol/command";
+// Serialises this file against the other global-lease test files
+// (broker, ota/deploy): they share one dev database and leaseNext is a
+// global FIFO. Held for the whole process; PostgreSQL releases the
+// advisory lock when the connection closes (crash-safe).
+import { acquireLeaseLock } from "../helpers/lease-lock";
+await acquireLeaseLock(prisma);
 
 // Integration tests against the local development PostgreSQL.
 // Requires: docker compose up -d postgres && bunx prisma migrate deploy

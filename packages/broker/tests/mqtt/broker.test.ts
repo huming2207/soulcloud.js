@@ -7,6 +7,12 @@ import {
   prisma,
 } from "@soulcloud/core";
 import { MqttTestClient, type MqttTestClientOptions } from "../helpers/mqtt-client";
+// Serialises this file against the other global-lease test files (queue,
+// ota/deploy): pollOnce leases over a global FIFO shared across files on
+// one dev database. Held for the whole process; the advisory lock dies
+// with the connection (crash-safe).
+import { acquireLeaseLock } from "../../../core/tests/helpers/lease-lock";
+await acquireLeaseLock(prisma);
 import { kickDeviceSession, startBroker, type BrokerHandle } from "../../src/mqtt/broker";
 import { attachDispatch } from "../../src/mqtt/dispatch";
 import { startNotifier, type Notifier } from "../../src/mqtt/notify";

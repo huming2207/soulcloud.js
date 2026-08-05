@@ -44,7 +44,9 @@ jobs:
         run: bun run typecheck
 
       - name: Test
-        run: bun test
+        run: bash scripts/test.sh
+        env:
+          TEST_DATABASE_URL: postgres://soulcloud:soulcloud@127.0.0.1:5432/soulcloud_test
 
       - name: E2E (both processes)
         run: bash scripts/run-e2e.sh

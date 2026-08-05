@@ -19,6 +19,18 @@ const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 
 export const prisma = new PrismaClient({ adapter });
 
+/**
+ * Creates an independent Prisma client for an explicit connection string
+ * (used by tooling: the test-database preparation script connects to the
+ * maintenance database and to the test database, neither of which is the
+ * process-default DATABASE_URL).
+ */
+export function createPrisma(connectionString: string): PrismaClient {
+  return new PrismaClient({
+    adapter: new PrismaPg({ connectionString }),
+  });
+}
+
 export async function ping(): Promise<boolean> {
   try {
     await prisma.$queryRaw`SELECT 1`;

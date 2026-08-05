@@ -94,11 +94,16 @@ Error mapping: `400 invalid_targets`, `404 target_devices_not_found`,
 ## Quality checks
 
 ```sh
-bun test              # 61 tests: protocol, queue, broker, api
-bun run typecheck     # tsc --noEmit
-bun run db:deploy     # apply migrations
-bun scripts/e2e.ts    # full-loop smoke test (needs both processes running)
+bash scripts/test.sh    # 398 tests, isolated test database (soulcloud_test)
+bun run typecheck       # tsc --noEmit
+bun run db:deploy       # apply migrations
+bun scripts/e2e.ts      # full-loop smoke test (needs both processes running)
 ```
+
+The test suite runs against its own database (`soulcloud_test`, created and
+migrated automatically by `scripts/prepare-test-db.ts`), so the dev MQTT
+broker — whose poller leases the global command queue every ~500ms — and
+QEMU firmware E2E runs can keep going while tests execute.
 
 ## MQTT v1 topics
 
