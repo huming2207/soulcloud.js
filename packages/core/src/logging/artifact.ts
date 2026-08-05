@@ -65,8 +65,11 @@ export function extractArtifactStrings(elf: Uint8Array): ExtractedStrings {
     if (sec.type === 8 /* SHT_NOBITS */) continue;
     const strings = extractStrings(info, elf, sec);
     if (strings.length === 0) continue;
-    if (sec.name.startsWith(".noload_keep_in_elf")) {
+    if (sec.name.startsWith(".noload_keep_in_elf") || sec.name === ".noload") {
       // formats (and possibly tags) live in no-load sections
+      // (`.noload` is the output section name GNU ld/ESP-IDF 6.0 produce
+      // when merging `.noload_keep_in_elf.*` inputs; on9log firmware built
+      // with IDF 6.x therefore carries the strings in a `.noload` section)
       for (const s of strings) {
         // a no-load string is a format if it contains a conversion, else a tag
         if (s.value.includes("%") || s.value.includes("{")) {

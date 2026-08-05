@@ -207,13 +207,16 @@ export function buildTestElf(options: TestElfOptions): Uint8Array {
   return out;
 }
 
-/** A convenience: ELF with a .noload section holding format/tag strings. */
+/** A convenience: ELF with a no-load section holding format/tag strings.
+ *  `sectionName` defaults to the on9log input section name; pass ".noload"
+ *  to model the merged output section GNU ld/ESP-IDF 6.0 produce. */
 export function buildNoloadElf(
   formats: string[],
   tags: string[],
   bits: 32 | 64 = 32,
   littleEndian = true,
   baseAddr = 0x40000000,
+  sectionName = ".noload_keep_in_elf.0",
 ): Uint8Array {
   const content: number[] = [];
   const addresses: number[] = [];
@@ -227,7 +230,7 @@ export function buildNoloadElf(
     machine: 0,
     sections: [
       {
-        name: ".noload_keep_in_elf.0",
+        name: sectionName,
         type: 1,
         flags: 2, // SHF_ALLOC (but not in any PT_LOAD)
         addr: baseAddr,

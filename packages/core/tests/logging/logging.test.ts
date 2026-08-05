@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
   computeBuildId,
+  extractArtifactStrings,
   importArtifact,
   ingestLogPacket,
   backfillDecodeState,
@@ -91,6 +92,22 @@ afterAll(async () => {
 });
 
 describe("artifact import (real demo ELF)", () => {
+  test("extracts formats/tags from an IDF 6.0 merged `.noload` section", () => {
+    // GNU ld/ESP-IDF 6.0 merges `.noload_keep_in_elf.*` inputs into an
+    // output section literally named `.noload`; extraction must accept it.
+    const elf = buildNoloadElf(
+      ["value=%d", "name=%s"],
+      ["demo", "wifi"],
+      32,
+      true,
+      0x40000000,
+      ".noload",
+    );
+    const { tags, formats } = extractArtifactStrings(elf);
+    expect(formats.map((f) => f.value)).toEqual(["value=%d", "name=%s"]);
+    expect(tags.map((t) => t.value)).toEqual(["demo", "wifi"]);
+  });
+
   test("imports the ELF and extracts the dictionary", () => {
     const elf = testElf;
     buildId = computeBuildId(elf);
