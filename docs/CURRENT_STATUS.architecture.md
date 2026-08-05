@@ -52,7 +52,7 @@ broker recordDeviceResult ──▶ device_commands (result fields)
 
 | Component | Owns | Forbidden |
 | --- | --- | --- |
-| `@soulcloud/api` | REST API, auth (JWT), device credential management, ELF upload, log queries | No MQTT event loop, no direct device connections |
+| `@soulcloud/api` | REST API, auth (JWT), device credential management, ELF upload, log queries, rollout advance loop (DB-only poller) | No MQTT event loop, no direct device connections |
 | `@soulcloud/broker` | Aedes broker, device auth/ACL, uplink dispatch, command poller, session kill | No human-facing HTTP API |
 | `@soulcloud/core` | Prisma client, protocol codecs, queue logic, on9log parsing, ELF parsing, password/auth primitives | Not deployable |
 

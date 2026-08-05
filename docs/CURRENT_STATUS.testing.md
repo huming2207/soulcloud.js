@@ -1,8 +1,8 @@
 # Testing & Quality
 
-**Baseline**: 243 tests across 19 files, `bun test` green, `tsc --noEmit`
-clean. E2E scripts (command loop + log ingestion) pass against both running
-processes.
+**Baseline**: 375 tests across 27 files, `bun test` green, `tsc --noEmit`
+clean. E2E scripts (command loop, log ingestion, OTA, rollout) pass against
+both running processes.
 
 ## Strategy
 
@@ -40,9 +40,13 @@ packages/api/tests/api/
   auth.test.ts                    JWT flow, rotation, revocation
   commands.test.ts                batch API + errors + authz
   logging.test.ts                 artifacts, logs, credentials
+  firmware.test.ts                releases, download JWT, deploy, stall
+  rollout.test.ts                 rollout create/detail/lifecycle
+  config.test.ts                  JWT_SECRET wiring, fail-fast
 packages/broker/tests/mqtt/
   broker.test.ts                  WS auth/ACL/delivery/session kill
   notify.test.ts                  LISTEN/NOTIFY + reconnect
+  ota-publish.test.ts             OTA delivery + acks over WS
 ```
 
 ## Reliability practices
@@ -79,6 +83,8 @@ they are run locally as part of a release check.
 | --- | --- |
 | `scripts/e2e.ts` | command loop E2E (register user → enqueue → WS device receives → result → completed) |
 | `scripts/e2e-logging.ts` | logging E2E (register → upload ELF → stat → raw packets → decoded query) |
+| `scripts/e2e-ota.ts` | OTA E2E (upload → deploy → MQTT notice → HTTP download → acks → job query) |
+| `scripts/e2e-rollout.ts` | rollout E2E (create 2-phase rollout → phase-1 completes → advance loop activates phase 2) |
 | `scripts/latency.ts` | enqueue→device latency measurement (LISTEN/NOTIFY wake-up) |
 | `scripts/bench-elf.ts` | ELF parser benchmark (36 µs per 1 MB ELF, 40 µs per decoded event) |
 | `scripts/build-on9log-fixtures.sh` | regenerate the checked-in demo ELF + output |

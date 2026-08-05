@@ -34,6 +34,21 @@ defined in `packages/core/prisma/schema.prisma` (Prisma 7, generated client in
 | `raw_log_events` | Immutable raw on9log packets + envelope metadata (source of truth) |
 | `device_firmware_state` | Latest reported firmware hash per device (from `stat.fw`) |
 
+### OTA rollout
+
+| Table | Purpose |
+| --- | --- |
+| `ota_rollouts` | Rollout container: target release, optional `from_release_id` (rollback baseline), per-rollout gating settings stored in DB (`success_ratio`, `min_sample`, `phase_timeout_hours`, `stuck_hours`, `manual_approval`), rollback job link |
+| `ota_rollout_pool` | Device snapshot (rollout_id + device_id + sort_idx); auto strategy randomizes sort_idx, grouped keeps client order |
+| `ota_rollout_phases` | One row per phase (1-based index, ratio/group, `target_count`); activation creates a plain `ota_job` (delivery reuses the standard target state machine) |
+
+`ota_targets` gained `installed_at` (stall-judgement basis, set on
+`installed` acknowledgements) alongside the existing state machine fields.
+
+**Note**: pool devices are protected by FK RESTRICT while their targets
+exist — a device cannot be deleted mid-rollout (data consistency over the
+"skip deleted devices" alternative).
+
 ## Key design decisions
 
 - **unsigned 32-bit wire values are `BigInt` columns** (`deviceTimeMs`,
@@ -66,6 +81,13 @@ defined in `packages/core/prisma/schema.prisma` (Prisma 7, generated client in
 | `artifact_build_unique_per_project` | audit fix M3 (build identity per project) |
 | `command_delivery_timeout` | `delivery_expires_at` + `delivery_failed` state (M2) |
 | `auth` | refresh_tokens, user_projects, devices.auth_revoked (G group) |
+| `firmware_releases` | OTA releases + download tokens (later dropped by `ota_mqtt_deploy`) |
+| `ota_mqtt_deploy` | ota_jobs/ota_targets (replaces download tokens); ota_targets CHECK constraints |
+| `ota_result` | ota_targets terminal states (completed/failed), result fields, intermediate states |
+| `ota_result_constraint_fix` / `ota_result_constraint_fix2` | delivered_at CHECK corrections (terminal rows must pass unconditionally) |
+| `ota_rollout` | ota_rollouts / ota_rollout_pool / ota_rollout_phases |
+| `rollout_support_columns` | ota_targets.installed_at, ota_rollout_phases.target_count |
+| `rollout_phase_activated_fix` / `fix2` | activated_at CHECK corrections (same class as the ota_targets fixes) |
 
 Migration management: `bun run db:migrate` (dev) / `db:deploy` (CI/prod).
 `prisma.config.ts` loads `.env` from the package dir or repo root.

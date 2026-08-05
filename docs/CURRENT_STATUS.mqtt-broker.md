@@ -106,3 +106,5 @@ are still refused.
   fallback.
 - MQTT 5, QoS 2 and retained-message policy are not implemented (QoS 1
   suffices; retain is configurable via `MQTT_COMMAND_RETAIN`).
+- Rollout phases create ordinary ota_jobs through the same machinery — the
+  broker is unaware of rollouts (by design; see the rollout document).

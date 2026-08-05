@@ -1,6 +1,6 @@
 # SoulcloudJS — Current Status
 
-**Date**: 2026-08-04 · **Baseline**: 243 tests / 19 files green, `tsc --noEmit` clean, both E2E suites pass.
+**Date**: 2026-08-05 · **Baseline**: 375 tests / 27 files green, `tsc --noEmit` clean, four E2E suites pass.
 
 SoulcloudJS is a rewrite of the Rust Soulcloud IoT device-management platform in
 Bun + TypeScript. This document set describes what exists today, how it works,
@@ -32,3 +32,6 @@ and what is deliberately left open.
   raw on9log packets for logs.
 - **Auth**: humans use JWT dual-token (access + server-side refresh); devices
   use per-session MQTT authentication (never JWT).
+- **OTA**: releases → deploy (per-device JWT over MQTT, HTTP pull) →
+  three-layer target state machine → phased rollouts with gating/stall
+  judgement/rollback.

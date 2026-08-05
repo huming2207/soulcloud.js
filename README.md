@@ -156,11 +156,13 @@ Implemented:
 - **Device auth**: per-session MQTT (credential issue/revoke, session kill)
 - **OTA**: firmware releases (bin + optional ELF), deploy with per-device
   short-JWT download credentials over MQTT, HTTP pull, three-layer target
-  state machine (acknowledgements + stat.fw confirmation)
+  state machine (acknowledgements + stat.fw confirmation), phased
+  rollouts (auto 5/25/100% or client groups; per-rollout gating settings;
+  stall judgement; pause/resume/abort/rollback)
 
-Open (same scope as the Rust version): rollout FSM, full-text log search,
-object storage archive, retention policies, fleet selectors, org/tenant
-tenancy (direct user→project today).
+Open (same scope as the Rust version): full-text log search, object
+storage archive, retention policies, fleet selectors, org/tenant tenancy
+(direct user→project today).
 
 > **Deployment notes**: both processes require `JWT_SECRET` (>= 32 chars,
 > identical for api and broker, see `.env.example`). Login throttling is

@@ -69,6 +69,9 @@ project membership).
 
 ## Open items (documented, not bugs)
 
+- Rollout rollback is best-effort notification: offline devices must be
+  re-triggered manually when their delivery window passes; devices without
+  A/B or reflash capability cannot be rolled back by the platform.
 - No authentication on the broker WS endpoint beyond device credentials
   (TLS is the reverse proxy's job; WebSocket origin checks could be added)
 - Login throttling is in-process (per-username lockout after 5 failures

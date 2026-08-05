@@ -48,6 +48,24 @@ many, cap 1000), `404 target_devices_not_found`, `422 invalid_device_uid`,
 | `POST /v1/devices/:id/credentials` | issue device credentials (password returned once, argon2id hash stored, clears revocation) |
 | `POST /v1/devices/:id/credentials/revoke` | refuse new connections AND kill the live session (NOTIFY) |
 
+### Rollouts (`packages/api/src/api/rollout.ts`)
+
+| Endpoint | Behavior |
+| --- | --- |
+| `POST /v1/firmware-releases/:id/rollouts` | create a phased deployment: `strategy: auto` (server-randomized pool + ratios, default 5/25/100%) or `grouped` (client groups); per-rollout settings `success_ratio` (0.9), `min_sample` (10), `phase_timeout_hours` (24), `stuck_hours` (6), `manual_approval`; optional `from_release_id` for rollback |
+| `GET /v1/ota-rollouts/:id` | detail: state, settings, per-phase job summaries, pool size |
+| `POST /v1/ota-rollouts/:id/pause` | stop advancing (in-flight deliveries untouched); `409` wrong state |
+| `POST /v1/ota-rollouts/:id/resume` | resume a paused rollout or a manual-approval wait (activates the next phase) |
+| `POST /v1/ota-rollouts/:id/abort` | stop advancing; delivered devices keep their firmware; pending phases cancelled |
+| `POST /v1/ota-rollouts/:id/rollback` | abort + create a `from_release_id` ota_job for the rollout's `completed` devices (installed excluded); idempotent; `409 rollback_unavailable` without a baseline or confirmed devices |
+
+Advance loop: the API process polls every `ROLLOUT_POLL_INTERVAL_MS`
+(30s); conditional UPDATEs make multiple API instances safe. Gating:
+`completed/actual ≥ success_ratio` and `completed ≥ min(min_sample,
+actual)`; phase timeout without meeting → auto-pause (never auto-rollback);
+stall judgement: `installed` > stuck_hours AND device alive (stat within
+1h) AND fw mismatch → `failed (-6)` (powered-off devices are spared).
+
 ## Validation
 
 `packages/api/src/api/validate.ts` centralizes:
