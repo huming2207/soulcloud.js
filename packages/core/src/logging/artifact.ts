@@ -81,7 +81,9 @@ export function extractArtifactStrings(elf: Uint8Array): ExtractedStrings {
     } else if (
       // allocated read-only string sections can hold static tags
       (sec.flags & 2n) !== 0n && // SHF_ALLOC
-      /^\.(rodata|data\.rel\.ro|rodata\.str|srodata)/.test(sec.name) &&
+      // ESP-IDF 6.0 links rodata into a merged `.flash.rodata` output
+      // section (same story as `.noload`); accept both layouts.
+      /^(\.flash\.rodata|\.rodata|data\.rel\.ro|rodata\.str|srodata)/.test(sec.name) &&
       !sec.name.includes(".noload")
     ) {
       for (const s of strings) {
