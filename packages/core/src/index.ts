@@ -25,6 +25,7 @@ export * from "./logging/ingest";
 export * from "./logging/decode";
 export * from "./ota/release";
 export * from "./ota/deploy";
+export * from "./ota/rollout";
 export * from "./security/password";
 export * from "./auth/tokens";
 export { prisma, ping, Prisma } from "./db";

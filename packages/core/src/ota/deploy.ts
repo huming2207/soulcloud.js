@@ -33,6 +33,12 @@ export class OtaError extends Error {
       | "target_not_found"
       | "target_not_in_project"
       | "release_not_in_project"
+      | "invalid_ratios"
+      | "invalid_from_release"
+      | "no_phases"
+      | "groups_overlap"
+      | "not_found"
+      | "rollback_unavailable"
       | "database",
     message: string,
   ) {
@@ -450,6 +456,8 @@ export async function recordOtaResult(
     where: { id: target.id, state: { in: accepting } },
     data: {
       state: targetState,
+      // installed_at feeds the rollout stall judgement (rollout proposal 19)
+      ...(input.state === "installed" ? { installedAt: new Date() } : {}),
       // intermediate states carry no result fields (CHECK constraint)
     },
   });

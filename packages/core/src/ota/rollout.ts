@@ -1,0 +1,689 @@
+/**
+ * OTA rollout: phased firmware deployment over a device pool (proposal 19).
+ *
+ * The rollout is a thin shell over the existing ota_job machinery:
+ *
+ *   - a phase, when activated, creates an ORDINARY ota_job for its device
+ *     slice — delivery, acknowledgements and stat.fw confirmation are
+ *     untouched
+ *   - the advance loop (API process, 30s) judges each active phase:
+ *       met   (completed ≥ ratio × actual, and ≥ min(min_sample, actual))
+ *              → phase completed, next phase activated (or waits for
+ *                manual approval / resume)
+ *       timed out (phase_timeout_hours without meeting) → rollout paused
+ *       stalled   (installed > stuck_hours AND device alive with a
+ *                mismatched fw) → target failed (code -6)
+ *   - rollback = an ota_job for from_release_id targeting the completed
+ *     devices of this rollout
+ *
+ * Concurrency: all state transitions use conditional UPDATEs
+ * (WHERE state = ...), so multiple API instances running the loop are
+ * safe — the loser updates 0 rows.
+ */
+
+import { randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import type { PrismaClient } from "../db";
+import { MAX_OTA_TARGETS, OtaError } from "./deploy";
+import { OTA_NOTIFY_CHANNEL } from "../queue/notify";
+
+/** Default auto-strategy ratios (cumulative; last must be 1.0). */
+export const DEFAULT_AUTO_RATIOS = [0.05, 0.25, 1.0] as const;
+
+/** Failure code for "device is alive but does not run the target fw". */
+export const OTA_STALL_FAILURE_CODE = -6;
+
+export interface CreateRolloutOptions {
+  projectId: string;
+  releaseId: string;
+  /** Baseline firmware for rollback (must be an existing release). */
+  fromReleaseId?: string;
+  strategy: "auto" | "grouped";
+  /** auto: the full device pool (randomized server-side). */
+  deviceIds?: string[];
+  /** auto: cumulative ratios, ascending, last = 1.0. */
+  ratios?: number[];
+  /** grouped: client-chosen groups, one phase per group. */
+  groups?: Array<{ device_ids: string[] }>;
+  successRatio?: number;
+  minSample?: number;
+  phaseTimeoutHours?: number;
+  stuckHours?: number;
+  manualApproval?: boolean;
+  createdBy: string;
+}
+
+export interface CreatedRollout {
+  rolloutId: string;
+  phases: Array<{ index: number; target_count: number; state: "active" | "pending" }>;
+  /** The phase-1 job (created synchronously). */
+  jobId: string | null;
+}
+
+function validateRatios(ratios: number[]): void {
+  if (ratios.length === 0) throw new OtaError("invalid_ratios", "at least one ratio is required");
+  for (const r of ratios) {
+    if (!(r > 0 && r <= 1)) throw new OtaError("invalid_ratios", "ratios must be in (0, 1]");
+  }
+  for (let i = 1; i < ratios.length; i++) {
+    const prev = ratios[i - 1];
+    const cur = ratios[i];
+    if (prev === undefined || cur === undefined || cur <= prev) {
+      throw new OtaError("invalid_ratios", "ratios must be strictly ascending");
+    }
+  }
+  const last = ratios[ratios.length - 1];
+  if (last === undefined || last !== 1.0) {
+    throw new OtaError("invalid_ratios", "the last ratio must be exactly 1.0");
+  }
+}
+
+/** Fisher-Yates shuffle (crypto randomness for the auto strategy). */
+function shuffle<T>(input: T[]): T[] {
+  const arr = [...input];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [arr[i], arr[j]] = [arr[j]!, arr[i]!];
+  }
+  return arr;
+}
+
+function randomInt(max: number): number {
+  // crypto-uniform in [0, max)
+  const limit = 256 - (256 % max);
+  const buf = randomBytes(1);
+  let v = buf[0]!;
+  while (v >= limit) {
+    const again = randomBytes(1);
+    v = again[0]!;
+  }
+  return v % max;
+}
+
+function sha256DeviceOrder(deviceIds: string[]): number[] {
+  return deviceIds.map((id) => {
+    const h = createHash("sha256").update(id).digest();
+    return h.readUInt32BE(0);
+  });
+}
+
+/**
+ * Creates a rollout: validates the pool, persists rollout + pool + phases,
+ * and activates phase 1 synchronously (a regular ota_job + wake-up).
+ *
+ * @throws {OtaError}
+ */
+export async function createOtaRollout(
+  prisma: PrismaClient,
+  options: CreateRolloutOptions,
+): Promise<CreatedRollout> {
+  const release = await prisma.firmwareRelease.findUnique({
+    where: { id: options.releaseId },
+    select: { id: true, projectId: true },
+  });
+  if (!release || release.projectId !== options.projectId) {
+    throw new OtaError("release_not_in_project", "release does not belong to this project");
+  }
+  if (options.fromReleaseId) {
+    const from = await prisma.firmwareRelease.findUnique({
+      where: { id: options.fromReleaseId },
+      select: { id: true, projectId: true },
+    });
+    if (!from || from.projectId !== options.projectId) {
+      throw new OtaError("release_not_in_project", "from_release_id does not belong to this project");
+    }
+    if (from.id === options.releaseId) {
+      throw new OtaError("invalid_from_release", "from_release_id must differ from the target release");
+    }
+    void from;
+  }
+
+  // ---- pool resolution ----------------------------------------------------
+  let poolDeviceIds: string[];
+  let phases: Array<{ index: number; ratio: number | null; groupId: number | null; targetCount: number }>;
+
+  if (options.strategy === "auto") {
+    if (!options.deviceIds || options.deviceIds.length === 0) {
+      throw new OtaError("empty_targets", "an auto rollout needs device_ids");
+    }
+    const ratios = options.ratios ?? [...DEFAULT_AUTO_RATIOS];
+    validateRatios(ratios);
+    if (new Set(options.deviceIds).size !== options.deviceIds.length) {
+      throw new OtaError("duplicate_targets", "device_ids contains duplicates");
+    }
+    if (options.deviceIds.length > MAX_OTA_TARGETS) {
+      throw new OtaError("too_many_targets", "too many target devices");
+    }
+    poolDeviceIds = options.deviceIds;
+    phases = ratios.map((r, i) => {
+      const targetCount = Math.max(1, Math.ceil(r * poolDeviceIds.length));
+      return { index: i + 1, ratio: r, groupId: null, targetCount };
+    });
+  } else {
+    if (!options.groups || options.groups.length === 0) {
+      throw new OtaError("no_phases", "grouped rollouts need at least one group");
+    }
+    const all: string[] = [];
+    const seen = new Set<string>();
+    for (const g of options.groups) {
+      if (!g.device_ids || g.device_ids.length === 0) {
+        throw new OtaError("empty_targets", "a group must contain devices");
+      }
+      for (const id of g.device_ids) {
+        if (seen.has(id)) throw new OtaError("groups_overlap", "groups must not overlap");
+        seen.add(id);
+        all.push(id);
+      }
+    }
+    if (all.length > MAX_OTA_TARGETS) {
+      throw new OtaError("too_many_targets", "too many target devices");
+    }
+    poolDeviceIds = all;
+    phases = options.groups.map((g, i) => ({
+      index: i + 1,
+      ratio: null,
+      groupId: i + 1,
+      targetCount: g.device_ids.length,
+    }));
+  }
+
+  // ---- device existence + project scoping (uniform not-found) -------------
+  const devices = await prisma.device.findMany({
+    where: { id: { in: poolDeviceIds } },
+    select: { id: true, projectId: true, deviceUid: true },
+  });
+  if (devices.length !== poolDeviceIds.length) {
+    throw new OtaError("target_not_found", "one or more target devices do not exist");
+  }
+  if (devices.some((d) => d.projectId !== options.projectId)) {
+    throw new OtaError("target_not_in_project", "one or more target devices do not belong to this project");
+  }
+
+  // auto: server-randomized order (deterministic per rollout: one shuffle)
+  let ordered: string[];
+  if (options.strategy === "auto") {
+    ordered = shuffle(poolDeviceIds);
+  } else {
+    ordered = poolDeviceIds; // client order is the group order
+  }
+
+  const rolloutId = randomUUID();
+  const now = new Date();
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await tx.otaRollout.create({
+        data: {
+          id: rolloutId,
+          projectId: options.projectId,
+          releaseId: options.releaseId,
+          fromReleaseId: options.fromReleaseId ?? null,
+          strategy: options.strategy,
+          successRatio: options.successRatio ?? 0.9,
+          minSample: options.minSample ?? 10,
+          phaseTimeoutHours: options.phaseTimeoutHours ?? 24,
+          stuckHours: options.stuckHours ?? 6,
+          manualApproval: options.manualApproval ?? false,
+          createdBy: options.createdBy,
+        },
+      });
+      await tx.otaRolloutPool.createMany({
+        data: ordered.map((deviceId, i) => ({ rolloutId, deviceId, sortIdx: i })),
+      });
+      await tx.otaRolloutPhase.createMany({
+        data: phases.map((p) => ({
+          rolloutId,
+          index: p.index,
+          ratio: p.ratio,
+          groupId: p.groupId,
+          targetCount: p.targetCount,
+          state: "pending",
+        })),
+      });
+
+      // activate phase 1 synchronously
+      const first = phases[0]!;
+      const slice = ordered.slice(0, first.targetCount);
+      const jobId = await createPhaseJob(tx, rolloutId, first.index, slice);
+      await tx.otaRolloutPhase.update({
+        where: { rolloutId_index: { rolloutId, index: 1 } },
+        data: { state: "active", jobId, activatedAt: now },
+      });
+
+      return {
+        rolloutId,
+        phases: phases.map((p) => ({
+          index: p.index,
+          target_count: p.targetCount,
+          state: (p.index === 1 ? "active" : "pending") as "active" | "pending",
+        })),
+        jobId,
+      };
+    });
+  } catch (error) {
+    if (error instanceof OtaError) throw error;
+    throw new OtaError("database", `rollout creation failed: ${(error as Error).message}`);
+  }
+}
+
+/** Creates a plain ota_job for a device slice (shared by phase + rollback). */
+async function createPhaseJob(
+  tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0],
+  rolloutId: string,
+  phaseIndex: number,
+  deviceIds: string[],
+): Promise<string> {
+  const jobId = randomUUID();
+  await tx.otaJob.create({
+    data: {
+      id: jobId,
+      projectId: (await tx.otaRollout.findUniqueOrThrow({ where: { id: rolloutId } })).projectId,
+      releaseId: (await tx.otaRollout.findUniqueOrThrow({ where: { id: rolloutId } })).releaseId,
+      createdBy: (await tx.otaRollout.findUniqueOrThrow({ where: { id: rolloutId } })).createdBy,
+    },
+  });
+  await tx.otaTarget.createMany({
+    data: deviceIds.map((deviceId) => ({
+      jobId,
+      deviceId,
+      expiresAt: new Date(Date.now() + 15 * 60_000),
+    })),
+  });
+  await tx.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+  return jobId;
+}
+
+// ===========================================================================
+// Advance loop + lifecycle operations
+// ===========================================================================
+
+export interface AdvanceSummary {
+  rolloutsScanned: number;
+  phasesActivated: number;
+  phasesCompleted: number;
+  rolloutsPaused: number;
+  rolloutsCompleted: number;
+  targetsStalled: number;
+}
+
+/**
+ * One advance pass over all running rollouts (called by the API process
+ * poller every ROLLOUT_POLL_INTERVAL_MS):
+ *
+ *   1. per rollout: judge the active phase
+ *      - met the success threshold  -> phase completed; activate the next
+ *        phase unless manual_approval (then it waits for resume)
+ *      - timed out (phase_timeout_hours) -> rollout paused
+ *   2. stall judgement for installed targets of active phases
+ *      - installed > stuck_hours AND device alive (stat within 1h) AND
+ *        fw mismatch -> failed (code -6)
+ *   3. all phases completed -> rollout completed
+ *
+ * Every transition is a conditional UPDATE; concurrent instances are safe.
+ */
+export async function advanceRollouts(prisma: PrismaClient): Promise<AdvanceSummary> {
+  const summary: AdvanceSummary = {
+    rolloutsScanned: 0,
+    phasesActivated: 0,
+    phasesCompleted: 0,
+    rolloutsPaused: 0,
+    rolloutsCompleted: 0,
+    targetsStalled: 0,
+  };
+
+  const rollouts = await prisma.otaRollout.findMany({
+    where: { state: "running" },
+    select: { id: true },
+  });
+  summary.rolloutsScanned = rollouts.length;
+
+  for (const { id } of rollouts) {
+    const rollout = await prisma.otaRollout.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        successRatio: true,
+        minSample: true,
+        phaseTimeoutHours: true,
+        stuckHours: true,
+        manualApproval: true,
+        phases: {
+          orderBy: { index: "asc" },
+          select: {
+            id: true,
+            index: true,
+            state: true,
+            targetCount: true,
+            activatedAt: true,
+            jobId: true,
+          },
+        },
+      },
+    });
+    if (!rollout) continue;
+
+    const active = rollout.phases.find((p) => p.state === "active");
+    if (!active) {
+      // no active phase: activate the next pending one (e.g. after resume)
+      const next = rollout.phases.find((p) => p.state === "pending");
+      if (next) {
+        const activated = await activatePendingPhase(prisma, rollout.id, next.index);
+        if (activated) summary.phasesActivated += 1;
+      }
+      // all phases terminal -> completed
+      const allTerminal = rollout.phases.every((p) => p.state === "completed");
+      if (allTerminal) {
+        const done = await prisma.otaRollout.updateMany({
+          where: { id: rollout.id, state: "running" },
+          data: { state: "completed" },
+        });
+        if (done.count > 0) summary.rolloutsCompleted += 1;
+      }
+      continue;
+    }
+
+    // ---- judge the active phase ------------------------------------------
+    const job = active.jobId
+      ? await prisma.otaJob.findUnique({
+          where: { id: active.jobId },
+          select: { id: true, targets: { select: { state: true } } },
+        })
+      : null;
+    const actual = job?.targets.length ?? 0;
+    const completed = job?.targets.filter((t) => t.state === "completed").length ?? 0;
+    const met =
+      actual > 0 &&
+      completed / actual >= rollout.successRatio &&
+      completed >= Math.min(rollout.minSample, actual);
+
+    const timedOut =
+      active.activatedAt !== null &&
+      Date.now() - active.activatedAt.getTime() > rollout.phaseTimeoutHours * 3600_000;
+
+    if (met) {
+      const finished = await prisma.otaRolloutPhase.updateMany({
+        where: { id: active.id, state: "active" },
+        data: { state: "completed", completedAt: new Date() },
+      });
+      if (finished.count === 0) continue; // another instance handled it
+      summary.phasesCompleted += 1;
+
+      const next = rollout.phases.find((p) => p.state === "pending");
+      if (next && !rollout.manualApproval) {
+        const activated = await activatePendingPhase(prisma, rollout.id, next.index);
+        if (activated) summary.phasesActivated += 1;
+      } else if (!next) {
+        // last phase met its threshold: the rollout is complete (same pass)
+        const done = await prisma.otaRollout.updateMany({
+          where: { id: rollout.id, state: "running" },
+          data: { state: "completed" },
+        });
+        if (done.count > 0) summary.rolloutsCompleted += 1;
+      }
+      // manual_approval with a next phase: it waits; the rollout stays
+      // running with no active phase until resume is called
+    } else if (timedOut) {
+      const paused = await prisma.$transaction([
+        prisma.otaRollout.updateMany({
+          where: { id: rollout.id, state: "running" },
+          data: { state: "paused" },
+        }),
+        prisma.otaRolloutPhase.updateMany({
+          where: { id: active.id, state: "active" },
+          data: { state: "paused" },
+        }),
+      ]);
+      if (paused[0]!.count > 0) summary.rolloutsPaused += 1;
+    } else {
+      // ---- stall judgement for installed targets -------------------------
+      summary.targetsStalled += await judgeInstalledTargets(
+        prisma,
+        active.jobId,
+        rollout.stuckHours,
+      );
+    }
+  }
+
+  return summary;
+}
+
+/** Installed > stuck_hours AND alive-with-mismatch -> failed (-6). */
+async function judgeInstalledTargets(
+  prisma: PrismaClient,
+  jobId: string | null,
+  stuckHours: number,
+): Promise<number> {
+  if (!jobId) return 0;
+  // device firmware state join: reported_at (aliveness) + fwHash (mismatch)
+  const stalled = await prisma.$queryRaw<Array<{ id: string }>>`
+    UPDATE ota_targets t
+    SET state = 'failed',
+        confirmed_at = now(),
+        result_code = ${OTA_STALL_FAILURE_CODE},
+        result_message = 'upgrade not active: device alive but firmware unchanged'
+    FROM ota_jobs j, firmware_releases r, firmware_artifacts a,
+         devices d, device_firmware_state s
+    WHERE t.job_id = j.id
+      AND j.release_id = r.id
+      AND r.artifact_id = a.id
+      AND t.device_id = d.id
+      AND s.device_id = d.id
+      AND t.job_id = ${jobId}
+      AND t.state = 'installed'
+      AND t.installed_at < now() - make_interval(secs => ${stuckHours * 3600}::double precision)
+      AND s.reported_at > now() - interval '1 hour'
+      AND s.fw_hash <> a."buildId"
+    RETURNING t.id
+  `;
+  return stalled.length;
+}
+
+/**
+ * Activates the next pending phase: conditional phase transition + a
+ * regular ota_job for the phase's device slice (cumulative sort_idx range).
+ */
+async function activatePendingPhase(
+  prisma: PrismaClient,
+  rolloutId: string,
+  phaseIndex: number,
+): Promise<boolean> {
+  const phase = await prisma.otaRolloutPhase.findUnique({
+    where: { rolloutId_index: { rolloutId, index: phaseIndex } },
+    select: { id: true, targetCount: true },
+  });
+  if (!phase) return false;
+
+  const claimed = await prisma.otaRolloutPhase.updateMany({
+    where: { id: phase.id, state: "pending" },
+    data: { state: "active", activatedAt: new Date() },
+  });
+  if (claimed.count === 0) return false;
+
+  // devices = pool sorted by sort_idx, first targetCount (phase index is
+  // cumulative: phases cover [0, t1), [t1, t1+t2), ...)
+  const pool = await prisma.otaRolloutPool.findMany({
+    where: { rolloutId },
+    orderBy: { sortIdx: "asc" },
+    select: { deviceId: true },
+  });
+  const prior = await prisma.otaRolloutPhase.aggregate({
+    where: { rolloutId, index: { lt: phaseIndex } },
+    _sum: { targetCount: true },
+  });
+  const start = prior._sum.targetCount ?? 0;
+  const slice = pool.slice(start, start + phase.targetCount).map((p) => p.deviceId);
+
+  // rollback within the transaction: the conditional update above already
+  // committed; creating the job now is idempotent per phase (jobId unique)
+  const tx = await prisma.$transaction(async (t) => {
+    const rollout = await t.otaRollout.findUniqueOrThrow({ where: { id: rolloutId } });
+    const jobId = randomUUID();
+    await t.otaJob.create({
+      data: {
+        id: jobId,
+        projectId: rollout.projectId,
+        releaseId: rollout.releaseId,
+        createdBy: rollout.createdBy,
+      },
+    });
+    await t.otaTarget.createMany({
+      data: slice.map((deviceId) => ({
+        jobId,
+        deviceId,
+        expiresAt: new Date(Date.now() + 15 * 60_000),
+      })),
+    });
+    await t.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+    await t.otaRolloutPhase.update({
+      where: { id: phase.id },
+      data: { jobId },
+    });
+    return jobId;
+  });
+  void tx;
+  return true;
+}
+
+/** Pauses a rollout (stops advancing; in-flight deliveries are untouched). */
+export async function pauseRollout(prisma: PrismaClient, rolloutId: string): Promise<boolean> {
+  const result = await prisma.$transaction([
+    prisma.otaRollout.updateMany({
+      where: { id: rolloutId, state: "running" },
+      data: { state: "paused" },
+    }),
+    prisma.otaRolloutPhase.updateMany({
+      where: { rolloutId, state: "active" },
+      data: { state: "paused" },
+    }),
+  ]);
+  return result[0]!.count > 0;
+}
+
+/**
+ * Resumes a rollout. Two wait states are covered:
+ *   - `paused` (timeout / user pause): back to running, paused phases
+ *     become active again
+ *   - manual-approval wait (rollout running with no active phase): the
+ *     next pending phase is activated immediately
+ */
+export async function resumeRollout(prisma: PrismaClient, rolloutId: string): Promise<boolean> {
+  const rollout = await prisma.otaRollout.findUnique({
+    where: { id: rolloutId },
+    select: { state: true },
+  });
+  if (!rollout || rollout.state === "aborted" || rollout.state === "completed") return false;
+  if (rollout.state === "paused") {
+    await prisma.otaRollout.updateMany({
+      where: { id: rolloutId, state: "paused" },
+      data: { state: "running" },
+    });
+    await prisma.otaRolloutPhase.updateMany({
+      where: { rolloutId, state: "paused" },
+      data: { state: "active", activatedAt: new Date() },
+    });
+  }
+  // manual-approval wait (or a fresh resume): activate the next pending
+  // phase immediately (the advance loop would do it on its next pass)
+  const next = await prisma.otaRolloutPhase.findFirst({
+    where: { rolloutId, state: "pending" },
+    orderBy: { index: "asc" },
+  });
+  if (next) {
+    await activatePendingPhase(prisma, rolloutId, next.index);
+  }
+  return true;
+}
+
+/** Aborts a rollout: stops advancing; delivered devices keep their firmware. */
+export async function abortRollout(prisma: PrismaClient, rolloutId: string): Promise<boolean> {
+  const result = await prisma.otaRollout.updateMany({
+    where: { id: rolloutId, state: { in: ["running", "paused"] } },
+    data: { state: "aborted" },
+  });
+  if (result.count === 0) return false;
+  await prisma.otaRolloutPhase.updateMany({
+    where: { rolloutId, state: "active" },
+    data: { state: "paused" },
+  });
+  return true;
+}
+
+export interface RollbackResult {
+  rollbackJobId: string;
+  targetDevices: number;
+}
+
+/**
+ * Rollback: aborts the rollout and creates a plain ota_job for
+ * from_release_id targeting the devices that CONFIRMED the upgrade
+ * (state=completed). Devices in `installed` are intentionally excluded
+ * (they may be mid-reboot/bricked — human intervention).
+ */
+export async function rollbackRollout(
+  prisma: PrismaClient,
+  rolloutId: string,
+): Promise<RollbackResult> {
+  const rollout = await prisma.otaRollout.findUnique({
+    where: { id: rolloutId },
+    select: {
+      id: true,
+      fromReleaseId: true,
+      projectId: true,
+      createdBy: true,
+      phases: { select: { jobId: true } },
+    },
+  });
+  if (!rollout) throw new OtaError("not_found", "rollout does not exist");
+  if (!rollout.fromReleaseId) {
+    throw new OtaError("rollback_unavailable", "rollout has no from_release_id");
+  }
+
+  const deviceIds = await prisma.otaTarget.findMany({
+    where: {
+      jobId: { in: rollout.phases.map((p) => p.jobId).filter((j): j is string => j !== null) },
+      state: "completed",
+    },
+    select: { deviceId: true },
+  });
+  if (deviceIds.length === 0) {
+    throw new OtaError("rollback_unavailable", "no devices confirmed the upgrade");
+  }
+
+  // abort first (conditional; concurrent rollback calls: only one wins)
+  await prisma.otaRollout.updateMany({
+    where: { id: rolloutId, state: { in: ["running", "paused"] } },
+    data: { state: "aborted" },
+  });
+  await prisma.otaRolloutPhase.updateMany({
+    where: { rolloutId, state: "active" },
+    data: { state: "paused" },
+  });
+
+  const jobId = randomUUID();
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.otaJob.create({
+        data: {
+          id: jobId,
+          projectId: rollout.projectId,
+          releaseId: rollout.fromReleaseId!,
+          createdBy: rollout.createdBy,
+        },
+      });
+      await tx.otaTarget.createMany({
+        data: deviceIds.map((d) => ({
+          jobId,
+          deviceId: d.deviceId,
+          expiresAt: new Date(Date.now() + 15 * 60_000),
+        })),
+      });
+      await tx.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+      await tx.otaRollout.update({
+        where: { id: rolloutId },
+        data: { rollbackJobId: jobId },
+      });
+    });
+  } catch (error) {
+    throw new OtaError("database", `rollback failed: ${(error as Error).message}`);
+  }
+  return { rollbackJobId: jobId, targetDevices: deviceIds.length };
+}

@@ -78,6 +78,7 @@ model Project {
   artifacts    FirmwareArtifact[]
   releases     FirmwareRelease[]
   otaJobs      OtaJob[]
+  rollouts     OtaRollout[]
   userLinks    UserProject[]
 
   @@map("projects")
@@ -103,6 +104,7 @@ model Device {
   firmwareState    DeviceFirmwareState?
   logEvents        RawLogEvent[]
   otaTargets       OtaTarget[]
+  rolloutPool      OtaRolloutPool[]
 
   @@unique([projectId, assignedId], map: "devices_project_assigned_id_unique")
   @@map("devices")
@@ -219,6 +221,8 @@ model FirmwareRelease {
   version    String?           @db.VarChar(255)
   createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz()
   otaJobs    OtaJob[]
+  rollouts   OtaRollout[]
+  rollbackFor OtaRollout[]     @relation("rollout_from")
 
   @@unique([projectId, binHash], map: "firmware_releases_project_bin_unique")
   @@index([projectId, createdAt])
@@ -238,6 +242,8 @@ model OtaJob {
   createdBy String      @map("created_by") @db.Uuid
   createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz()
   targets   OtaTarget[]
+  rollbackFor OtaRollout? @relation("rollout_rollback")
+  rolloutPhase OtaRolloutPhase?
 
   @@index([projectId, createdAt])
   @@map("ota_jobs")
@@ -257,6 +263,8 @@ model OtaTarget {
   deliveredAt DateTime? @map("delivered_at") @db.Timestamptz()
   /// Device acknowledgement time (completed/failed terminal states)
   confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz()
+  /// When the device reported `installed` (stall-judgement basis)
+  installedAt DateTime? @map("installed_at") @db.Timestamptz()
   /// 0 = success (completed); negative = failure code (failed)
   resultCode Int? @map("result_code")
   resultMessage String? @map("result_message") @db.VarChar(512)
@@ -270,6 +278,80 @@ model OtaTarget {
   @@index([state, expiresAt])
   @@index([jobId])
   @@map("ota_targets")
+}
+
+// --- OTA rollout (see llm-docs/soulcloudjs/19-ota-rollout-proposal.md) ---
+
+/// One OTA rollout: a phased firmware deployment over a device pool.
+model OtaRollout {
+  id             String            @id @default(uuid()) @db.Uuid
+  projectId      String            @map("project_id") @db.Uuid
+  project        Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  releaseId      String            @map("release_id") @db.Uuid
+  release        FirmwareRelease   @relation(fields: [releaseId], references: [id], onDelete: Restrict)
+  /// Baseline firmware for rollback (must be an existing release)
+  fromReleaseId  String?           @map("from_release_id") @db.Uuid
+  fromRelease    FirmwareRelease?  @relation("rollout_from", fields: [fromReleaseId], references: [id], onDelete: SetNull)
+  /// running | paused | aborted | completed
+  state          String            @default("running") @db.VarChar(32)
+  /// auto (server-randomized ratios) | grouped (client-chosen groups)
+  strategy       String            @db.VarChar(32)
+  /// Gating settings (per-rollout, user-tunable at creation)
+  successRatio   Float             @default(0.9) @map("success_ratio")
+  minSample      Int               @default(10) @map("min_sample")
+  phaseTimeoutHours Int            @default(24) @map("phase_timeout_hours")
+  stuckHours     Int               @default(6) @map("stuck_hours")
+  manualApproval Boolean           @default(false) @map("manual_approval")
+  /// rollback job created by POST /rollouts/:id/rollback
+  rollbackJobId  String?           @unique @map("rollback_job_id") @db.Uuid
+  rollbackJob    OtaJob?           @relation("rollout_rollback", fields: [rollbackJobId], references: [id], onDelete: SetNull)
+  createdBy      String            @map("created_by") @db.Uuid
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+  phases         OtaRolloutPhase[]
+  pool           OtaRolloutPool[]
+
+  @@index([projectId, createdAt])
+  @@map("ota_rollouts")
+}
+
+/// Device pool snapshot (auto: random sort_idx; grouped: client order).
+model OtaRolloutPool {
+  id        String     @id @default(uuid()) @db.Uuid
+  rolloutId String     @map("rollout_id") @db.Uuid
+  rollout   OtaRollout @relation(fields: [rolloutId], references: [id], onDelete: Cascade)
+  deviceId  String     @map("device_id") @db.Uuid
+  device    Device     @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  sortIdx   Int        @map("sort_idx")
+
+  @@unique([rolloutId, deviceId], map: "ota_rollout_pool_rollout_device_unique")
+  @@unique([rolloutId, sortIdx], map: "ota_rollout_pool_rollout_sort_unique")
+  @@map("ota_rollout_pool")
+}
+
+/// One phase of a rollout. Activation creates the phase's ota_job.
+model OtaRolloutPhase {
+  id          String      @id @default(uuid()) @db.Uuid
+  rolloutId   String      @map("rollout_id") @db.Uuid
+  rollout     OtaRollout  @relation(fields: [rolloutId], references: [id], onDelete: Cascade)
+  /// 1-based
+  index       Int
+  /// auto strategy only: cumulative coverage (last = 1.0)
+  ratio       Float?
+  /// grouped strategy only: the client-provided group number
+  groupId     Int?        @map("group_id")
+  /// pending | active | completed | paused
+  state       String      @default("pending") @db.VarChar(32)
+  /// Number of devices this phase covers (auto: ceil(ratio*pool);
+  /// grouped: the group size) — the phase's job is sliced by cumulative
+  /// sort_idx ranges over the pool
+  targetCount Int         @map("target_count")
+  jobId       String?     @unique @map("job_id") @db.Uuid
+  job         OtaJob?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  activatedAt DateTime?   @map("activated_at") @db.Timestamptz()
+  completedAt DateTime?   @map("completed_at") @db.Timestamptz()
+
+  @@unique([rolloutId, index])
+  @@map("ota_rollout_phases")
 }
 
 /// ELF address -> string dictionary for one artifact (tag/format resolution).

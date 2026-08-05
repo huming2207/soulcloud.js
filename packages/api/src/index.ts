@@ -8,6 +8,7 @@
 
 import { prisma } from "@soulcloud/core";
 import { createApp } from "./api/app";
+import { startRolloutPoller } from "./rollout-poller";
 import { loadApiConfig } from "./config";
 
 const config = loadApiConfig();
@@ -34,12 +35,22 @@ const app = createApp(
   config.OTA_TARGET_TTL_SECONDS,
 );
 app.listen({ hostname, port: Number(port) });
+// rollout FSM (proposal 19): slow, DB-only advance loop
+const rolloutPoller = startRolloutPoller(
+  prisma,
+  { pollIntervalMs: config.ROLLOUT_POLL_INTERVAL_MS },
+  {
+    info: (msg, fields) => console.log(`[soulcloud-api] ${msg}`, fields ?? ""),
+    warn: (msg, fields) => console.warn(`[soulcloud-api] ${msg}`, fields ?? ""),
+  },
+);
 console.log(
   `[soulcloud-api] listening on ${config.API_BIND_ADDRESS}`,
 );
 
 async function shutdown(signal: string) {
   console.log(`[soulcloud-api] received ${signal}, shutting down`);
+  rolloutPoller.stop();
   app.stop();
   await prisma.$disconnect();
   process.exit(0);

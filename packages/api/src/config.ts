@@ -12,6 +12,8 @@ export const envSchema = z.object({
   JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(30 * 24 * 3600),
   // OTA: delivery window for a pending target before it expires
   OTA_TARGET_TTL_SECONDS: z.coerce.number().int().positive().default(15 * 60),
+  // Rollout FSM advance loop cadence
+  ROLLOUT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 export type ApiConfig = BaseConfig & z.infer<typeof envSchema>;
