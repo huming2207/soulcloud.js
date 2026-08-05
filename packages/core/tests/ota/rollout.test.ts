@@ -428,3 +428,180 @@ describe("lifecycle", () => {
     await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
   });
 });
+
+describe("coverage sweep (round-2)", () => {
+  async function completePhaseJob(jobId: string): Promise<void> {
+    const rows = await prisma.otaTarget.findMany({
+      where: { jobId },
+      include: { device: { select: { deviceUid: true } } },
+    });
+    for (const t of rows) {
+      await prisma.otaTarget.update({
+        where: { id: t.id },
+        data: { state: "delivered", deliveredAt: new Date() },
+      });
+      await recordOtaResult(prisma, {
+        deviceUid: t.device.deviceUid, jobId, releaseId, state: "installed", code: 0,
+      });
+      await prisma.deviceFirmwareState.upsert({
+        where: { deviceId: t.deviceId },
+        update: { fwHash: elfHash, reportedAt: new Date() },
+        create: { deviceId: t.deviceId, fwHash: elfHash },
+      });
+      await confirmOtaTargetByFirmware(prisma, t.deviceId, elfHash);
+    }
+  }
+
+  test("manual_approval survives REPEATED advance passes (regression)", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId, releaseId, strategy: "auto",
+      deviceIds: deviceIds.slice(0, 2), ratios: [0.5, 1.0],
+      manualApproval: true,
+      createdBy: randomUUID(),
+    });
+    await completePhaseJob(created.jobId!);
+    // pass 1: phase 1 completes, phase 2 waits
+    await advanceRollouts(prisma);
+    // pass 2 and 3: the real poller's next passes must NOT bypass the wait
+    await advanceRollouts(prisma);
+    await advanceRollouts(prisma);
+    const phase2 = await prisma.otaRolloutPhase.findUnique({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 2 } },
+    });
+    expect(phase2?.state).toBe("pending");
+    // explicit resume activates it
+    await resumeRollout(prisma, created.rolloutId);
+    await advanceRollouts(prisma);
+    expect(
+      (await prisma.otaRolloutPhase.findUnique({
+        where: { rolloutId_index: { rolloutId: created.rolloutId, index: 2 } },
+      }))?.state,
+    ).toBe("active");
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
+  test("rollback is idempotent (repeat call reuses the job)", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId, releaseId, fromReleaseId, strategy: "auto",
+      deviceIds: deviceIds.slice(0, 2), ratios: [1.0],
+      createdBy: randomUUID(),
+    });
+    await completePhaseJob(created.jobId!);
+    const first = await rollbackRollout(prisma, created.rolloutId);
+    const second = await rollbackRollout(prisma, created.rolloutId);
+    expect(second.rollbackJobId).toBe(first.rollbackJobId);
+    // exactly one rollback job exists for this rollout (no duplicates),
+    // covering both confirmed devices
+    const targets = await prisma.otaTarget.count({ where: { jobId: first.rollbackJobId } });
+    expect(targets).toBe(2);
+    const rollout = await prisma.otaRollout.findUnique({ where: { id: created.rolloutId } });
+    expect(rollout?.rollbackJobId).toBe(first.rollbackJobId);
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
+  test("resume after a timeout pause re-activates the paused phase", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId, releaseId, strategy: "auto",
+      deviceIds: deviceIds.slice(0, 2), ratios: [1.0],
+      phaseTimeoutHours: 1,
+      createdBy: randomUUID(),
+    });
+    await prisma.otaRolloutPhase.update({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 1 } },
+      data: { activatedAt: new Date(Date.now() - 2 * 3600_000) },
+    });
+    await advanceRollouts(prisma);
+    const paused = await prisma.otaRollout.findUnique({ where: { id: created.rolloutId } });
+    expect(paused?.state).toBe("paused");
+    await resumeRollout(prisma, created.rolloutId);
+    const resumed = await prisma.otaRollout.findUnique({ where: { id: created.rolloutId } });
+    expect(resumed?.state).toBe("running");
+    const phase1 = await prisma.otaRolloutPhase.findUnique({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 1 } },
+    });
+    expect(phase1?.state).toBe("active");
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
+  test("a strict success_ratio blocks partial completion (LPWAN tuning)", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId, releaseId, strategy: "auto",
+      deviceIds: deviceIds.slice(0, 2), ratios: [1.0],
+      successRatio: 0.9, // 1/2 = 0.5 < 0.9: must not advance
+      createdBy: randomUUID(),
+    });
+    const rows = await prisma.otaTarget.findMany({
+      where: { jobId: created.jobId! },
+      include: { device: { select: { deviceUid: true } } },
+    });
+    await prisma.otaTarget.update({
+      where: { id: rows[0]!.id },
+      data: { state: "delivered", deliveredAt: new Date() },
+    });
+    await recordOtaResult(prisma, {
+      deviceUid: rows[0]!.device.deviceUid, jobId: created.jobId!,
+      releaseId, state: "installed", code: 0,
+    });
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId: rows[0]!.deviceId },
+      update: { fwHash: elfHash, reportedAt: new Date() },
+      create: { deviceId: rows[0]!.deviceId, fwHash: elfHash },
+    });
+    await confirmOtaTargetByFirmware(prisma, rows[0]!.deviceId, elfHash);
+    await advanceRollouts(prisma);
+    const phase1 = await prisma.otaRolloutPhase.findUnique({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 1 } },
+    });
+    expect(phase1?.state).toBe("active"); // 1/2 completed, ratio 0.9 unmet
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+});
+
+describe("grouped slicing (round-2)", () => {
+  test("phase 2 activation slices the SECOND group only", async () => {
+    const g1 = deviceIds.slice(0, 2);
+    const g2 = deviceIds.slice(2, 4);
+    const created = await createOtaRollout(prisma, {
+      projectId, releaseId, strategy: "grouped",
+      groups: [{ device_ids: g1 }, { device_ids: g2 }],
+      createdBy: randomUUID(),
+    });
+    // complete phase 1 (both g1 devices)
+    const rows = await prisma.otaTarget.findMany({
+      where: { jobId: created.jobId! },
+      include: { device: { select: { deviceUid: true } } },
+    });
+    expect(rows).toHaveLength(2);
+    for (const t of rows) {
+      await prisma.otaTarget.update({
+        where: { id: t.id },
+        data: { state: "delivered", deliveredAt: new Date() },
+      });
+      await recordOtaResult(prisma, {
+        deviceUid: t.device.deviceUid, jobId: created.jobId!,
+        releaseId, state: "installed", code: 0,
+      });
+      await prisma.deviceFirmwareState.upsert({
+        where: { deviceId: t.deviceId },
+        update: { fwHash: elfHash, reportedAt: new Date() },
+        create: { deviceId: t.deviceId, fwHash: elfHash },
+      });
+      await confirmOtaTargetByFirmware(prisma, t.deviceId, elfHash);
+    }
+    await advanceRollouts(prisma);
+    const phase2 = await prisma.otaRolloutPhase.findUnique({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 2 } },
+      select: { state: true, jobId: true },
+    });
+    expect(phase2?.state).toBe("active");
+    const phase2JobId = phase2?.jobId;
+    expect(phase2JobId).not.toBeNull();
+    const phase2Targets = await prisma.otaTarget.findMany({
+      where: { jobId: phase2JobId! },
+      select: { deviceId: true },
+    });
+    const g2Set = new Set(g2);
+    expect(phase2Targets.map((t) => t.deviceId).sort()).toEqual([...g2Set].sort());
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+});

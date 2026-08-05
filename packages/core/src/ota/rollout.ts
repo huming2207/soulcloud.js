@@ -363,9 +363,11 @@ export async function advanceRollouts(prisma: PrismaClient): Promise<AdvanceSumm
 
     const active = rollout.phases.find((p) => p.state === "active");
     if (!active) {
-      // no active phase: activate the next pending one (e.g. after resume)
+      // no active phase: activate the next pending one — UNLESS the
+      // rollout waits for manual approval (a fixed advance loop would
+      // otherwise bypass the wait on its very next pass)
       const next = rollout.phases.find((p) => p.state === "pending");
-      if (next) {
+      if (next && !rollout.manualApproval) {
         const activated = await activatePendingPhase(prisma, rollout.id, next.index);
         if (activated) summary.phasesActivated += 1;
       }
@@ -635,6 +637,19 @@ export async function rollbackRollout(
   if (!rollout) throw new OtaError("not_found", "rollout does not exist");
   if (!rollout.fromReleaseId) {
     throw new OtaError("rollback_unavailable", "rollout has no from_release_id");
+  }
+
+  // idempotency: a previous rollback's job is reused (concurrent or
+  // repeated rollback calls must not create duplicate jobs)
+  const existing = await prisma.otaRollout.findUnique({
+    where: { id: rolloutId },
+    select: { rollbackJobId: true },
+  });
+  if (existing?.rollbackJobId) {
+    const count = await prisma.otaTarget.count({
+      where: { jobId: existing.rollbackJobId },
+    });
+    return { rollbackJobId: existing.rollbackJobId, targetDevices: count };
   }
 
   const deviceIds = await prisma.otaTarget.findMany({
