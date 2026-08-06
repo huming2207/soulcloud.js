@@ -13,18 +13,34 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SESSION="web-e2e"
-API="http://localhost:8080"
+# dedicated API port: local machines often have the firmware E2E backend
+# (or a dev instance) already listening on 8080; Bun may share the port
+# across processes (SO_REUSEPORT), which routes login and /v1/me to
+# different JWT_SECRETs and produces random 401s. Isolate instead.
+API_PORT="${WEB_E2E_API_PORT:-8082}"
+API="http://localhost:$API_PORT"
 WEB="http://localhost:5173"
 export JWT_SECRET="${JWT_SECRET:-ci-web-e2e-jwt-secret-0123456789}"
+SHOT_DIR="/tmp/soulcloud-web-screenshot"
+mkdir -p "$SHOT_DIR"
 
-bun run start:api > /tmp/ci-web-e2e-api.log 2>&1 &
+API_BIND_ADDRESS="127.0.0.1:$API_PORT" bun run start:api > /tmp/ci-web-e2e-api.log 2>&1 &
 API_PID=$!
-(cd packages/web && bun run dev --port 5173 > /tmp/ci-web-e2e-web.log 2>&1) &
+(cd packages/web && bun run dev --port 5173 --strictPort > /tmp/ci-web-e2e-web.log 2>&1) &
 WEB_PID=$!
 
 cleanup() {
-  kill "$API_PID" "$WEB_PID" 2>/dev/null || true
-  wait "$API_PID" "$WEB_PID" 2>/dev/null || true
+  # kill the whole process trees we spawned (bun run -> bun/vite -> node
+  # layers; plain kill only gets the top wrapper)
+  kill_tree() {
+    local pid=$1
+    for c in $(pgrep -P "$pid" 2>/dev/null || true); do
+      kill_tree "$c"
+    done
+    kill "$pid" 2>/dev/null || true
+  }
+  kill_tree "$API_PID"
+  kill_tree "$WEB_PID"
   agent-browser --session "$SESSION" close --all > /dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -94,5 +110,5 @@ agent-browser --session "$SESSION" wait --text "No releases" --timeout 20000
 agent-browser --session "$SESSION" open "$WEB/rollouts"
 agent-browser --session "$SESSION" wait --text "No rollouts" --timeout 20000
 
-agent-browser --session "$SESSION" screenshot /tmp/soulcloud-web-screenshot/e2e-final.png > /dev/null
+agent-browser --session "$SESSION" screenshot "$SHOT_DIR/e2e-final.png" > /dev/null
 echo "[web-e2e] done"
