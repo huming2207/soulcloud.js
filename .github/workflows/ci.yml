@@ -6,7 +6,8 @@ on:
   pull_request:
 
 jobs:
-  test:
+  backend:
+    name: Backend (typecheck + tests + E2E)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -43,7 +44,7 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test
+      - name: Test (isolated test database)
         run: bash scripts/test.sh
         env:
           TEST_DATABASE_URL: postgres://soulcloud:soulcloud@127.0.0.1:5432/soulcloud_test
@@ -54,5 +55,69 @@ jobs:
           # CI-only value; a real deployment must set its own (fail-fast)
           JWT_SECRET: ci-e2e-jwt-secret-0123456789-0123456789
 
-      # ELF-dependent demo integration tests skip when the demo ELF is
-      # absent (it is regenerated locally with scripts/build-on9log-fixtures.sh)
+  web:
+    name: Web (typecheck + unit tests + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Web typecheck
+        run: bun run --cwd packages/web typecheck
+
+      - name: Web unit tests
+        run: bun run --cwd packages/web test
+
+      - name: Web build
+        run: bun run --cwd packages/web build
+
+  web-e2e:
+    name: Web <-> API E2E
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: soulcloud
+          POSTGRES_USER: soulcloud
+          POSTGRES_PASSWORD: soulcloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U soulcloud -d soulcloud"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgres://soulcloud:soulcloud@127.0.0.1:5432/soulcloud
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bun run db:generate
+
+      - name: Apply migrations
+        run: bun run db:deploy
+
+      - name: Install agent-browser
+        run: |
+          npm install -g agent-browser
+          agent-browser install || agent-browser install --with-deps
+
+      - name: E2E (web <-> API)
+        run: bash scripts/web-e2e-ci.sh
+        env:
+          JWT_SECRET: ci-web-e2e-jwt-secret-0123456789-0123456789
