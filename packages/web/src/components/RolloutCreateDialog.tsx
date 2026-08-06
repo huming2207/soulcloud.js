@@ -257,7 +257,14 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                         <TextField
                           size="small"
                           type="number"
-                          slotProps={{ htmlInput: { step: 0.05, min: 0, max: 1 } }}
+                          slotProps={{
+                            htmlInput: {
+                              step: 0.05,
+                              min: 0,
+                              max: 1,
+                              "aria-label": t("rollout.create.ratioLabel", { n: i + 1 }),
+                            },
+                          }}
                           value={Number.isFinite(r) ? r : ""}
                           onChange={(e) => updateRatio(i, e.target.value)}
                           sx={{ width: 90 }}
