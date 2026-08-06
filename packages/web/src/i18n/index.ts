@@ -7,12 +7,13 @@ const LOCALE_KEY = "soulcloud.locale";
 /** Stored locale, or the browser language when it is English/Russian/Ukrainian, else zh. */
 function detectInitialLocale(): Locale {
   const stored = localStorage.getItem(LOCALE_KEY);
-  if (stored === "zh" || stored === "en" || stored === "ru" || stored === "uk") {
+  if (stored === "zh" || stored === "en" || stored === "ru" || stored === "uk" || stored === "it") {
     return stored;
   }
   const lang = navigator.language.toLowerCase();
   if (lang.startsWith("ru")) return "ru";
   if (lang.startsWith("uk")) return "uk";
+  if (lang.startsWith("it")) return "it";
   if (lang.startsWith("en")) return "en";
   return "zh";
 }

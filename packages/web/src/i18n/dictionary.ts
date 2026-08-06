@@ -5,7 +5,7 @@
  * widths, dialogs use full width).
  */
 
-export type Locale = "zh" | "en" | "ru" | "uk";
+export type Locale = "zh" | "en" | "ru" | "uk" | "it";
 
 export type DictKey = keyof typeof zh;
 
@@ -32,6 +32,7 @@ export const zh = {
   "layout.langEn": "English",
   "layout.langRu": "Русский",
   "layout.langUk": "Українська",
+  "layout.langIt": "Italiano",
 
   // auth
   "auth.login": "登录",
@@ -352,6 +353,7 @@ export const en: Record<DictKey, string> = {
   "layout.langEn": "English",
   "layout.langRu": "Русский",
   "layout.langUk": "Українська",
+  "layout.langIt": "Italiano",
 
   "auth.login": "Log in",
   "auth.loggingIn": "Logging in…",
@@ -637,8 +639,9 @@ export const en: Record<DictKey, string> = {
 
 import { ru } from "./ru";
 import { uk } from "./uk";
+import { it } from "./it";
 
-export const dictionaries: Record<Locale, Record<DictKey, string>> = { zh, en, ru, uk };
+export const dictionaries: Record<Locale, Record<DictKey, string>> = { zh, en, ru, uk, it };
 
 /** i18next resource shape: { zh: { translation }, en: { translation } }. */
 export const resources = {
@@ -646,6 +649,7 @@ export const resources = {
   en: { translation: en },
   ru: { translation: ru },
   uk: { translation: uk },
+  it: { translation: it },
 } as const;
 
 /** En strings are noticeably longer than zh; surfaced here for tests. */

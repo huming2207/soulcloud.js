@@ -12,19 +12,21 @@ import {
   enUS as muiEn,
   ruRU as muiRu,
   ukUA as muiUk,
+  itIT as muiIt,
 } from "@mui/material/locale";
 import {
   zhCN as gridZh,
   enUS as gridEn,
   ruRU as gridRu,
   ukUA as gridUk,
+  itIT as gridIt,
 } from "@mui/x-data-grid/locales";
 import { baseTheme } from "../theme";
 import { setStoredLocale } from "./index";
 import type { DictKey, Locale } from "./dictionary";
 
-const MUI_LOCALES = { zh: muiZh, en: muiEn, ru: muiRu, uk: muiUk } as const;
-const GRID_LOCALES = { zh: gridZh, en: gridEn, ru: gridRu, uk: gridUk } as const;
+const MUI_LOCALES = { zh: muiZh, en: muiEn, ru: muiRu, uk: muiUk, it: muiIt } as const;
+const GRID_LOCALES = { zh: gridZh, en: gridEn, ru: gridRu, uk: gridUk, it: gridIt } as const;
 
 export interface I18nContextValue {
   locale: Locale;
@@ -50,9 +52,11 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     ? "ru"
     : instance.language.startsWith("uk")
       ? "uk"
-      : instance.language.startsWith("en")
-        ? "en"
-        : "zh";
+      : instance.language.startsWith("it")
+        ? "it"
+        : instance.language.startsWith("en")
+          ? "en"
+          : "zh";
 
   const setLocale = useCallback(
     (next: Locale) => {

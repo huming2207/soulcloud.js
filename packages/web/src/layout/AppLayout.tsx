@@ -42,6 +42,7 @@ const LANG_OPTIONS = [
   { locale: "en", labelKey: "layout.langEn" as DictKey },
   { locale: "ru", labelKey: "layout.langRu" as DictKey },
   { locale: "uk", labelKey: "layout.langUk" as DictKey },
+  { locale: "it", labelKey: "layout.langIt" as DictKey },
 ] as const;
 
 const NAV_ITEMS = [

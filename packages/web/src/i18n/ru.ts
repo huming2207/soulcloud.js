@@ -26,6 +26,7 @@ export const ru: Record<DictKey, string> = {
   "layout.langEn": "English",
   "layout.langRu": "Русский",
   "layout.langUk": "Українська",
+  "layout.langIt": "Italiano",
 
   "auth.login": "Войти",
   "auth.loggingIn": "Вход…",
