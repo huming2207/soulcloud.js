@@ -122,3 +122,23 @@ describe("DeviceDetailPage", () => {
     await waitFor(() => expect(screen.getByText("boom")).not.toBeNull());
   });
 });
+
+describe("DeviceDetailPage firmware state fallbacks", () => {
+  test("shows the no-firmware hint when the state query 404s", async () => {
+    devicesApi.fetchDeviceFirmwareState.mockRejectedValue({
+      response: { status: 404 },
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByText(/尚未上报固件|has not reported firmware|не сообщило о прошивке/i),
+      ).not.toBeNull(),
+    );
+  });
+
+  test("shows the query error when the device fails to load", async () => {
+    devicesApi.fetchDevice.mockRejectedValue(new Error("device gone"));
+    renderPage();
+    await waitFor(() => expect(screen.getByText("device gone")).not.toBeNull());
+  });
+});

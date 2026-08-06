@@ -122,3 +122,79 @@ describe("FirmwarePage", () => {
     );
   });
 });
+
+describe("FirmwarePage size formatting and download", () => {
+  test("formats small and large bin sizes (B and MB branches)", async () => {
+    firmwareApi.fetchReleases.mockResolvedValue({
+      items: [
+        {
+          release_id: "r-small",
+          bin_hash: "a1".repeat(32),
+          bin_size: 512,
+          version: "tiny",
+          artifact_id: null,
+          created_at: "2026-08-06T00:00:00Z",
+        },
+        {
+          release_id: "r-big",
+          bin_hash: "b2".repeat(32),
+          bin_size: 2 * 1024 * 1024,
+          version: "big",
+          artifact_id: null,
+          created_at: "2026-08-06T00:00:00Z",
+        },
+      ],
+      next_cursor: null,
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("tiny")).not.toBeNull());
+    expect(screen.getByText("512 B")).not.toBeNull();
+    expect(screen.getByText("2.0 MB")).not.toBeNull();
+  });
+
+  test("downloads the bin with a versioned filename", async () => {
+    firmwareApi.fetchReleases.mockResolvedValue({
+      items: [
+        {
+          release_id: "r1",
+          bin_hash: "aa".repeat(32),
+          bin_size: 1024,
+          version: "v9.9.9",
+          artifact_id: null,
+          created_at: "2026-08-06T00:00:00Z",
+        },
+      ],
+      next_cursor: null,
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("v9.9.9")).not.toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: /下载 bin|Download bin/i }));
+    await waitFor(() =>
+      expect(firmwareApi.triggerReleaseDownload).toHaveBeenCalledWith(
+        "r1",
+        "release-v9.9.9.bin",
+      ),
+    );
+  });
+
+  test("shows an error when the download fails", async () => {
+    firmwareApi.triggerReleaseDownload.mockRejectedValue(new Error("download failed"));
+    firmwareApi.fetchReleases.mockResolvedValue({
+      items: [
+        {
+          release_id: "r1",
+          bin_hash: "aa".repeat(32),
+          bin_size: 1024,
+          version: "v1",
+          artifact_id: null,
+          created_at: "2026-08-06T00:00:00Z",
+        },
+      ],
+      next_cursor: null,
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("v1")).not.toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: /下载 bin|Download bin/i }));
+    await waitFor(() => expect(screen.getByText("download failed")).not.toBeNull());
+  });
+});

@@ -463,3 +463,37 @@ describe("M2: per-command delivery timeout", () => {
     expect(after.state).toBe("queued");
   });
 });
+
+describe("recordDeviceResult edge cases", () => {
+  test("a corrupt stored result packet yields invalid_stored_result", async () => {
+    await enqueueBatch(prisma, [deviceIds[0]!], { cmd: "reboot" });
+    const leased = await leaseNext(prisma, 60_000);
+    expect(leased).not.toBeNull();
+    await markBrokerAccepted(prisma, leased!.id);
+    // simulate a terminal result whose stored packet is corrupt
+    // (CHECK constraints require the full completed column set)
+    await prisma.deviceCommand.update({
+      where: { id: leased!.id },
+      data: {
+        state: "device_completed",
+        brokerAcceptedAt: new Date(),
+        resultCode: 0,
+        resultPacket: Buffer.from([0x81, 0xff, 0xff]),
+        deviceCompletedAt: new Date(),
+      },
+    });
+    const device = await prisma.device.findUniqueOrThrow({
+      where: { id: deviceIds[0]! },
+    });
+    const execution = decodeDeviceCommandExecution(leased!.payload);
+    await expect(
+      recordDeviceResult(
+        prisma,
+        device.deviceUid,
+        { id: execution.id, seq: execution.seq, code: 0 },
+        Buffer.from(encodeDeviceCommandResult({ id: execution.id, seq: execution.seq, code: 0 })),
+      ),
+    ).rejects.toMatchObject({ kind: "invalid_stored_result" });
+    // command is already terminal; beforeEach cleans up the rows
+  });
+});

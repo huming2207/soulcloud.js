@@ -116,3 +116,26 @@ describe("UploadDialog (release)", () => {
     );
   });
 });
+
+describe("UploadDialog close/reset", () => {
+  test("cancelling closes the dialog and resets the form", async () => {
+    const onClose = mock(() => {});
+    const { rerender } = render(
+      <I18nProvider>
+        <UploadDialog kind="release" open onClose={onClose} onUploaded={() => {}} />
+      </I18nProvider>,
+    );
+    await userEvent.type(screen.getByLabelText(/版本号|Version/), "v1.0.0");
+    await userEvent.click(screen.getByRole("button", { name: /取消|Cancel|Отмена|Скасувати|Annulla/i }));
+    expect(onClose).toHaveBeenCalled();
+    // reopen: the version field must be empty again
+    rerender(
+      <I18nProvider>
+        <UploadDialog kind="release" open onClose={onClose} onUploaded={() => {}} />
+      </I18nProvider>,
+    );
+    expect(
+      (screen.getByLabelText(/版本号|Version/) as HTMLInputElement).value,
+    ).toBe("");
+  });
+});

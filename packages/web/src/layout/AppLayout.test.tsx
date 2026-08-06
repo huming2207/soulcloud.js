@@ -88,3 +88,35 @@ describe("AppLayout", () => {
     expect(authCtx.logout).toHaveBeenCalled();
   });
 });
+
+describe("AppLayout page titles and project switching", () => {
+  test("detail routes get specific app bar titles", () => {
+    function renderAt(path: string) {
+      return render(
+        <I18nProvider>
+          <MemoryRouter initialEntries={[path]}>
+            <Routes>
+              <Route element={<AppLayout />}>
+                <Route path="/devices/:deviceId" element={<div>DETAIL</div>} />
+                <Route path="/rollouts/:rolloutId" element={<div>RDETAIL</div>} />
+                <Route path="/ota-jobs/:jobId" element={<div>JOB</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </I18nProvider>,
+      );
+    }
+    const first = renderAt("/devices/d1");
+    expect(screen.getAllByText(/Device Detail|设备详情/i).length).toBeGreaterThan(0);
+    first.unmount();
+    renderAt("/rollouts/r1");
+    expect(screen.getAllByText(/Rollout Detail|升级详情/i).length).toBeGreaterThan(0);
+  });
+
+  test("switching the project selector calls setProjectId", async () => {
+    renderLayout();
+    await userEvent.click(screen.getByRole("combobox", { name: /选择项目|Select project/i }));
+    await userEvent.click(await screen.findByRole("option", { name: /Beta/ }));
+    expect(projectCtx.setProjectId).toHaveBeenCalledWith("p2");
+  });
+});
