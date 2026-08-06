@@ -103,10 +103,12 @@ language menu in the app bar persists the choice.
 ## Known limits / open items
 
 - **Deployment**: production images + compose are in place (api/broker via
-  `Dockerfile.backend`, web via `packages/web/Dockerfile` — the built SPA
-  is served by Bun itself with `packages/web/server.ts`). TLS termination
-  and `/v1` routing to the API are expected at the reverse proxy (traefik
-  in the reference deployment), outside the base compose file.
+  `Dockerfile.backend`, web via `packages/web/Dockerfile` served by a
+  minimal nginx — SPA fallback + immutable asset caching, no proxying
+  inside the container). Compose exposes the API/web/MQTT ports directly;
+  TLS termination and `/v1` routing to the API are expected at the
+  reverse proxy (traefik in the reference deployment), outside the base
+  compose file.
 - **Bundle size**: the main chunk is ~636 KB minified (MUI); route-level
   splitting is in place, a manualChunks split is a future optimisation.
 - **No auth UI for MQTT device enrollment flows beyond create-device**

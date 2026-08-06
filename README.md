@@ -226,13 +226,13 @@ docker compose up -d --build
 ```
 
 - Images: `Dockerfile.backend` (api/broker targets, multi-stage Bun) and
-  `packages/web/Dockerfile` (vite build -> Bun static server).
-- The web container only serves the built SPA (`packages/web/server.ts`,
-  SPA fallback + immutable asset caching); TLS and `/v1` routing to the
-  API are handled by the reverse proxy in front — the reference
-  deployment terminates TLS with traefik outside this compose file and
-  routes `host/` to the web service and `host/v1`, `host/health` to the
-  api service (both are plain HTTP inside the compose network).
+  `packages/web/Dockerfile` (vite build -> minimal nginx static server).
+- The web container serves the built SPA only (SPA fallback + immutable
+  asset caching, no proxying inside the container). Compose exposes the
+  API (`:8080`), web (`:8081`) and MQTT (`:1883`) ports directly; the
+  reverse proxy in front — traefik in the reference deployment —
+  terminates TLS and routes `host/` to the web service and `host/v1`,
+  `host/health` to the api service.
 - MQTT-over-WebSocket TLS is likewise expected at the proxy (stream
   passthrough to `:1883`).
 

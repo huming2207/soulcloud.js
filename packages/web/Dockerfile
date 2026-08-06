@@ -1,7 +1,9 @@
-# Web console production image: build the SPA with Bun, then serve the
-# static output with Bun itself (no nginx). TLS and /v1 routing to the
-# API are handled by the reverse proxy in front (traefik in the
-# reference deployment).
+# Web console production image: build the SPA with Bun, serve the static
+# output with a minimal nginx (SPA fallback + immutable asset caching).
+# No reverse proxying inside this container: compose exposes the API,
+# web and MQTT ports directly and the proxy in front (traefik in the
+# reference deployment) routes /v1 + /health to the api service and
+# terminates TLS.
 FROM oven/bun:1.3-debian AS build
 WORKDIR /app
 
@@ -16,10 +18,7 @@ COPY tsconfig.json ./
 COPY packages/web packages/web
 RUN bun run --cwd packages/web build
 
-FROM oven/bun:1.3-debian
-COPY --from=build /app/packages/web/dist /app/packages/web/dist
-COPY --from=build /app/packages/web/server.ts /app/packages/web/server.ts
-WORKDIR /app/packages/web
-ENV WEB_PORT=8080
-EXPOSE 8080
-CMD ["bun", "run", "server.ts"]
+FROM nginx:1.27-alpine
+COPY packages/web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/packages/web/dist /usr/share/nginx/html
+EXPOSE 80
