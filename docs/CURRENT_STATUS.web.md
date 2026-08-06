@@ -102,8 +102,11 @@ language menu in the app bar persists the choice.
 
 ## Known limits / open items
 
-- **Deployment config**: no Dockerfile/nginx reverse-proxy template for
-  the built SPA yet (the built output needs `/v1` proxying to the API).
+- **Deployment**: production images + compose are in place (api/broker via
+  `Dockerfile.backend`, web via `packages/web/Dockerfile` — the built SPA
+  is served by Bun itself with `packages/web/server.ts`). TLS termination
+  and `/v1` routing to the API are expected at the reverse proxy (traefik
+  in the reference deployment), outside the base compose file.
 - **Bundle size**: the main chunk is ~636 KB minified (MUI); route-level
   splitting is in place, a manualChunks split is a future optimisation.
 - **No auth UI for MQTT device enrollment flows beyond create-device**

@@ -207,10 +207,34 @@ Open (same scope as the Rust version): full-text log search, object
 storage archive, retention policies, fleet selectors, org/tenant tenancy
 (direct user→project today).
 
-> **Deployment notes**: both processes require `JWT_SECRET` (>= 32 chars,
-> identical for api and broker, see `.env.example`). Login throttling is
+> **Deployment notes**: both backend processes require `JWT_SECRET` (>= 32
+> chars, identical for api and broker, see `.env.example`). Login throttling is
 > in-process (per instance); register brute-force and OTA download rate
 > limiting must be handled at the reverse proxy.
+
+## Production compose
+
+The base `docker compose up -d` starts PostgreSQL, the API, the broker and
+the web console:
+
+```sh
+# .env must set JWT_SECRET (>= 32 chars)
+docker compose up -d --build
+# web console: http://localhost:8081 (Bun serves the SPA)
+# REST API:    http://localhost:8080
+# MQTT (WS):   ws://localhost:1883/mqtt
+```
+
+- Images: `Dockerfile.backend` (api/broker targets, multi-stage Bun) and
+  `packages/web/Dockerfile` (vite build -> Bun static server).
+- The web container only serves the built SPA (`packages/web/server.ts`,
+  SPA fallback + immutable asset caching); TLS and `/v1` routing to the
+  API are handled by the reverse proxy in front — the reference
+  deployment terminates TLS with traefik outside this compose file and
+  routes `host/` to the web service and `host/v1`, `host/health` to the
+  api service (both are plain HTTP inside the compose network).
+- MQTT-over-WebSocket TLS is likewise expected at the proxy (stream
+  passthrough to `:1883`).
 
 ## Log ingestion quick tour
 

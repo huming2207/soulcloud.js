@@ -1,0 +1,10 @@
+node_modules
+.git
+*.log
+dist
+packages/*/dist
+packages/*/node_modules
+packages/core/generated
+generated
+coverage
+.env
