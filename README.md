@@ -23,6 +23,8 @@ packages/
   broker/   @soulcloud/broker  Device-facing MQTT-over-WebSocket broker
                                process (Aedes): device auth/ACL, uplink
                                dispatch, command poller. No HTTP API.
+  web/      @soulcloud/web     Human-facing web UI (React 19 + MUI 9 + Vite):
+                               device management, logs, firmware, OTA.
 ```
 
 Both processes share the same PostgreSQL database, which is the only
@@ -51,6 +53,8 @@ PostgreSQL insufficient; `LISTEN/NOTIFY` may later serve as a wake-up hint
 | MQTT broker   | Aedes over WebSocket, in `@soulcloud/broker` |
 | Serialization | @msgpack/msgpack + strict token validator  |
 | Validation    | Zod                                        |
+| Web UI        | React 19 + Material UI 9 + Vite (`@soulcloud/web`) |
+| Web data      | TanStack Query + axios + react-i18next    |
 
 ## Local development
 
@@ -94,16 +98,21 @@ Error mapping: `400 invalid_targets`, `404 target_devices_not_found`,
 ## Quality checks
 
 ```sh
-bash scripts/test.sh    # 398 tests, isolated test database (soulcloud_test)
-bun run typecheck       # tsc --noEmit
-bun run db:deploy       # apply migrations
-bun scripts/e2e.ts      # full-loop smoke test (needs both processes running)
+bash scripts/test.sh              # backend: 398 tests on the isolated test DB
+bun run --cwd packages/web test   # frontend: 115 unit tests (happy-dom)
+bun run typecheck                 # tsc --noEmit (backend + frontend)
+bun run --cwd packages/web build  # production build of the web UI
+bash scripts/web-e2e-ci.sh        # browser <-> API E2E (needs agent-browser)
+bun scripts/e2e.ts                # full-loop smoke test (needs both processes)
 ```
 
-The test suite runs against its own database (`soulcloud_test`, created and
+Backend tests run against their own database (`soulcloud_test`, created and
 migrated automatically by `scripts/prepare-test-db.ts`), so the dev MQTT
 broker — whose poller leases the global command queue every ~500ms — and
 QEMU firmware E2E runs can keep going while tests execute.
+
+Frontend coverage: 76% lines / 91% statements across 27 test files
+(`bun run --cwd packages/web test --coverage`).
 
 ## MQTT v1 topics
 
@@ -146,6 +155,34 @@ POST /v1/devices/:id/credentials/revoke       refuse new connections
   Aedes client; if the notification is lost, reconnect is still refused)
 - passwords (human + device) are argon2id via Bun.password; legacy scrypt /
   plaintext hashes still verify for development data
+
+## Web UI
+
+The web console (`packages/web`) covers the human-facing workflows:
+
+- **Auth**: login / register (registration creates a personal project),
+  session restore, logout. Access token lives in memory only (15 min); the
+  refresh token is stored in localStorage, rotated on every use, and a 401
+  triggers a single-flight refresh + retry.
+- **Devices**: Data Grid list (server pagination), create device (one-time
+  MQTT credential), detail page with firmware-state binding, credential
+  issue/revoke, command form + history with batch detail.
+- **Logs**: per-device decoded on9log stream with level badges, raw packet
+  toggle and auto-refresh.
+- **Firmware**: ELF artifact upload (dictionary import), release upload
+  (bin + optional ELF), deploy dialog (multi-select devices -> OTA job),
+  authenticated bin download.
+- **OTA**: rollout list with progress, creation wizard (auto ratios or
+  custom groups, gating parameters), detail page with per-state actions
+  (pause/resume/abort/rollback) and a phase stepper.
+- **i18n**: Simplified Chinese, English, Russian, Ukrainian, Italian —
+  react-i18next for app strings, MUI + Data Grid locales follow the app
+  language (browser detection + persisted choice).
+
+CI runs three parallel jobs: backend (typecheck + tests + both-process
+E2E), web (typecheck + unit tests + build) and web <-> API browser E2E
+(see `scripts/web-e2e-ci.sh`, requires agent-browser). See
+`docs/CURRENT_STATUS.web.md` for details.
 
 ## Status
 

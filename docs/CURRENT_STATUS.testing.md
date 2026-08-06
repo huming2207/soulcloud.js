@@ -1,8 +1,8 @@
 # Testing & Quality
 
-**Baseline**: 375 tests across 27 files, `bun test` green, `tsc --noEmit`
-clean. E2E scripts (command loop, log ingestion, OTA, rollout) pass against
-both running processes.
+**Baseline**: 398 backend tests (isolated `soulcloud_test` DB) + 115 web
+unit tests green, `tsc --noEmit` clean. E2E scripts (command loop, log
+ingestion, OTA, rollout, web <-> API) pass.
 
 ## Strategy
 
@@ -64,18 +64,34 @@ packages/broker/tests/mqtt/
 
 ## CI
 
-`.github/workflows/ci.yml` (GitHub Actions, `master` branch):
+`.github/workflows/ci.yml` (GitHub Actions, `master` branch) runs three
+parallel jobs:
 
-1. checkout + setup-bun
-2. `bun install --frozen-lockfile`
-3. `bun run db:generate` (generated client is gitignored — without this CI
-   fails)
-4. `bun run db:deploy` against a postgres:18-alpine service
-5. `bun run typecheck`
-6. `bun test`
+1. **backend** (postgres service): install → `db:generate` → `db:deploy`
+   → `bun run typecheck` → `bash scripts/test.sh` (398 tests on the
+   isolated `soulcloud_test` database) → both-process E2E
+   (`scripts/run-e2e.sh`)
+2. **web** (no database): install → web typecheck → 115 unit tests
+   (`bun run --cwd packages/web test`) → production build
+3. **web-e2e** (postgres service): install → `db:generate`/`db:deploy`
+   → install agent-browser (Chrome for Testing) →
+   `bash scripts/web-e2e-ci.sh` (browser <-> API E2E against a fresh
+   database)
 
-E2E scripts are not in CI (they need both processes and a firmware ELF);
-they are run locally as part of a release check.
+## Frontend testing
+
+- **Unit tests**: `bun run --cwd packages/web test` — bun:test with
+  happy-dom globals (injected by `src/test-setup.ts`), React Testing
+  Library + user-event. Files run with `--isolate` so module mocks
+  (`mock.module`) do not leak across files.
+- **Coverage**: `bun run --cwd packages/web test --coverage` — 76% lines /
+  91% statements across 27 files (i18n dictionary, axios auth flow,
+  contexts, every page/dialog, API helpers, theme).
+- **Browser E2E**: `scripts/web-e2e-ci.sh` (needs agent-browser on PATH)
+  — starts API + Vite, seeds a user, creates a device via the API, then
+  verifies in a real browser that the frontend renders real backend data.
+  All browser calls share one agent-browser session; waits are condition
+  based (`wait --text`) with no fixed sleeps.
 
 ## Scripts
 
@@ -87,4 +103,7 @@ they are run locally as part of a release check.
 | `scripts/e2e-rollout.ts` | rollout E2E (create 2-phase rollout → phase-1 completes → advance loop activates phase 2) |
 | `scripts/latency.ts` | enqueue→device latency measurement (LISTEN/NOTIFY wake-up) |
 | `scripts/bench-elf.ts` | ELF parser benchmark (36 µs per 1 MB ELF, 40 µs per decoded event) |
+| `scripts/web-e2e-ci.sh` | web <-> API E2E: browser renders real backend data (auth, devices, firmware, rollouts) |
+| `scripts/prepare-test-db.ts` | create/migrate/truncate the isolated `soulcloud_test` database |
+| `scripts/test.sh` | backend test runner (isolated test DB, excludes the web package suite) |
 | `scripts/build-on9log-fixtures.sh` | regenerate the checked-in demo ELF + output |
