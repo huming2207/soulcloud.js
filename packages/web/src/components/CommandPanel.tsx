@@ -27,6 +27,8 @@ import {
 } from "../api/devices";
 import { errorMessage } from "../api/http";
 import type { CommandRecord, CommandState } from "../api/types";
+import { useI18n } from "../i18n/I18nContext";
+import type { DictKey } from "../i18n/dictionary";
 
 const STATE_COLOR: Record<CommandState, "default" | "info" | "primary" | "success" | "error"> = {
   queued: "default",
@@ -36,12 +38,12 @@ const STATE_COLOR: Record<CommandState, "default" | "info" | "primary" | "succes
   delivery_failed: "error",
 };
 
-const STATE_LABEL: Record<CommandState, string> = {
-  queued: "排队中",
-  leased: "已租约",
-  broker_accepted: "已送达",
-  device_completed: "已完成",
-  delivery_failed: "投递失败",
+const STATE_LABEL: Record<CommandState, DictKey> = {
+  queued: "state.queued",
+  leased: "state.leased",
+  broker_accepted: "state.broker_accepted",
+  device_completed: "state.device_completed",
+  delivery_failed: "state.delivery_failed",
 };
 
 function formatArgs(args: unknown): string {
@@ -67,6 +69,7 @@ export function CommandPanel({ deviceId }: { deviceId: string }) {
 }
 
 function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: () => void }) {
+  const { t } = useI18n();
   const [cmd, setCmd] = useState("");
   const [argsText, setArgsText] = useState("");
   const [timeoutText, setTimeoutText] = useState("");
@@ -118,7 +121,7 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
   return (
     <Paper sx={{ p: 2 }}>
       <Typography variant="subtitle1" gutterBottom>
-        下发命令
+        {t("cmd.send")}
       </Typography>
       <form onSubmit={submit}>
         <Stack spacing={2}>
@@ -126,22 +129,22 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
           {success && <Alert severity="success">{success}</Alert>}
           <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }} useFlexGap>
             <TextField
-              label="命令名（cmd）"
+              label={t("cmd.name")}
               value={cmd}
               onChange={(e) => setCmd(e.target.value)}
               required
               sx={{ flex: "1 1 200px" }}
             />
             <TextField
-              label="投递超时（秒，可选）"
+              label={t("cmd.timeout")}
               value={timeoutText}
               onChange={(e) => setTimeoutText(e.target.value)}
               sx={{ flex: "1 1 160px" }}
-              helperText="留空 = 永不超时"
+              helperText={t("cmd.timeoutHint")}
             />
           </Stack>
           <TextField
-            label="参数 args（JSON 数组，可选）"
+            label={t("cmd.args")}
             value={argsText}
             onChange={(e) => setArgsText(e.target.value)}
             multiline
@@ -153,7 +156,7 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
           />
           <Box>
             <Button type="submit" variant="contained" disabled={submitting}>
-              {submitting ? "发送中…" : "发送到设备"}
+              {submitting ? t("cmd.sending") : t("cmd.sendBtn")}
             </Button>
           </Box>
         </Stack>
@@ -163,6 +166,7 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
 }
 
 function CommandHistory({ deviceId }: { deviceId: string }) {
+  const { t } = useI18n();
   const [cursor, setCursor] = useState<string | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
   // refreshKey bumps after a new command is enqueued
@@ -178,25 +182,25 @@ function CommandHistory({ deviceId }: { deviceId: string }) {
   return (
     <Paper sx={{ p: 2 }}>
       <Typography variant="subtitle1" gutterBottom>
-        命令历史
+        {t("cmd.history")}
       </Typography>
       <TableContainer>
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>时间</TableCell>
+              <TableCell>{t("cmd.time")}</TableCell>
               <TableCell>seq</TableCell>
-              <TableCell>命令</TableCell>
-              <TableCell>状态</TableCell>
-              <TableCell>结果</TableCell>
-              <TableCell>批次</TableCell>
+              <TableCell>{t("cmd.name")}</TableCell>
+              <TableCell>{t("cmd.state")}</TableCell>
+              <TableCell>{t("cmd.result")}</TableCell>
+              <TableCell>{t("cmd.batch")}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {rows.length === 0 && !isLoading && (
               <TableRow>
                 <TableCell colSpan={6} align="center" sx={{ color: "text.secondary" }}>
-                  暂无命令
+                  {t("cmd.noCommands")}
                 </TableCell>
               </TableRow>
             )}
@@ -207,7 +211,7 @@ function CommandHistory({ deviceId }: { deviceId: string }) {
                 </TableCell>
                 <TableCell>{c.sequence}</TableCell>
                 <TableCell>
-                  <Box sx={{ fontFamily: "monospace" }}>{c.command?.cmd ?? "（无法解码）"}</Box>
+                  <Box sx={{ fontFamily: "monospace" }}>{c.command?.cmd ?? t("cmd.undecodable")}</Box>
                   {c.command && formatArgs(c.command.args) !== "" && (
                     <Box sx={{ color: "text.secondary", fontSize: 12 }}>
                       {formatArgs(c.command.args)}
@@ -217,7 +221,7 @@ function CommandHistory({ deviceId }: { deviceId: string }) {
                 <TableCell>
                   <Chip
                     size="small"
-                    label={STATE_LABEL[c.state]}
+                    label={t(STATE_LABEL[c.state])}
                     color={STATE_COLOR[c.state]}
                     variant="outlined"
                   />
@@ -255,18 +259,18 @@ function CommandHistory({ deviceId }: { deviceId: string }) {
         </Table>
       </TableContainer>
       <Box sx={{ mt: 1, display: "flex", justifyContent: "flex-end", gap: 1 }}>
-        {isLoading && <Typography variant="caption">加载中…</Typography>}
+        {isLoading && <Typography variant="caption">{t("cmd.loading")}</Typography>}
         {isFetching && !isLoading && (
-          <Typography variant="caption">刷新中…</Typography>
+          <Typography variant="caption">{t("cmd.refreshing")}</Typography>
         )}
         {data?.next_cursor && (
           <Button size="small" onClick={() => setCursor(data.next_cursor)}>
-            加载更早
+            {t("cmd.loadEarlier")}
           </Button>
         )}
         {cursor && (
           <Button size="small" onClick={() => setCursor(null)}>
-            回到最新
+            {t("cmd.backToLatest")}
           </Button>
         )}
       </Box>
@@ -278,6 +282,7 @@ function CommandHistory({ deviceId }: { deviceId: string }) {
 }
 
 function BatchDialog({ batchId, onClose }: { batchId: string; onClose: () => void }) {
+  const { t } = useI18n();
   const { data } = useQuery({
     queryKey: ["batch", batchId],
     queryFn: () => fetchCommandBatch(batchId),
@@ -288,7 +293,7 @@ function BatchDialog({ batchId, onClose }: { batchId: string; onClose: () => voi
   return (
     <Dialog open onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle>
-        批次 {batchId}
+        {t("cmd.batchTitle", { id: batchId })}
         <IconButton
           aria-label="关闭"
           onClick={onClose}
@@ -303,7 +308,7 @@ function BatchDialog({ batchId, onClose }: { batchId: string; onClose: () => voi
             <Chip
               key={state}
               size="small"
-              label={`${STATE_LABEL[state as CommandState]} ${count}`}
+              label={`${t(STATE_LABEL[state as CommandState])} ${count}`}
               color={STATE_COLOR[state as CommandState]}
               variant="outlined"
             />
@@ -313,10 +318,10 @@ function BatchDialog({ batchId, onClose }: { batchId: string; onClose: () => voi
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>设备</TableCell>
-                <TableCell>命令</TableCell>
-                <TableCell>状态</TableCell>
-                <TableCell>结果</TableCell>
+                <TableCell>{t("cmd.device")}</TableCell>
+                <TableCell>{t("cmd.name")}</TableCell>
+                <TableCell>{t("cmd.state")}</TableCell>
+                <TableCell>{t("cmd.result")}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -326,12 +331,12 @@ function BatchDialog({ batchId, onClose }: { batchId: string; onClose: () => voi
                     {c.device_uid}
                   </TableCell>
                   <TableCell sx={{ fontFamily: "monospace" }}>
-                    {c.command?.cmd ?? "（无法解码）"}
+                    {c.command?.cmd ?? t("cmd.undecodable")}
                   </TableCell>
                   <TableCell>
                     <Chip
                       size="small"
-                      label={STATE_LABEL[c.state]}
+                      label={t(STATE_LABEL[c.state])}
                       color={STATE_COLOR[c.state]}
                       variant="outlined"
                     />

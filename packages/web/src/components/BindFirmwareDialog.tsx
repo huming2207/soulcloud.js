@@ -15,6 +15,7 @@ import { bindFirmwareState } from "../api/devices";
 import { fetchArtifacts } from "../api/firmware";
 import { errorMessage } from "../api/http";
 import { useProject } from "../layout/ProjectContext";
+import { useI18n } from "../i18n/I18nContext";
 
 interface Props {
   deviceId: string;
@@ -26,6 +27,7 @@ interface Props {
 /** Binds a device's reported firmware hash to an ELF artifact (backfills
  * previously undecodable log events). */
 export function BindFirmwareDialog({ deviceId, open, onClose, onBound }: Props) {
+  const { t } = useI18n();
   const { projectId } = useProject();
   const artifacts = useQuery({
     queryKey: ["artifacts", projectId],
@@ -63,21 +65,21 @@ export function BindFirmwareDialog({ deviceId, open, onClose, onBound }: Props) 
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>绑定固件构件</DialogTitle>
+      <DialogTitle>{t("detail.bindArtifact")}</DialogTitle>
       <DialogContent>
         <DialogContentText sx={{ mb: 2 }}>
-          将设备上报的固件哈希关联到 ELF 构件，可解码此前无法解析的日志事件。
+          {t("bind.body")}
         </DialogContentText>
         <Stack spacing={2}>
           {error && <Alert severity="error">{error}</Alert>}
           {backfilled !== null && (
             <Alert severity="success">
-              绑定成功，已回填 {backfilled} 条日志事件。
+              {t("bind.done", { backfilled })}
             </Alert>
           )}
           <TextField
             select
-            label="ELF 构件"
+            label={t("fw.colArtifact")}
             value={artifactId}
             onChange={(e) => setArtifactId(e.target.value)}
             disabled={artifacts.isLoading}
@@ -85,7 +87,7 @@ export function BindFirmwareDialog({ deviceId, open, onClose, onBound }: Props) 
           >
             {list.length === 0 && (
               <MenuItem value="" disabled>
-                该项目暂无构件（先在固件页上传 ELF）
+                {t("bind.noArtifacts")}
               </MenuItem>
             )}
             {list.map((a) => (
@@ -97,19 +99,19 @@ export function BindFirmwareDialog({ deviceId, open, onClose, onBound }: Props) 
           </TextField>
           {list.length > 0 && (
             <Typography variant="caption" color="text.secondary">
-              仅显示版本号与构建 ID 前缀
+              {t("bind.hint")}
             </Typography>
           )}
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleClose}>取消</Button>
+        <Button onClick={handleClose}>{t("upload.cancel")}</Button>
         <Button
           onClick={submit}
           variant="contained"
           disabled={submitting || !artifactId}
         >
-          {submitting ? "绑定中…" : "绑定"}
+          {submitting ? t("bind.binding") : t("bind.submit")}
         </Button>
       </DialogActions>
     </Dialog>

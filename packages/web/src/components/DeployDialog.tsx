@@ -20,6 +20,7 @@ import { fetchDevices } from "../api/devices";
 import { deployRelease } from "../api/firmware";
 import { errorMessage } from "../api/http";
 import { useProject } from "../layout/ProjectContext";
+import { useI18n } from "../i18n/I18nContext";
 
 interface DeviceOption {
   device_id: string;
@@ -34,6 +35,7 @@ interface Props {
 
 /** Deploys a release to selected devices (one OTA job). */
 export function DeployDialog({ releaseId, open, onClose }: Props) {
+  const { t } = useI18n();
   const { projectId } = useProject();
   const navigate = useNavigate();
   const devices = useQuery({
@@ -85,15 +87,14 @@ export function DeployDialog({ releaseId, open, onClose }: Props) {
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       {jobId ? (
         <>
-          <DialogTitle>部署已创建</DialogTitle>
+          <DialogTitle>{t("deploy.done")}</DialogTitle>
           <DialogContent>
             <Alert severity="success" sx={{ mb: 2 }}>
-              已为 {selected.length} 台设备创建 OTA 任务（{jobId}）。设备将收到
-              下载通知，可在任务页跟踪进度。
+              {t("deploy.doneBody", { count: selected.length, id: jobId })}
             </Alert>
           </DialogContent>
           <DialogActions>
-            <Button onClick={handleClose}>关闭</Button>
+            <Button onClick={handleClose}>{t("deploy.close")}</Button>
             <Button
               variant="contained"
               onClick={() => {
@@ -101,16 +102,16 @@ export function DeployDialog({ releaseId, open, onClose }: Props) {
                 navigate(`/ota-jobs/${jobId}`);
               }}
             >
-              查看任务
+              {t("deploy.viewJob")}
             </Button>
           </DialogActions>
         </>
       ) : (
         <form onSubmit={submit}>
-          <DialogTitle>部署固件</DialogTitle>
+          <DialogTitle>{t("deploy.title")}</DialogTitle>
           <DialogContent>
             <DialogContentText sx={{ mb: 2 }}>
-              选择目标设备（最多 1000 台），每台设备会收到短时效的下载凭据。
+              {t("deploy.body")}
             </DialogContentText>
             <Stack spacing={2}>
               {error && <Alert severity="error">{error}</Alert>}
@@ -137,31 +138,31 @@ export function DeployDialog({ releaseId, open, onClose }: Props) {
                 renderInput={(params) => (
                   <TextField
                     {...params}
-                    label="目标设备"
-                    placeholder="选择设备…"
+                    label={t("deploy.devices")}
+                    placeholder={t("deploy.placeholder")}
                     helperText={
                       devices.isLoading
-                        ? "加载设备…"
-                        : `共 ${devices.data?.total ?? 0} 台设备（最多展示前 500 台）`
+                        ? t("deploy.loadingDevices")
+                        : t("deploy.deviceCount", { total: devices.data?.total ?? 0 })
                     }
                   />
                 )}
               />
               {selected.length > 0 && (
                 <Typography variant="caption" color="text.secondary">
-                  已选择 {selected.length} 台
+                  {t("deploy.selected", { count: selected.length })}
                 </Typography>
               )}
             </Stack>
           </DialogContent>
           <DialogActions>
-            <Button onClick={handleClose}>取消</Button>
+            <Button onClick={handleClose}>{t("upload.cancel")}</Button>
             <Button
               type="submit"
               variant="contained"
               disabled={submitting || selected.length === 0}
             >
-              {submitting ? "创建中…" : "部署"}
+              {submitting ? t("deploy.deploying") : t("deploy.submit")}
             </Button>
           </DialogActions>
         </form>

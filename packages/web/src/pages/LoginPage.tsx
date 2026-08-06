@@ -11,8 +11,10 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../api/http";
+import { useI18n } from "../i18n/I18nContext";
 
 export function LoginPage() {
+  const { t } = useI18n();
   const { status, login } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
@@ -51,16 +53,16 @@ export function LoginPage() {
       <Card sx={{ width: "100%", maxWidth: 400 }}>
         <CardContent sx={{ p: 4 }}>
           <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>
-            Soulcloud
+            {t("app.title")}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            IoT 设备管理平台
+            {t("app.subtitle")}
           </Typography>
           <form onSubmit={handleSubmit}>
             <Stack spacing={2}>
               {error && <Alert severity="error">{error}</Alert>}
               <TextField
-                label="用户名"
+                label={t("auth.username")}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 autoComplete="username"
@@ -69,7 +71,7 @@ export function LoginPage() {
                 fullWidth
               />
               <TextField
-                label="密码"
+                label={t("auth.password")}
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -83,12 +85,12 @@ export function LoginPage() {
                 size="large"
                 disabled={submitting}
               >
-                {submitting ? "登录中…" : "登录"}
+                {submitting ? t("auth.loggingIn") : t("auth.login")}
               </Button>
               <Typography variant="body2" align="center">
-                还没有账户？{" "}
+                {t("auth.noAccount")}{" "}
                 <MuiLink component={Link} to="/register">
-                  注册
+                  {t("auth.signupLink")}
                 </MuiLink>
               </Typography>
             </Stack>

@@ -6,22 +6,24 @@ import { useAuth } from "../auth/AuthContext";
 import { useProject } from "../layout/ProjectContext";
 import { Placeholder } from "./Placeholder";
 import { CardSkeleton } from "../components/QueryState";
+import { useI18n } from "../i18n/I18nContext";
 
 export function DashboardPage() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const { project } = useProject();
 
   return (
     <Stack spacing={3}>
       <Typography variant="h5" sx={{ fontWeight: 600 }}>
-        仪表盘
+        {t("dash.title")}
       </Typography>
       {project ? (
         <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }} useFlexGap>
           <Card sx={{ minWidth: 240, flex: "1 1 240px" }}>
             <CardContent>
               <Typography variant="body2" color="text.secondary">
-                当前项目
+                {t("dash.currentProject")}
               </Typography>
               <Typography variant="h6" noWrap>
                 {project.name}
@@ -34,7 +36,7 @@ export function DashboardPage() {
           <Card sx={{ minWidth: 240, flex: "1 1 240px" }}>
             <CardContent>
               <Typography variant="body2" color="text.secondary">
-                设备总数
+                {t("dash.totalDevices")}
               </Typography>
               <Typography variant="h6">{project.device_count}</Typography>
             </CardContent>
@@ -44,11 +46,10 @@ export function DashboardPage() {
         <CardSkeleton />
       )}
       <Placeholder
-        title="后续规划"
+        title={t("dash.roadmap")}
         description={
           <>
-            欢迎，{user?.username}。设备管理（P2）与固件 / OTA（P3）页面正在
-            开发中。
+            {t("dash.welcome", { name: user?.username ?? "" })}
           </>
         }
       />

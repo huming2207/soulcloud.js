@@ -11,10 +11,12 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../api/http";
+import { useI18n } from "../i18n/I18nContext";
 
 const USERNAME_RE = /^[a-zA-Z0-9_.-]+$/;
 
 export function RegisterPage() {
+  const { t } = useI18n();
   const { status, register } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
@@ -33,15 +35,15 @@ export function RegisterPage() {
     setError(null);
     const name = username.trim();
     if (!USERNAME_RE.test(name)) {
-      setError("用户名只能包含字母、数字、下划线、点、短横线");
+      setError(t("auth.errUsernameChars"));
       return;
     }
     if (password.length < 8) {
-      setError("密码至少 8 个字符");
+      setError(t("auth.errPasswordLen"));
       return;
     }
     if (password !== confirm) {
-      setError("两次输入的密码不一致");
+      setError(t("auth.errMismatch"));
       return;
     }
     setSubmitting(true);
@@ -69,26 +71,26 @@ export function RegisterPage() {
       <Card sx={{ width: "100%", maxWidth: 400 }}>
         <CardContent sx={{ p: 4 }}>
           <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>
-            注册账户
+            {t("auth.signup")}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            注册后会自动创建一个专属项目
+            {t("auth.autoProject")}
           </Typography>
           <form onSubmit={handleSubmit}>
             <Stack spacing={2}>
               {error && <Alert severity="error">{error}</Alert>}
               <TextField
-                label="用户名"
+                label={t("auth.username")}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 autoComplete="username"
                 autoFocus
                 required
                 fullWidth
-                helperText="字母、数字、_ . -"
+                helperText={t("auth.usernameHint")}
               />
               <TextField
-                label="邮箱"
+                label={t("auth.email")}
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -97,17 +99,17 @@ export function RegisterPage() {
                 fullWidth
               />
               <TextField
-                label="密码"
+                label={t("auth.password")}
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="new-password"
                 required
                 fullWidth
-                helperText="至少 8 个字符"
+                helperText={t("auth.passwordHint")}
               />
               <TextField
-                label="确认密码"
+                label={t("auth.confirm")}
                 type="password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
@@ -121,12 +123,12 @@ export function RegisterPage() {
                 size="large"
                 disabled={submitting}
               >
-                {submitting ? "注册中…" : "注册"}
+                {submitting ? t("auth.signingUp") : t("auth.signupLink")}
               </Button>
               <Typography variant="body2" align="center">
-                已有账户？{" "}
+                {t("auth.haveAccount")}{" "}
                 <MuiLink component={Link} to="/login">
-                  登录
+                  {t("auth.loginLink")}
                 </MuiLink>
               </Typography>
             </Stack>

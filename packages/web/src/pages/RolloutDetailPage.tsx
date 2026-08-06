@@ -23,6 +23,8 @@ import {
 import { errorMessage } from "../api/http";
 import { CardSkeleton, QueryError } from "../components/QueryState";
 import type { OtaTargetState, RolloutState } from "../api/types";
+import { useI18n } from "../i18n/I18nContext";
+import type { DictKey } from "../i18n/dictionary";
 
 const ROLLOUT_STATE_COLOR: Record<RolloutState, "primary" | "warning" | "error" | "success"> = {
   running: "primary",
@@ -31,23 +33,23 @@ const ROLLOUT_STATE_COLOR: Record<RolloutState, "primary" | "warning" | "error" 
   completed: "success",
 };
 
-const ROLLOUT_STATE_LABEL: Record<RolloutState, string> = {
-  running: "进行中",
-  paused: "已暂停",
-  aborted: "已中止",
-  completed: "已完成",
+const ROLLOUT_STATE_LABEL: Record<RolloutState, DictKey> = {
+  running: "rollout.state.running",
+  paused: "rollout.state.paused",
+  aborted: "rollout.state.aborted",
+  completed: "rollout.state.completed",
 };
 
-const TARGET_LABEL: Record<OtaTargetState, string> = {
-  pending: "待投递",
-  leased: "已领取",
-  delivered: "已通知",
-  delivering: "下载中",
-  downloaded: "已下载",
-  installed: "已安装",
-  expired: "已过期",
-  completed: "已完成",
-  failed: "失败",
+const TARGET_LABEL: Record<OtaTargetState, DictKey> = {
+  pending: "target.pending",
+  leased: "target.leased",
+  delivered: "target.delivered",
+  delivering: "target.delivering",
+  downloaded: "target.downloaded",
+  installed: "target.installed",
+  expired: "target.expired",
+  completed: "target.completed",
+  failed: "target.failed",
 };
 
 function phaseStateIndex(phases: Array<{ state: string }>): number {
@@ -55,6 +57,7 @@ function phaseStateIndex(phases: Array<{ state: string }>): number {
 }
 
 export function RolloutDetailPage() {
+  const { t } = useI18n();
   const { rolloutId } = useParams<{ rolloutId: string }>();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -89,20 +92,20 @@ export function RolloutDetailPage() {
       {rollout.isLoading ? (
         <CardSkeleton />
       ) : rollout.error || !r ? (
-        <QueryError error={rollout.error ?? new Error("升级不存在")} onRetry={() => rollout.refetch()} />
+        <QueryError error={rollout.error ?? new Error(t("rollout.detail.notFound"))} onRetry={() => rollout.refetch()} />
       ) : (
         <>
           <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
             <Typography variant="h5" sx={{ fontWeight: 600 }}>
-              升级 {r.rollout_id.slice(0, 8)}
+              {t("job.title", { id: r.rollout_id.slice(0, 8) })}
             </Typography>
             <Chip
-              label={ROLLOUT_STATE_LABEL[r.state]}
+              label={t(ROLLOUT_STATE_LABEL[r.state])}
               color={ROLLOUT_STATE_COLOR[r.state]}
               variant="outlined"
             />
-            <Chip label={r.strategy === "auto" ? "自动分批" : "自定义分组"} size="small" />
-            {r.manual_approval && <Chip label="需手动批准" size="small" color="warning" />}
+            <Chip label={r.strategy === "auto" ? t("rollouts.auto") : t("rollouts.grouped")} size="small" />
+            {r.manual_approval && <Chip label={t("rollout.detail.manualApproval")} size="small" color="warning" />}
           </Stack>
 
           <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
@@ -111,14 +114,14 @@ export function RolloutDetailPage() {
               disabled={r.state !== "running" || acting}
               onClick={() => act(() => pauseRollout(r.rollout_id))}
             >
-              暂停
+              {t("rollout.detail.pause")}
             </Button>
             <Button
               variant="outlined"
               disabled={r.state !== "paused" || acting}
               onClick={() => act(() => resumeRollout(r.rollout_id))}
             >
-              恢复
+              {t("rollout.detail.resume")}
             </Button>
             <Button
               variant="outlined"
@@ -126,7 +129,7 @@ export function RolloutDetailPage() {
               disabled={(r.state !== "running" && r.state !== "paused") || acting}
               onClick={() => act(() => abortRollout(r.rollout_id))}
             >
-              中止
+              {t("rollout.detail.abort")}
             </Button>
             <Button
               variant="outlined"
@@ -134,7 +137,7 @@ export function RolloutDetailPage() {
               disabled={(r.state !== "aborted" && r.state !== "completed") || acting}
               onClick={() => act(() => rollbackRollout(r.rollout_id))}
             >
-              回滚
+              {t("rollout.detail.rollback")}
             </Button>
           </Stack>
 
@@ -149,9 +152,9 @@ export function RolloutDetailPage() {
                   optional={
                     <Stack spacing={0.5} sx={{ alignItems: "flex-start" }}>
                       <Typography variant="caption" color="text.secondary">
-                        {p.ratio !== null ? `覆盖 ${(p.ratio * 100).toFixed(0)}%` : `第 ${p.group_id} 组`}
+                        {p.ratio !== null ? t("rollout.detail.cover", { pct: (p.ratio * 100).toFixed(0) }) : t("rollout.detail.group", { n: p.group_id ?? "" })}
                         {" · "}
-                        {p.target_count} 台
+                        {t("rollout.detail.devices", { count: p.target_count })}
                       </Typography>
                       {p.summary && (
                         <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap" }} useFlexGap>
@@ -160,7 +163,7 @@ export function RolloutDetailPage() {
                               key={state}
                               size="small"
                               variant="outlined"
-                              label={`${TARGET_LABEL[state as OtaTargetState]} ${count}`}
+                              label={`${t(TARGET_LABEL[state as OtaTargetState])} ${count}`}
                             />
                           ))}
                         </Stack>
@@ -169,12 +172,12 @@ export function RolloutDetailPage() {
                   }
                 >
                   {p.state === "active"
-                    ? "进行中"
+                    ? t("rollout.detail.active")
                     : p.state === "completed"
-                      ? "已完成"
+                      ? t("rollout.detail.done")
                       : p.state === "paused"
-                        ? "已暂停"
-                        : "未开始"}
+                        ? t("rollout.detail.paused")
+                        : t("rollout.detail.pending")}
                 </StepLabel>
               </Step>
             ))}
@@ -183,25 +186,25 @@ export function RolloutDetailPage() {
           <Card>
             <CardContent>
               <Typography variant="subtitle1" sx={{ fontWeight: 600 }} gutterBottom>
-                参数
+                {t("rollout.detail.params")}
               </Typography>
               <ParamGrid
                 entries={[
                   ["release_id", r.release_id],
-                  ["from_release_id", r.from_release_id ?? "无"],
+                  ["from_release_id", r.from_release_id ?? t("rollout.detail.none")],
                   ["strategy", r.strategy],
-                  ["设备池", `${r.pool_size} 台`],
-                  ["成功率", `${(r.success_ratio * 100).toFixed(0)}%`],
-                  ["最小样本", String(r.min_sample)],
-                  ["阶段超时", `${r.phase_timeout_hours} 小时`],
-                  ["卡住判定", `${r.stuck_hours} 小时`],
-                  ["创建时间", new Date(r.created_at).toLocaleString("zh-CN")],
+                  [t("rollout.detail.pool"), `${r.pool_size} ${t("rollout.detail.units")}`],
+                  [t("rollout.detail.successRatio"), `${(r.success_ratio * 100).toFixed(0)}%`],
+                  [t("rollout.detail.minSample"), String(r.min_sample)],
+                  [t("rollout.detail.phaseTimeout"), `${r.phase_timeout_hours} ${t("rollout.detail.unitsHours")}`],
+                  [t("rollout.detail.stuckHours"), `${r.stuck_hours} ${t("rollout.detail.unitsHours")}`],
+                  [t("rollout.detail.created"), new Date(r.created_at).toLocaleString("zh-CN")],
                 ]}
               />
               {r.rollback_job_id && (
                 <Box sx={{ mt: 1 }}>
                   <MuiLink component={Link} to={`/ota-jobs/${r.rollback_job_id}`}>
-                    查看回滚任务 {r.rollback_job_id.slice(0, 8)}…
+                    {t("rollout.detail.viewRollback", { id: r.rollback_job_id.slice(0, 8) })}
                   </MuiLink>
                 </Box>
               )}

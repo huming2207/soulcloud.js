@@ -16,6 +16,8 @@ import Typography from "@mui/material/Typography";
 import { fetchOtaJob } from "../api/firmware";
 import { CardSkeleton, QueryError } from "../components/QueryState";
 import type { OtaTargetState } from "../api/types";
+import { useI18n } from "../i18n/I18nContext";
+import type { DictKey } from "../i18n/dictionary";
 
 const TARGET_COLOR: Record<
   OtaTargetState,
@@ -32,16 +34,16 @@ const TARGET_COLOR: Record<
   failed: "error",
 };
 
-const TARGET_LABEL: Record<OtaTargetState, string> = {
-  pending: "待投递",
-  leased: "已领取",
-  delivered: "已通知",
-  delivering: "下载中",
-  downloaded: "已下载",
-  installed: "已安装",
-  expired: "已过期",
-  completed: "已完成",
-  failed: "失败",
+const TARGET_LABEL: Record<OtaTargetState, DictKey> = {
+  pending: "target.pending",
+  leased: "target.leased",
+  delivered: "target.delivered",
+  delivering: "target.delivering",
+  downloaded: "target.downloaded",
+  installed: "target.installed",
+  expired: "target.expired",
+  completed: "target.completed",
+  failed: "target.failed",
 };
 
 function formatTime(iso: string | null): string {
@@ -54,6 +56,7 @@ function formatTime(iso: string | null): string {
 
 /** OTA job detail: per-device target states, polled while active. */
 export function OtaJobPage() {
+  const { t } = useI18n();
   const { jobId } = useParams<{ jobId: string }>();
   const job = useQuery({
     queryKey: ["ota-job", jobId],
@@ -69,7 +72,7 @@ export function OtaJobPage() {
     <Stack spacing={2}>
       <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
-          OTA 任务 {jobId.slice(0, 8)}
+          {t("job.title", { id: jobId.slice(0, 8) })}
         </Typography>
         {j && (
           <>
@@ -78,7 +81,7 @@ export function OtaJobPage() {
                 key={state}
                 size="small"
                 variant="outlined"
-                label={`${TARGET_LABEL[state as OtaTargetState]} ${count}`}
+                label={`${t(TARGET_LABEL[state as OtaTargetState])} ${count}`}
                 color={TARGET_COLOR[state as OtaTargetState]}
               />
             ))}
@@ -91,54 +94,54 @@ export function OtaJobPage() {
       ) : job.error ? (
         <QueryError error={job.error} onRetry={() => job.refetch()} />
       ) : !j ? (
-        <QueryError error={new Error("任务不存在")} onRetry={() => job.refetch()} />
+        <QueryError error={new Error(t("job.notFound"))} onRetry={() => job.refetch()} />
       ) : (
         <>
           <Typography variant="body2" color="text.secondary">
-            release：<Box component="span" sx={{ fontFamily: "monospace", fontSize: 12 }}>{j.release_id}</Box>
-            {" · "}创建于 {formatTime(j.created_at)}（每 5 秒自动刷新）
+            {t("job.release", { id: "" })}<Box component="span" sx={{ fontFamily: "monospace", fontSize: 12 }}>{j.release_id}</Box>
+            {" · "}{t("job.createdAt", { time: formatTime(j.created_at) })}
           </Typography>
           <TableContainer component={Paper} variant="outlined">
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell>设备</TableCell>
-                  <TableCell>状态</TableCell>
-                  <TableCell>已通知</TableCell>
-                  <TableCell>确认时间</TableCell>
-                  <TableCell>结果</TableCell>
-                  <TableCell>当前固件</TableCell>
+                  <TableCell>{t("job.colDevice")}</TableCell>
+                  <TableCell>{t("job.colState")}</TableCell>
+                  <TableCell>{t("job.colDelivered")}</TableCell>
+                  <TableCell>{t("job.colConfirmed")}</TableCell>
+                  <TableCell>{t("job.colResult")}</TableCell>
+                  <TableCell>{t("job.colFirmware")}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {j.targets.map((t) => (
-                  <TableRow key={t.device_id} hover>
+                {j.targets.map((target) => (
+                  <TableRow key={target.device_id} hover>
                     <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }}>
-                      {t.device_uid}
+                      {target.device_uid}
                     </TableCell>
                     <TableCell>
                       <Chip
                         size="small"
                         variant="outlined"
-                        label={TARGET_LABEL[t.state]}
-                        color={TARGET_COLOR[t.state]}
+                        label={t(TARGET_LABEL[target.state])}
+                        color={TARGET_COLOR[target.state]}
                       />
                     </TableCell>
-                    <TableCell>{formatTime(t.delivered_at)}</TableCell>
-                    <TableCell>{formatTime(t.confirmed_at)}</TableCell>
+                    <TableCell>{formatTime(target.delivered_at)}</TableCell>
+                    <TableCell>{formatTime(target.confirmed_at)}</TableCell>
                     <TableCell>
-                      {t.result_code !== null ? (
-                        <Tooltip title={t.result_message ?? ""}>
+                      {target.result_code !== null ? (
+                        <Tooltip title={target.result_message ?? ""}>
                           <Box
                             component="span"
                             sx={{
                               fontFamily: "monospace",
                               fontSize: 12,
-                              color: t.result_code === 0 ? "success.main" : "error.main",
+                              color: target.result_code === 0 ? "success.main" : "error.main",
                             }}
                           >
-                            {t.result_code === 0 ? "成功" : `失败 (${t.result_code})`}
-                            {t.result_message ? ` ${t.result_message}` : ""}
+                            {target.result_code === 0 ? t("job.success") : t("job.failed", { code: target.result_code })}
+                            {target.result_message ? ` ${target.result_message}` : ""}
                           </Box>
                         </Tooltip>
                       ) : (
@@ -146,10 +149,10 @@ export function OtaJobPage() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {t.current_fw ? (
-                        <Tooltip title={t.current_fw}>
+                      {target.current_fw ? (
+                        <Tooltip title={target.current_fw}>
                           <Box sx={{ fontFamily: "monospace", fontSize: 12 }}>
-                            {t.current_fw.slice(0, 12)}…
+                            {target.current_fw.slice(0, 12)}…
                           </Box>
                         </Tooltip>
                       ) : (
@@ -161,7 +164,7 @@ export function OtaJobPage() {
                 {j.targets.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={6} align="center" sx={{ color: "text.secondary" }}>
-                      无目标设备
+                      {t("job.noTargets")}
                     </TableCell>
                   </TableRow>
                 )}

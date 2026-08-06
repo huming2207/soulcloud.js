@@ -29,6 +29,7 @@ import { createRollout, fetchReleases } from "../api/firmware";
 import { errorMessage } from "../api/http";
 import { useProject } from "../layout/ProjectContext";
 import type { DeviceSummary, RolloutStrategy } from "../api/types";
+import { useI18n } from "../i18n/I18nContext";
 
 interface DeviceOption {
   device_id: string;
@@ -93,6 +94,7 @@ function DeviceMultiSelect({
  * detail page on success.
  */
 export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
+  const { t } = useI18n();
   const { projectId } = useProject();
   const navigate = useNavigate();
 
@@ -159,34 +161,34 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
     };
     for (const [name, v] of Object.entries(numericGating)) {
       if (!Number.isFinite(v) || v <= 0) {
-        setError(`${name} 必须是正数`);
+        setError(t("rollout.create.errPositive", { name }));
         return;
       }
     }
     const gating = { ...numericGating, manual_approval: manualApproval };
     if (strategy === "auto") {
       if (ratios.length === 0 || ratios.some((r) => !(r > 0 && r <= 1))) {
-        setError("每个比率必须是 (0, 1] 内的数值");
+        setError(t("rollout.create.errRatios"));
         return;
       }
       for (let i = 1; i < ratios.length; i++) {
         if (ratios[i]! <= ratios[i - 1]!) {
-          setError("比率必须严格递增，且最后一项为 1");
+          setError(t("rollout.create.errAscending"));
           return;
         }
       }
       if (ratios[ratios.length - 1] !== 1) {
-        setError("最后一项比率必须为 1（覆盖全部设备）");
+        setError(t("rollout.create.errLast"));
         return;
       }
       if (pool.length === 0) {
-        setError("请选择目标设备");
+        setError(t("rollout.create.errPool"));
         return;
       }
     } else {
       const nonEmpty = groups.filter((g) => g.length > 0);
       if (nonEmpty.length === 0) {
-        setError("至少需要一组设备");
+        setError(t("rollout.create.errGroup"));
         return;
       }
     }
@@ -220,10 +222,10 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
       <form onSubmit={submit}>
-        <DialogTitle>创建分批升级</DialogTitle>
+        <DialogTitle>{t("rollout.create.title")}</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>
-            分批部署固件：可按比例自动分批（auto）或按自定义分组（grouped）。
+            {t("rollout.create.body")}
           </DialogContentText>
           <Stack spacing={2.5}>
             {error && <Alert severity="error">{error}</Alert>}
@@ -233,8 +235,8 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
               value={strategy}
               onChange={(e) => setStrategy(e.target.value as RolloutStrategy)}
             >
-              <FormControlLabel value="auto" control={<Radio />} label="自动分批（按比率）" />
-              <FormControlLabel value="grouped" control={<Radio />} label="自定义分组" />
+              <FormControlLabel value="auto" control={<Radio />} label={t("rollout.create.auto")} />
+              <FormControlLabel value="grouped" control={<Radio />} label={t("rollout.create.grouped")} />
             </RadioGroup>
 
             {strategy === "auto" ? (
@@ -243,11 +245,11 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                   options={options}
                   value={pool}
                   onChange={setPool}
-                  label="目标设备池（全部分批的总集合）"
+                  label={t("rollout.create.pool")}
                 />
                 <Box>
                   <Typography variant="subtitle2" gutterBottom>
-                    阶段比率（递增，末项 = 1）
+                    {t("rollout.create.ratios")}
                   </Typography>
                   <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
                     {ratios.map((r, i) => (
@@ -276,7 +278,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                       disabled={ratios.length >= 10}
                       onClick={() => setRatios([...ratios, 1])}
                     >
-                      添加
+                      {t("rollout.create.addRatio")}
                     </Button>
                   </Stack>
                 </Box>
@@ -292,7 +294,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                         onChange={(v) =>
                           setGroups(groups.map((prev, j) => (j === i ? v : prev)))
                         }
-                        label={`第 ${i + 1} 组`}
+                        label={t("rollout.create.groupN", { n: i + 1 })}
                       />
                     </Box>
                     <IconButton
@@ -312,7 +314,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                     disabled={groups.length >= 10}
                     onClick={() => setGroups([...groups, []])}
                   >
-                    添加分组
+                    {t("rollout.create.addGroup")}
                   </Button>
                 </Box>
               </Stack>
@@ -320,14 +322,14 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
 
             <TextField
               select
-              label="回滚基线（可选）"
+              label={t("rollout.create.baseline")}
               value={fromReleaseId}
               onChange={(e) => setFromReleaseId(e.target.value)}
-              helperText="设置后可在升级完成后一键回滚到此版本"
+              helperText={t("rollout.create.baselineHint")}
               fullWidth
             >
               <MenuItem value="">
-                <em>无</em>
+                <em>{t("rollout.create.none")}</em>
               </MenuItem>
               {baselineOptions.map((b) => (
                 <MenuItem key={b.release_id} value={b.release_id}>
@@ -338,11 +340,11 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
 
             <Box>
               <Typography variant="subtitle2" gutterBottom>
-                推进门槛
+                {t("rollout.create.gating")}
               </Typography>
               <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }} useFlexGap>
                 <TextField
-                  label="成功率（success_ratio）"
+                  label={t("rollout.create.successRatio")}
                   type="number"
                   size="small"
                   slotProps={{ htmlInput: { step: 0.05, min: 0, max: 1 } }}
@@ -351,7 +353,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                   sx={{ width: 150 }}
                 />
                 <TextField
-                  label="最小样本（min_sample）"
+                  label={t("rollout.create.minSample")}
                   type="number"
                   size="small"
                   slotProps={{ htmlInput: { min: 0 } }}
@@ -360,7 +362,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                   sx={{ width: 130 }}
                 />
                 <TextField
-                  label="阶段超时（小时）"
+                  label={t("rollout.create.phaseTimeout")}
                   type="number"
                   size="small"
                   slotProps={{ htmlInput: { min: 1 } }}
@@ -369,7 +371,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                   sx={{ width: 140 }}
                 />
                 <TextField
-                  label="卡住判定（小时）"
+                  label={t("rollout.create.stuckHours")}
                   type="number"
                   size="small"
                   slotProps={{ htmlInput: { min: 1 } }}
@@ -385,16 +387,16 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                     onChange={(e) => setManualApproval(e.target.checked)}
                   />
                 }
-                label="每阶段手动批准"
+                label={t("rollout.create.manualApproval")}
                 sx={{ mt: 1 }}
               />
             </Box>
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClose}>取消</Button>
+          <Button onClick={handleClose}>{t("rollout.create.cancel")}</Button>
           <Button type="submit" variant="contained" disabled={submitting}>
-            {submitting ? "创建中…" : "创建升级"}
+            {submitting ? t("rollout.create.creating") : t("rollout.create.submit")}
           </Button>
         </DialogActions>
       </form>

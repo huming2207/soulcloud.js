@@ -11,14 +11,15 @@ import Typography from "@mui/material/Typography";
 import AddIcon from "@mui/icons-material/Add";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef, GridPaginationModel } from "@mui/x-data-grid";
-import { zhCN } from "@mui/x-data-grid/locales";
 import { fetchDevices } from "../api/devices";
 import { useProject } from "../layout/ProjectContext";
 import { NewDeviceDialog } from "../components/NewDeviceDialog";
+import { useI18n } from "../i18n/I18nContext";
 
 const PAGE_SIZES = [25, 50, 100];
 
 export function DevicesPage() {
+  const { t, gridLocaleText } = useI18n();
   const { projectId } = useProject();
   const navigate = useNavigate();
   const [pagination, setPagination] = useState<GridPaginationModel>({
@@ -57,10 +58,10 @@ export function DevicesPage() {
 
   const columns = useMemo<GridColDef[]>(
     () => [
-      { field: "assigned_id", headerName: "assigned_id", flex: 1, minWidth: 160 },
+      { field: "assigned_id", headerName: t("devices.colAssigned"), flex: 1, minWidth: 160 },
       {
         field: "device_uid",
-        headerName: "device_uid",
+        headerName: t("devices.colUid"),
         flex: 1,
         minWidth: 200,
         renderCell: (params) => (
@@ -69,7 +70,7 @@ export function DevicesPage() {
       },
       {
         field: "fw_hash",
-        headerName: "固件",
+        headerName: t("devices.colFirmware"),
         width: 220,
         renderCell: (params) =>
           params.value ? (
@@ -88,13 +89,13 @@ export function DevicesPage() {
       },
       {
         field: "auth_revoked",
-        headerName: "凭据",
+        headerName: t("devices.colCredential"),
         width: 110,
         renderCell: (params) =>
           params.value ? (
-            <Chip size="small" label="已吊销" color="error" variant="outlined" />
+            <Chip size="small" label={t("devices.credRevoked")} color="error" variant="outlined" />
           ) : (
-            <Chip size="small" label="正常" color="success" variant="outlined" />
+            <Chip size="small" label={t("devices.credActive")} color="success" variant="outlined" />
           ),
       },
       {
@@ -108,19 +109,19 @@ export function DevicesPage() {
             size="small"
             onClick={() => navigate(`/devices/${params.id}`)}
           >
-            详情
+            {t("devices.details")}
           </Button>
         ),
       },
     ],
-    [navigate],
+    [navigate, t],
   );
 
   return (
     <Stack spacing={2}>
       <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
-          设备
+          {t("devices.title")}
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
         <Button
@@ -128,14 +129,13 @@ export function DevicesPage() {
           startIcon={<AddIcon />}
           onClick={() => setNewDeviceOpen(true)}
         >
-          新建设备
+          {t("devices.new")}
         </Button>
       </Stack>
 
       {devices.data?.total === 0 && (
         <Alert severity="info">
-          项目里还没有设备——点击右上角「新建设备」录入第一台设备（device_uid
-          需与硬件侧保持一致）。
+          {t("devices.empty")}
         </Alert>
       )}
 
@@ -149,7 +149,7 @@ export function DevicesPage() {
           onPaginationModelChange={(model) => setPagination(model)}
           pageSizeOptions={PAGE_SIZES}
           loading={devices.isLoading || devices.isFetching}
-          localeText={zhCN.components.MuiDataGrid.defaultProps.localeText}
+          localeText={gridLocaleText}
           density="compact"
           disableRowSelectionOnClick
         />

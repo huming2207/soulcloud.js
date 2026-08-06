@@ -17,6 +17,8 @@ import { fetchRollouts } from "../api/firmware";
 import { useProject } from "../layout/ProjectContext";
 import { ListSkeleton, QueryError } from "../components/QueryState";
 import type { RolloutState } from "../api/types";
+import { useI18n } from "../i18n/I18nContext";
+import type { DictKey } from "../i18n/dictionary";
 
 const STATE_COLOR: Record<RolloutState, "primary" | "warning" | "error" | "success"> = {
   running: "primary",
@@ -25,11 +27,11 @@ const STATE_COLOR: Record<RolloutState, "primary" | "warning" | "error" | "succe
   completed: "success",
 };
 
-const STATE_LABEL: Record<RolloutState, string> = {
-  running: "进行中",
-  paused: "已暂停",
-  aborted: "已中止",
-  completed: "已完成",
+const STATE_LABEL: Record<RolloutState, DictKey> = {
+  running: "rollout.state.running",
+  paused: "rollout.state.paused",
+  aborted: "rollout.state.aborted",
+  completed: "rollout.state.completed",
 };
 
 function formatTime(iso: string): string {
@@ -40,6 +42,7 @@ function formatTime(iso: string): string {
 }
 
 export function RolloutsPage() {
+  const { t } = useI18n();
   const { projectId } = useProject();
   const navigate = useNavigate();
 
@@ -55,10 +58,10 @@ export function RolloutsPage() {
   return (
     <Stack spacing={2}>
       <Typography variant="h5" sx={{ fontWeight: 600 }}>
-        OTA 升级
+        {t("rollouts.title")}
       </Typography>
       <Typography variant="body2" color="text.secondary">
-        分批升级在固件发布页创建（列表每 10 秒自动刷新）
+        {t("rollouts.hint")}
       </Typography>
       {rollouts.isLoading ? (
         <ListSkeleton />
@@ -69,21 +72,21 @@ export function RolloutsPage() {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>ID</TableCell>
-              <TableCell>策略</TableCell>
-              <TableCell>状态</TableCell>
-              <TableCell>批准</TableCell>
-              <TableCell>设备池</TableCell>
-              <TableCell sx={{ width: 220 }}>进度</TableCell>
-              <TableCell>创建时间</TableCell>
-              <TableCell align="right">操作</TableCell>
+              <TableCell>{t("rollouts.colId")}</TableCell>
+              <TableCell>{t("rollouts.colStrategy")}</TableCell>
+              <TableCell>{t("rollouts.colState")}</TableCell>
+              <TableCell>{t("rollouts.colApproval")}</TableCell>
+              <TableCell>{t("rollouts.colPool")}</TableCell>
+              <TableCell sx={{ width: 220 }}>{t("rollouts.colProgress")}</TableCell>
+              <TableCell>{t("rollouts.colCreated")}</TableCell>
+              <TableCell align="right">{t("rollouts.colActions")}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {rows.length === 0 && !rollouts.isLoading && (
               <TableRow>
                 <TableCell colSpan={8} align="center" sx={{ color: "text.secondary" }}>
-                  暂无升级
+                  {t("rollouts.noRollouts")}
                 </TableCell>
               </TableRow>
             )}
@@ -97,13 +100,13 @@ export function RolloutsPage() {
                     {r.rollout_id.slice(0, 8)}…
                   </TableCell>
                   <TableCell>
-                    {r.strategy === "auto" ? "自动分批" : "自定义分组"}
+                    {r.strategy === "auto" ? t("rollouts.auto") : t("rollouts.grouped")}
                   </TableCell>
                   <TableCell>
                     <Chip
                       size="small"
                       variant="outlined"
-                      label={STATE_LABEL[r.state]}
+                      label={t(STATE_LABEL[r.state])}
                       color={STATE_COLOR[r.state]}
                     />
                   </TableCell>
@@ -129,7 +132,7 @@ export function RolloutsPage() {
                       size="small"
                       onClick={() => navigate(`/rollouts/${r.rollout_id}`)}
                     >
-                      详情
+                      {t("rollouts.details")}
                     </Button>
                   </TableCell>
                 </TableRow>

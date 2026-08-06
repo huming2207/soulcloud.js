@@ -3,6 +3,7 @@ import Button from "@mui/material/Button";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
 import { errorMessage } from "../api/http";
+import { useI18n } from "../i18n/I18nContext";
 
 /** Skeleton placeholder for list/table bodies while a query loads. */
 export function ListSkeleton({ rows = 4 }: { rows?: number }) {
@@ -33,13 +34,14 @@ export function QueryError({
   error: unknown;
   onRetry?: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <Alert
       severity="error"
       action={
         onRetry ? (
           <Button color="inherit" size="small" onClick={onRetry}>
-            重试
+            {t("query.retry")}
           </Button>
         ) : undefined
       }

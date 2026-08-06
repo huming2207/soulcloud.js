@@ -19,7 +19,7 @@ const LinkBehavior = forwardRef<
 });
 LinkBehavior.displayName = "LinkBehavior";
 
-export const theme = createTheme({
+export const baseTheme = createTheme({
   // MUI v6 CSS-variable color schemes: light + dark, following the system
   // by default (toggled at runtime via useColorScheme()).
   colorSchemes: { light: true, dark: true },

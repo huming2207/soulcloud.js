@@ -13,6 +13,7 @@ import { fetchDeviceLogs } from "../api/logs";
 import { alpha } from "@mui/material/styles";
 import { ListSkeleton } from "./QueryState";
 import type { LogEvent } from "../api/types";
+import { useI18n } from "../i18n/I18nContext";
 
 const LEVEL_COLOR = [
   "default", // 0
@@ -43,6 +44,7 @@ function formatTime(iso: string): string {
  * every 5s; browsing older pages (cursor set) disables the auto-refresh.
  */
 export function LogsView({ deviceId }: { deviceId: string }) {
+  const { t } = useI18n();
   const [cursor, setCursor] = useState<string | null>(null);
   const [includeRaw, setIncludeRaw] = useState(false);
 
@@ -74,12 +76,12 @@ export function LogsView({ deviceId }: { deviceId: string }) {
               size="small"
             />
           }
-          label="显示原始包"
+          label={t("logs.showRaw")}
         />
         <Box sx={{ flexGrow: 1 }} />
         {isFetching && (
           <Typography variant="caption" color="text.secondary">
-            刷新中…
+            {t("logs.refreshing")}
           </Typography>
         )}
       </Stack>
@@ -88,7 +90,7 @@ export function LogsView({ deviceId }: { deviceId: string }) {
         {isLoading && <ListSkeleton rows={6} />}
         {!isLoading && events.length === 0 && (
           <Typography sx={{ p: 2 }} variant="body2" color="text.secondary">
-            暂无日志事件
+            {t("logs.noEvents")}
           </Typography>
         )}
         {events.map((e) => (
@@ -99,12 +101,12 @@ export function LogsView({ deviceId }: { deviceId: string }) {
       <Stack direction="row" spacing={1} sx={{ justifyContent: "flex-end" }}>
         {data?.next_cursor && (
           <Button size="small" onClick={() => setCursor(data.next_cursor)}>
-            加载更早
+            {t("logs.loadEarlier")}
           </Button>
         )}
         {cursor && (
           <Button size="small" onClick={() => setCursor(null)}>
-            回到最新
+            {t("logs.backToLatest")}
           </Button>
         )}
       </Stack>
@@ -113,6 +115,7 @@ export function LogsView({ deviceId }: { deviceId: string }) {
 }
 
 function LogRow({ event, includeRaw }: { event: LogEvent; includeRaw: boolean }) {
+  const { t } = useI18n();
   const undecoded = event.decode_state !== "decodable";
   const level = event.level;
 
@@ -177,7 +180,7 @@ function LogRow({ event, includeRaw }: { event: LogEvent; includeRaw: boolean })
           </Box>
         )}
         <Typography component="span" variant="body2" sx={{ wordBreak: "break-word" }}>
-          {event.message ?? "（无法解码，原始包已保留）"}
+          {event.message ?? t("logs.undecodable")}
         </Typography>
         {includeRaw && event.raw_packet_b64 && (
           <Box
@@ -192,7 +195,7 @@ function LogRow({ event, includeRaw }: { event: LogEvent; includeRaw: boolean })
               wordBreak: "break-all",
             }}
           >
-            raw: {event.raw_packet_b64}
+            {t("logs.raw", { packet: event.raw_packet_b64 })}
           </Box>
         )}
       </Box>

@@ -24,8 +24,10 @@ import { CredentialsDialog } from "../components/CredentialsDialog";
 import { CommandPanel } from "../components/CommandPanel";
 import { LogsView } from "../components/LogsView";
 import { CardSkeleton, QueryError } from "../components/QueryState";
+import { useI18n } from "../i18n/I18nContext";
 
 export function DeviceDetailPage() {
+  const { t } = useI18n();
   const { deviceId } = useParams<{ deviceId: string }>();
   const [tab, setTab] = useState(0);
   if (!deviceId) return null;
@@ -33,9 +35,9 @@ export function DeviceDetailPage() {
   return (
     <Stack spacing={2}>
       <Tabs value={tab} onChange={(_, v) => setTab(v as number)}>
-        <Tab label="概览" />
-        <Tab label="命令" />
-        <Tab label="日志" />
+        <Tab label={t("detail.tabOverview")} />
+        <Tab label={t("detail.tabCommands")} />
+        <Tab label={t("detail.tabLogs")} />
       </Tabs>
       {tab === 0 && <OverviewTab deviceId={deviceId} />}
       {tab === 1 && <CommandPanel deviceId={deviceId} />}
@@ -45,6 +47,7 @@ export function DeviceDetailPage() {
 }
 
 function OverviewTab({ deviceId }: { deviceId: string }) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const device = useQuery({
     queryKey: ["device", deviceId],
@@ -115,12 +118,12 @@ function OverviewTab({ deviceId }: { deviceId: string }) {
       <Card>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            设备信息
+            {t("detail.deviceInfo")}
           </Typography>
           <InfoRow label="assigned_id" value={d.assigned_id} />
           <InfoRow label="device_uid" value={d.device_uid} monospace />
           <InfoRow label="project_id" value={d.project_id} monospace small />
-          <InfoRow label="下一命令序号" value={d.next_command_sequence} monospace />
+          <InfoRow label={t("detail.nextSeq")} value={d.next_command_sequence} monospace />
           <InfoRow
             label="凭据"
             value={
@@ -137,31 +140,31 @@ function OverviewTab({ deviceId }: { deviceId: string }) {
       <Card>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            固件状态
+            {t("detail.firmwareState")}
           </Typography>
           {fwState.data ? (
             <>
               <InfoRow label="fw_hash" value={fwState.data.fw_hash} monospace small />
               <InfoRow
-                label="关联构件"
+                label={t("detail.artifactLinked")}
                 value={
                   fwState.data.artifact_version
                     ? `${fwState.data.artifact_version}（${fwState.data.artifact_id?.slice(0, 8)}…）`
-                    : "未关联"
+                    : t("detail.notLinked")
                 }
               />
               <InfoRow
-                label="上报时间"
+                label={t("detail.reportedAt")}
                 value={new Date(fwState.data.reported_at).toLocaleString("zh-CN")}
               />
             </>
           ) : (
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              设备尚未上报固件（或已手动绑定）
+              {t("detail.noFirmware")}
             </Typography>
           )}
           <Button size="small" variant="outlined" onClick={() => setBindOpen(true)}>
-            绑定 ELF 构件
+            {t("detail.bindArtifact")}
           </Button>
         </CardContent>
       </Card>
@@ -169,17 +172,17 @@ function OverviewTab({ deviceId }: { deviceId: string }) {
       <Card>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            MQTT 凭据
+            {t("detail.credentials")}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            用户名即 device_uid；密码由服务端生成，发放时仅显示一次。
+            {t("detail.credentialsHint")}
           </Typography>
           <Stack direction="row" spacing={1}>
             <Button size="small" variant="outlined" onClick={() => setCredentialsOpen(true)}>
-              发放新凭据
+              {t("detail.issue")}
             </Button>
             <Button size="small" variant="outlined" color="error" onClick={() => setRevokeOpen(true)}>
-              吊销凭据
+              {t("detail.revoke")}
             </Button>
           </Stack>
         </CardContent>
@@ -198,18 +201,17 @@ function OverviewTab({ deviceId }: { deviceId: string }) {
         onIssued={refreshAll}
       />
       <Dialog open={revokeOpen} onClose={() => setRevokeOpen(false)}>
-        <DialogTitle>吊销凭据</DialogTitle>
+        <DialogTitle>{t("detail.revoke")}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            吊销后设备将无法重新连接，且当前在线会话会被立即踢下线。
-            需要恢复连接时必须重新发放凭据。此操作无法撤销。
+            {t("detail.revokeBody")}
           </DialogContentText>
           {revokeError && <Alert severity="error" sx={{ mt: 2 }}>{revokeError}</Alert>}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRevokeOpen(false)}>取消</Button>
           <Button color="error" variant="contained" onClick={doRevoke} disabled={revoking}>
-            {revoking ? "吊销中…" : "确认吊销"}
+            {revoking ? t("detail.revoking") : t("detail.confirmRevoke")}
           </Button>
         </DialogActions>
       </Dialog>

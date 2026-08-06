@@ -14,6 +14,7 @@ import UploadFileIcon from "@mui/icons-material/UploadFile";
 import { uploadArtifact, uploadRelease } from "../api/firmware";
 import { errorMessage } from "../api/http";
 import { useProject } from "../layout/ProjectContext";
+import { useI18n } from "../i18n/I18nContext";
 
 interface Props {
   kind: "artifact" | "release";
@@ -28,6 +29,7 @@ interface Props {
  * MUI has no file-input component.
  */
 export function UploadDialog({ kind, open, onClose, onUploaded }: Props) {
+  const { t } = useI18n();
   const { projectId } = useProject();
   const [version, setVersion] = useState("");
   const [binFile, setBinFile] = useState<File | null>(null);
@@ -61,7 +63,7 @@ export function UploadDialog({ kind, open, onClose, onUploaded }: Props) {
     try {
       if (kind === "artifact") {
         if (!elfFile) {
-          setError("请选择 ELF 文件");
+          setError(t("upload.needElf"));
           return;
         }
         const res = await uploadArtifact(
@@ -70,12 +72,11 @@ export function UploadDialog({ kind, open, onClose, onUploaded }: Props) {
           version.trim() || undefined,
         );
         setResult(
-          `导入完成：${res.tag_count} 个 tag、${res.format_count} 个格式串，` +
-            `回填 ${res.backfilled_events} 条日志事件。`,
+          t("upload.artifactDone", { tags: res.tag_count, formats: res.format_count, backfilled: res.backfilled_events }),
         );
       } else {
         if (!binFile) {
-          setError("请选择 bin 文件");
+          setError(t("upload.needBin"));
           return;
         }
         const res = await uploadRelease(
@@ -84,8 +85,7 @@ export function UploadDialog({ kind, open, onClose, onUploaded }: Props) {
           version.trim() || undefined,
         );
         setResult(
-          `发布成功${res.artifact_id ? "（已关联 ELF 构件）" : ""}，` +
-            `bin ${res.bin_size} 字节。`,
+          t("upload.releaseDone", { linked: res.artifact_id ? t("upload.linkedSuffix") : "", size: res.bin_size }),
         );
       }
       onUploaded();
@@ -101,32 +101,32 @@ export function UploadDialog({ kind, open, onClose, onUploaded }: Props) {
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <form onSubmit={submit}>
-        <DialogTitle>{isRelease ? "上传固件发布" : "上传 ELF 构件"}</DialogTitle>
+        <DialogTitle>{isRelease ? t("upload.releaseTitle") : t("upload.artifactTitle")}</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>
             {isRelease
-              ? "bin 为设备下载的固件镜像；可选附带 ELF 以关联构建身份（SHA-256 去重，重复上传返回已存在）。"
-              : "ELF 用于提取 on9log 日志字典（tag / 格式串），按 SHA-256 去重。"}
+              ? t("upload.releaseBody")
+              : t("upload.artifactBody")}
           </DialogContentText>
           <Stack spacing={2}>
             {error && <Alert severity="error">{error}</Alert>}
             {result && <Alert severity="success">{result}</Alert>}
             <TextField
-              label="版本号（可选，仅作参考）"
+              label={t("upload.version")}
               value={version}
               onChange={(e) => setVersion(e.target.value)}
               fullWidth
             />
             {isRelease && (
               <FileField
-                label="bin 文件（必选）"
+                label={t("upload.bin")}
                 file={binFile}
                 onPick={() => binInput.current?.click()}
                 onClear={() => setBinFile(null)}
               />
             )}
             <FileField
-              label={isRelease ? "ELF 文件（可选）" : "ELF 文件"}
+              label={isRelease ? t("upload.elf") : t("upload.elfRequired")}
               file={elfFile}
               onPick={() => elfInput.current?.click()}
               onClear={() => setElfFile(null)}
@@ -147,9 +147,9 @@ export function UploadDialog({ kind, open, onClose, onUploaded }: Props) {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClose}>取消</Button>
+          <Button onClick={handleClose}>{t("upload.cancel")}</Button>
           <Button type="submit" variant="contained" disabled={submitting}>
-            {submitting ? "上传中…" : "上传"}
+            {submitting ? t("upload.uploading") : t("upload.submit")}
           </Button>
         </DialogActions>
       </form>
@@ -168,6 +168,7 @@ function FileField({
   onPick: () => void;
   onClear: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <Box>
       <Typography variant="caption" color="text.secondary">
@@ -175,7 +176,7 @@ function FileField({
       </Typography>
       <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Button variant="outlined" size="small" startIcon={<UploadFileIcon />} onClick={onPick}>
-          选择文件
+          {t("upload.pick")}
         </Button>
         {file && (
           <>
@@ -183,7 +184,7 @@ function FileField({
               {file.name}（{(file.size / 1024).toFixed(1)} KB）
             </Typography>
             <Button size="small" onClick={onClear}>
-              清除
+              {t("upload.clear")}
             </Button>
           </>
         )}

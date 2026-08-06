@@ -26,6 +26,7 @@ import { DeployDialog } from "../components/DeployDialog";
 import { UploadDialog } from "../components/UploadDialog";
 import { RolloutCreateDialog } from "../components/RolloutCreateDialog";
 import { ListSkeleton, QueryError } from "../components/QueryState";
+import { useI18n } from "../i18n/I18nContext";
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -41,16 +42,17 @@ function formatTime(iso: string): string {
 }
 
 export function FirmwarePage() {
+  const { t } = useI18n();
   const { projectId } = useProject();
   const [tab, setTab] = useState(0);
   return (
     <Stack spacing={2}>
       <Typography variant="h5" sx={{ fontWeight: 600 }}>
-        固件
+        {t("fw.title")}
       </Typography>
       <Tabs value={tab} onChange={(_, v) => setTab(v as number)}>
-        <Tab label="发布" />
-        <Tab label="ELF 构件" />
+        <Tab label={t("fw.releases")} />
+        <Tab label={t("fw.artifacts")} />
       </Tabs>
       {tab === 0 && <ReleasesTab projectId={projectId} />}
       {tab === 1 && <ArtifactsTab projectId={projectId} />}
@@ -59,6 +61,7 @@ export function FirmwarePage() {
 }
 
 function ReleasesTab({ projectId }: { projectId: string | null }) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [deployReleaseId, setDeployReleaseId] = useState<string | null>(null);
@@ -94,7 +97,7 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
           startIcon={<AddIcon />}
           onClick={() => setUploadOpen(true)}
         >
-          上传发布
+          {t("fw.uploadRelease")}
         </Button>
         {actionError && (
           <Typography variant="body2" color="error">
@@ -112,26 +115,26 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>版本</TableCell>
-              <TableCell>大小</TableCell>
-              <TableCell>bin_hash</TableCell>
-              <TableCell>ELF 构件</TableCell>
-              <TableCell>创建时间</TableCell>
-              <TableCell align="right">操作</TableCell>
+              <TableCell>{t("fw.colVersion")}</TableCell>
+              <TableCell>{t("fw.colSize")}</TableCell>
+              <TableCell>{t("fw.colHash")}</TableCell>
+              <TableCell>{t("fw.colArtifact")}</TableCell>
+              <TableCell>{t("fw.colCreated")}</TableCell>
+              <TableCell align="right">{t("fw.colActions")}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {rows.length === 0 && !releases.isLoading && (
               <TableRow>
                 <TableCell colSpan={6} align="center" sx={{ color: "text.secondary" }}>
-                  暂无发布
+                  {t("fw.noReleases")}
                 </TableCell>
               </TableRow>
             )}
             {rows.map((r) => (
               <TableRow key={r.release_id} hover>
                 <TableCell sx={{ fontWeight: 600 }}>
-                  {r.version ?? "（未命名）"}
+                  {r.version ?? t("fw.unnamed")}
                 </TableCell>
                 <TableCell>{formatSize(r.bin_size)}</TableCell>
                 <TableCell>
@@ -143,7 +146,7 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
                 </TableCell>
                 <TableCell>
                   {r.artifact_id ? (
-                    <Chip size="small" label="已关联" color="success" variant="outlined" />
+                    <Chip size="small" label={t("fw.linked")} color="success" variant="outlined" />
                   ) : (
                     <Box sx={{ color: "text.disabled" }}>—</Box>
                   )}
@@ -151,7 +154,7 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
                 <TableCell>{formatTime(r.created_at)}</TableCell>
                 <TableCell align="right">
                   <Stack direction="row" spacing={0.5} sx={{justifyContent: "flex-end"}}>
-                    <Tooltip title="部署到设备">
+                    <Tooltip title={t("fw.deploy")}>
                       <IconButton
                         size="small"
                         onClick={() => setDeployReleaseId(r.release_id)}
@@ -159,7 +162,7 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
                         <RocketLaunchIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="创建分批升级">
+                    <Tooltip title={t("fw.createRollout")}>
                       <IconButton
                         size="small"
                         onClick={() => setRolloutReleaseId(r.release_id)}
@@ -167,7 +170,7 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
                         <AddIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="下载 bin">
+                    <Tooltip title={t("fw.downloadBin")}>
                       <IconButton
                         size="small"
                         onClick={() => download(r.release_id, r.version)}
@@ -187,12 +190,12 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
       <Stack direction="row"  spacing={1} sx={{justifyContent: "flex-end"}}>
         {releases.data?.next_cursor && (
           <Button size="small" onClick={() => setCursor(releases.data.next_cursor)}>
-            加载更早
+            {t("fw.loadEarlier")}
           </Button>
         )}
         {cursor && (
           <Button size="small" onClick={() => setCursor(null)}>
-            回到最新
+            {t("fw.backToLatest")}
           </Button>
         )}
       </Stack>
@@ -224,6 +227,7 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
 }
 
 function ArtifactsTab({ projectId }: { projectId: string | null }) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -243,7 +247,7 @@ function ArtifactsTab({ projectId }: { projectId: string | null }) {
           startIcon={<AddIcon />}
           onClick={() => setUploadOpen(true)}
         >
-          上传 ELF 构件
+          {t("fw.uploadArtifact")}
         </Button>
       </Box>
       {artifacts.isLoading ? (
@@ -255,26 +259,26 @@ function ArtifactsTab({ projectId }: { projectId: string | null }) {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>版本</TableCell>
+              <TableCell>{t("fw.colVersion")}</TableCell>
               <TableCell>build_id</TableCell>
-              <TableCell>大小</TableCell>
-              <TableCell>字典条目</TableCell>
-              <TableCell>状态</TableCell>
-              <TableCell>上传时间</TableCell>
+              <TableCell>{t("fw.colSize")}</TableCell>
+              <TableCell>{t("fw.colDict")}</TableCell>
+              <TableCell>{t("fw.colStatus")}</TableCell>
+              <TableCell>{t("fw.colUploaded")}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {rows.length === 0 && !artifacts.isLoading && (
               <TableRow>
                 <TableCell colSpan={6} align="center" sx={{ color: "text.secondary" }}>
-                  暂无构件
+                  {t("fw.noArtifacts")}
                 </TableCell>
               </TableRow>
             )}
             {rows.map((a) => (
               <TableRow key={a.artifact_id} hover>
                 <TableCell sx={{ fontWeight: 600 }}>
-                  {a.version ?? "（未命名）"}
+                  {a.version ?? t("fw.unnamed")}
                 </TableCell>
                 <TableCell>
                   <Tooltip title={a.build_id}>

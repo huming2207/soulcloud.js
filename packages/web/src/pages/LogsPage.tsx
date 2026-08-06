@@ -9,8 +9,10 @@ import { fetchDevices } from "../api/devices";
 import { LogsView } from "../components/LogsView";
 import { QueryError } from "../components/QueryState";
 import { useProject } from "../layout/ProjectContext";
+import { useI18n } from "../i18n/I18nContext";
 
 export function LogsPage() {
+  const { t } = useI18n();
   const { projectId } = useProject();
   const [deviceId, setDeviceId] = useState<string>("");
 
@@ -28,7 +30,7 @@ export function LogsPage() {
   return (
     <Stack spacing={2}>
       <Typography variant="h5" sx={{ fontWeight: 600 }}>
-        日志
+        {t("logs.title")}
       </Typography>
 
       {devices.error && (
@@ -36,12 +38,12 @@ export function LogsPage() {
       )}
       <TextField
         select
-        label="设备"
+        label={t("logs.device")}
         value={selected?.device_id ?? ""}
         onChange={(e) => setDeviceId(e.target.value)}
         disabled={devices.isLoading || list.length === 0}
         sx={{ maxWidth: 420 }}
-        helperText={list.length === 0 ? "该项目暂无设备" : undefined}
+        helperText={list.length === 0 ? t("logs.noDevices") : undefined}
       >
         {list.map((d) => (
           <MenuItem key={d.device_id} value={d.device_id}>
@@ -53,7 +55,7 @@ export function LogsPage() {
       {selected ? (
         <LogsView deviceId={selected.device_id} />
       ) : (
-        <Alert severity="info">选择一台设备查看解码后的日志流</Alert>
+        <Alert severity="info">{t("logs.selectDevice")}</Alert>
       )}
     </Stack>
   );

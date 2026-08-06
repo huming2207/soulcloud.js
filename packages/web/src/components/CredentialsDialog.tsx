@@ -13,6 +13,7 @@ import Typography from "@mui/material/Typography";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { issueCredentials } from "../api/devices";
 import { errorMessage } from "../api/http";
+import { useI18n } from "../i18n/I18nContext";
 
 interface Props {
   deviceId: string;
@@ -31,6 +32,7 @@ interface Issued {
  * immediately, live session kicked), then show the one-time password.
  */
 export function CredentialsDialog({ deviceId, open, onClose, onIssued }: Props) {
+  const { t } = useI18n();
   const [confirming, setConfirming] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,36 +77,35 @@ export function CredentialsDialog({ deviceId, open, onClose, onIssued }: Props) 
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       {confirming ? (
         <>
-          <DialogTitle>发放新的 MQTT 凭据</DialogTitle>
+          <DialogTitle>{t("cred.title")}</DialogTitle>
           <DialogContent>
             <DialogContentText>
-              新密码会立即替换旧密码，正在使用旧凭据的设备连接会被踢下线。
-              此操作无法撤销。
+              {t("cred.body")}
             </DialogContentText>
             {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
           </DialogContent>
           <DialogActions>
-            <Button onClick={handleClose}>取消</Button>
+            <Button onClick={handleClose}>{t("upload.cancel")}</Button>
             <Button onClick={issue} variant="contained" disabled={submitting}>
-              {submitting ? "发放中…" : "确认发放"}
+              {submitting ? t("cred.issuing") : t("cred.confirm")}
             </Button>
           </DialogActions>
         </>
       ) : issued ? (
         <>
-          <DialogTitle>新凭据已发放</DialogTitle>
+          <DialogTitle>{t("cred.issued")}</DialogTitle>
           <DialogContent>
             <Alert severity="warning" sx={{ mb: 2 }}>
-              密码仅显示这一次，请立即保存并配置到设备。
+              {t("cred.once")}
             </Alert>
             <Stack spacing={1}>
-              <Row label="MQTT 用户名" value={issued.mqtt_username} onCopy={copy} />
-              <Row label="MQTT 密码" value={issued.mqtt_password} onCopy={copy} monospace />
+              <Row label={t("cred.username")} value={issued.mqtt_username} onCopy={copy} />
+              <Row label={t("cred.password")} value={issued.mqtt_password} onCopy={copy} monospace />
             </Stack>
           </DialogContent>
           <DialogActions>
             <Button onClick={handleClose} variant="contained">
-              我已保存
+              {t("cred.saved")}
             </Button>
           </DialogActions>
         </>
@@ -124,6 +125,7 @@ function Row({
   onCopy: (text: string) => void;
   monospace?: boolean;
 }) {
+  const { t } = useI18n();
   return (
     <Box>
       <Typography variant="caption" color="text.secondary">
@@ -140,7 +142,7 @@ function Row({
         >
           {value}
         </Typography>
-        <IconButton size="small" onClick={() => onCopy(value)} aria-label={`复制${label}`}>
+        <IconButton size="small" onClick={() => onCopy(value)} aria-label={t("cred.copy", { label })}>
           <ContentCopyIcon fontSize="small" />
         </IconButton>
       </Stack>

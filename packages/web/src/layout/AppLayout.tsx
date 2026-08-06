@@ -31,24 +31,34 @@ import LogoutIcon from "@mui/icons-material/Logout";
 import MenuIcon from "@mui/icons-material/Menu";
 import { useAuth } from "../auth/AuthContext";
 import { useProject } from "./ProjectContext";
+import { useI18n } from "../i18n/I18nContext";
+import type { DictKey } from "../i18n/dictionary";
+import TranslateIcon from "@mui/icons-material/Translate";
 
 const DRAWER_WIDTH = 240;
 
+const LANG_OPTIONS = [
+  { locale: "zh", labelKey: "layout.langZh" as DictKey },
+  { locale: "en", labelKey: "layout.langEn" as DictKey },
+  { locale: "ru", labelKey: "layout.langRu" as DictKey },
+  { locale: "uk", labelKey: "layout.langUk" as DictKey },
+] as const;
+
 const NAV_ITEMS = [
-  { path: "/", label: "仪表盘", icon: <DashboardIcon /> },
-  { path: "/devices", label: "设备", icon: <DevicesIcon /> },
-  { path: "/logs", label: "日志", icon: <ArticleIcon /> },
-  { path: "/firmware", label: "固件", icon: <MemoryIcon /> },
-  { path: "/rollouts", label: "OTA 升级", icon: <UpdateIcon /> },
+  { path: "/", labelKey: "nav.dashboard" as DictKey, icon: <DashboardIcon /> },
+  { path: "/devices", labelKey: "nav.devices" as DictKey, icon: <DevicesIcon /> },
+  { path: "/logs", labelKey: "nav.logs" as DictKey, icon: <ArticleIcon /> },
+  { path: "/firmware", labelKey: "nav.firmware" as DictKey, icon: <MemoryIcon /> },
+  { path: "/rollouts", labelKey: "nav.rollouts" as DictKey, icon: <UpdateIcon /> },
 ] as const;
 
 /** AppBar title: exact nav match, then detail-page patterns. */
-function pageTitle(pathname: string): string {
+function pageTitle(pathname: string, t: (k: DictKey) => string): string {
   const exact = NAV_ITEMS.find((i) => i.path === pathname);
-  if (exact) return exact.label;
-  if (/^\/devices\/[^/]+$/.test(pathname)) return "设备详情";
-  if (/^\/rollouts\/[^/]+$/.test(pathname)) return "升级详情";
-  if (/^\/ota-jobs\/[^/]+$/.test(pathname)) return "OTA 任务";
+  if (exact) return t(exact.labelKey);
+  if (/^\/devices\/[^/]+$/.test(pathname)) return t("title.deviceDetail");
+  if (/^\/rollouts\/[^/]+$/.test(pathname)) return t("title.rolloutDetail");
+  if (/^\/ota-jobs\/[^/]+$/.test(pathname)) return t("title.otaJob");
   return "Soulcloud";
 }
 
@@ -58,10 +68,12 @@ export function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, logout } = useAuth();
   const { projects, projectId, setProjectId } = useProject();
+  const { t, locale, setLocale } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const { mode, setMode, systemMode } = useColorScheme();
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
+  const [langAnchor, setLangAnchor] = useState<null | HTMLElement>(null);
 
   // mode is undefined on first render; fall back to the resolved system mode
   const isDark = mode === "dark" || (mode === undefined && systemMode === "dark");
@@ -102,7 +114,7 @@ export function AppLayout() {
               }}
             >
               <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.label} />
+              <ListItemText primary={t(item.labelKey)} />
             </ListItemButton>
           </ListItem>
         ))}
@@ -128,7 +140,7 @@ export function AppLayout() {
             <IconButton
               edge="start"
               color="inherit"
-              aria-label="打开导航"
+              aria-label={t("layout.openNav")}
               onClick={() => setMobileOpen(true)}
               sx={{ mr: 1 }}
             >
@@ -136,7 +148,7 @@ export function AppLayout() {
             </IconButton>
           )}
           <Typography variant="h6" noWrap sx={{ fontWeight: 600, mr: 3 }}>
-            {pageTitle(location.pathname)}
+            {pageTitle(location.pathname, t)}
           </Typography>
 
           <Box sx={{ flexGrow: 1 }} />
@@ -148,7 +160,7 @@ export function AppLayout() {
               value={projectId ?? ""}
               onChange={handleProjectChange}
               sx={{ minWidth: 200, mr: 2 }}
-              aria-label="选择项目"
+              aria-label={t("layout.selectProject")}
             >
               {projects.map((p) => (
                 <MenuItem key={p.project_id} value={p.project_id}>
@@ -158,8 +170,38 @@ export function AppLayout() {
             </Select>
           )}
 
+          {/* language toggle */}
+          <Tooltip title={t("layout.lang")}>
+            <IconButton
+              color="inherit"
+              onClick={(e) => setLangAnchor(e.currentTarget)}
+              aria-label={t("layout.lang")}
+              aria-haspopup="true"
+            >
+              <TranslateIcon />
+            </IconButton>
+          </Tooltip>
+          <Menu
+            anchorEl={langAnchor}
+            open={Boolean(langAnchor)}
+            onClose={() => setLangAnchor(null)}
+          >
+            {LANG_OPTIONS.map((opt) => (
+              <MenuItem
+                key={opt.locale}
+                selected={locale === opt.locale}
+                onClick={() => {
+                  setLangAnchor(null);
+                  setLocale(opt.locale);
+                }}
+              >
+                {t(opt.labelKey)}
+              </MenuItem>
+            ))}
+          </Menu>
+
           {/* dark mode toggle */}
-          <Tooltip title={isDark ? "切换到浅色模式" : "切换到深色模式"}>
+          <Tooltip title={isDark ? t("layout.switchLight") : t("layout.switchDark")}>
             <IconButton
               color="inherit"
               onClick={() => setMode(isDark ? "light" : "dark")}
@@ -169,7 +211,7 @@ export function AppLayout() {
           </Tooltip>
 
           {/* user menu */}
-          <Tooltip title="账户">
+          <Tooltip title={t("layout.account")}>
             <IconButton
               onClick={(e) => setUserMenuAnchor(e.currentTarget)}
               aria-haspopup="true"
@@ -191,7 +233,7 @@ export function AppLayout() {
               <ListItemIcon>
                 <LogoutIcon fontSize="small" />
               </ListItemIcon>
-              退出登录
+              {t("layout.logout")}
             </MenuItem>
           </Menu>
         </Toolbar>
