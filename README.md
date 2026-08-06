@@ -118,11 +118,12 @@ Frontend coverage: 76% lines / 91% statements across 27 test files
 
 | Direction | Topic | Purpose |
 | --- | --- | --- |
-| Platform to device | `soulcloud/v1/devices/{dev_uid}/ota` | OTA command (not yet implemented) |
+| Platform to device | `soulcloud/v1/devices/{dev_uid}/ota` | OTA command (per-device download JWT) |
 | Platform to device | `soulcloud/v1/devices/{dev_uid}/cmd/exec` | Generic command execution |
 | Device to platform | `soulcloud/v1/devices/{dev_uid}/cmd/result` | Generic command result |
-| Device to platform | `soulcloud/v1/devices/{dev_uid}/log` | Log events (contract not yet defined) |
-| Device to platform | `soulcloud/v1/devices/{dev_uid}/stat` | Device status (validated, not yet persisted) |
+| Device to platform | `soulcloud/v1/devices/{dev_uid}/ota/result` | OTA result acknowledgements |
+| Device to platform | `soulcloud/v1/devices/{dev_uid}/log` | on9log binary log packets |
+| Device to platform | `soulcloud/v1/devices/{dev_uid}/stat` | Device status (validated; `fw` drives firmware state) |
 
 ## Authentication (G group)
 
