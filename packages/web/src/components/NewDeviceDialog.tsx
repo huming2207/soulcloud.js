@@ -173,7 +173,7 @@ function CredentialRow({
       <Typography variant="caption" color="text.secondary">
         {label}
       </Typography>
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Typography
           variant="body1"
           sx={{

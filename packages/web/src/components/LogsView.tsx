@@ -10,6 +10,8 @@ import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import Typography from "@mui/material/Typography";
 import { fetchDeviceLogs } from "../api/logs";
+import { alpha } from "@mui/material/styles";
+import { ListSkeleton } from "./QueryState";
 import type { LogEvent } from "../api/types";
 
 const LEVEL_COLOR = [
@@ -60,7 +62,7 @@ export function LogsView({ deviceId }: { deviceId: string }) {
 
   return (
     <Stack spacing={1}>
-      <Stack direction="row" alignItems="center" spacing={2}>
+      <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
         <FormControlLabel
           control={
             <Switch
@@ -83,11 +85,7 @@ export function LogsView({ deviceId }: { deviceId: string }) {
       </Stack>
 
       <Paper variant="outlined" sx={{ maxHeight: 560, overflow: "auto" }}>
-        {isLoading && (
-          <Typography sx={{ p: 2 }} variant="body2" color="text.secondary">
-            加载日志…
-          </Typography>
-        )}
+        {isLoading && <ListSkeleton rows={6} />}
         {!isLoading && events.length === 0 && (
           <Typography sx={{ p: 2 }} variant="body2" color="text.secondary">
             暂无日志事件
@@ -98,7 +96,7 @@ export function LogsView({ deviceId }: { deviceId: string }) {
         ))}
       </Paper>
 
-      <Stack direction="row" spacing={1} justifyContent="flex-end">
+      <Stack direction="row" spacing={1} sx={{ justifyContent: "flex-end" }}>
         {data?.next_cursor && (
           <Button size="small" onClick={() => setCursor(data.next_cursor)}>
             加载更早
@@ -129,7 +127,11 @@ function LogRow({ event, includeRaw }: { event: LogEvent; includeRaw: boolean })
         display: "flex",
         gap: 1.5,
         alignItems: "flex-start",
-        bgcolor: level !== null && level >= 4 ? "error.light" : undefined,
+        // soft tint that works in both light and dark schemes
+        bgcolor:
+          level !== null && level >= 4
+            ? (t) => alpha(t.palette.error.main, t.palette.mode === "dark" ? 0.22 : 0.08)
+            : undefined,
         opacity: undecoded ? 0.6 : 1,
       }}
     >

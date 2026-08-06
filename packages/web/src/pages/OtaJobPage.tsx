@@ -14,6 +14,7 @@ import TableRow from "@mui/material/TableRow";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { fetchOtaJob } from "../api/firmware";
+import { CardSkeleton, QueryError } from "../components/QueryState";
 import type { OtaTargetState } from "../api/types";
 
 const TARGET_COLOR: Record<
@@ -66,7 +67,7 @@ export function OtaJobPage() {
 
   return (
     <Stack spacing={2}>
-      <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
           OTA 任务 {jobId.slice(0, 8)}
         </Typography>
@@ -85,14 +86,13 @@ export function OtaJobPage() {
         )}
       </Stack>
 
-      {job.isLoading && (
-        <Typography variant="body2" color="text.secondary">加载中…</Typography>
-      )}
-      {!job.isLoading && !j && (
-        <Alert severity="error">任务不存在：{job.error?.message}</Alert>
-      )}
-
-      {j && (
+      {job.isLoading ? (
+        <CardSkeleton />
+      ) : job.error ? (
+        <QueryError error={job.error} onRetry={() => job.refetch()} />
+      ) : !j ? (
+        <QueryError error={new Error("任务不存在")} onRetry={() => job.refetch()} />
+      ) : (
         <>
           <Typography variant="body2" color="text.secondary">
             release：<Box component="span" sx={{ fontFamily: "monospace", fontSize: 12 }}>{j.release_id}</Box>

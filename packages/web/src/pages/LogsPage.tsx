@@ -7,6 +7,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { fetchDevices } from "../api/devices";
 import { LogsView } from "../components/LogsView";
+import { QueryError } from "../components/QueryState";
 import { useProject } from "../layout/ProjectContext";
 
 export function LogsPage() {
@@ -30,6 +31,9 @@ export function LogsPage() {
         日志
       </Typography>
 
+      {devices.error && (
+        <QueryError error={devices.error} onRetry={() => devices.refetch()} />
+      )}
       <TextField
         select
         label="设备"

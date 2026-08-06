@@ -5,6 +5,7 @@ import Typography from "@mui/material/Typography";
 import { useAuth } from "../auth/AuthContext";
 import { useProject } from "../layout/ProjectContext";
 import { Placeholder } from "./Placeholder";
+import { CardSkeleton } from "../components/QueryState";
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -16,7 +17,7 @@ export function DashboardPage() {
         仪表盘
       </Typography>
       {project ? (
-        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+        <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }} useFlexGap>
           <Card sx={{ minWidth: 240, flex: "1 1 240px" }}>
             <CardContent>
               <Typography variant="body2" color="text.secondary">
@@ -40,9 +41,7 @@ export function DashboardPage() {
           </Card>
         </Stack>
       ) : (
-        <Typography variant="body2" color="text.secondary">
-          加载项目信息…
-        </Typography>
+        <CardSkeleton />
       )}
       <Placeholder
         title="后续规划"

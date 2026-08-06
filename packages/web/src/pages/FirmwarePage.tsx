@@ -25,6 +25,7 @@ import { useProject } from "../layout/ProjectContext";
 import { DeployDialog } from "../components/DeployDialog";
 import { UploadDialog } from "../components/UploadDialog";
 import { RolloutCreateDialog } from "../components/RolloutCreateDialog";
+import { ListSkeleton, QueryError } from "../components/QueryState";
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -87,7 +88,7 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
 
   return (
     <Stack spacing={2}>
-      <Stack direction="row" spacing={2} alignItems="center">
+      <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
         <Button
           variant="contained"
           startIcon={<AddIcon />}
@@ -102,7 +103,12 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
         )}
       </Stack>
 
-      <TableContainer component={Paper} variant="outlined">
+      {releases.isLoading ? (
+        <ListSkeleton />
+      ) : releases.error ? (
+        <QueryError error={releases.error} onRetry={() => releases.refetch()} />
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -144,7 +150,7 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
                 </TableCell>
                 <TableCell>{formatTime(r.created_at)}</TableCell>
                 <TableCell align="right">
-                  <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                  <Stack direction="row" spacing={0.5} sx={{justifyContent: "flex-end"}}>
                     <Tooltip title="部署到设备">
                       <IconButton
                         size="small"
@@ -176,8 +182,9 @@ function ReleasesTab({ projectId }: { projectId: string | null }) {
           </TableBody>
         </Table>
       </TableContainer>
+      )}
 
-      <Stack direction="row" justifyContent="flex-end" spacing={1}>
+      <Stack direction="row"  spacing={1} sx={{justifyContent: "flex-end"}}>
         {releases.data?.next_cursor && (
           <Button size="small" onClick={() => setCursor(releases.data.next_cursor)}>
             加载更早
@@ -239,7 +246,12 @@ function ArtifactsTab({ projectId }: { projectId: string | null }) {
           上传 ELF 构件
         </Button>
       </Box>
-      <TableContainer component={Paper} variant="outlined">
+      {artifacts.isLoading ? (
+        <ListSkeleton />
+      ) : artifacts.error ? (
+        <QueryError error={artifacts.error} onRetry={() => artifacts.refetch()} />
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -287,6 +299,7 @@ function ArtifactsTab({ projectId }: { projectId: string | null }) {
           </TableBody>
         </Table>
       </TableContainer>
+      )}
       <UploadDialog
         kind="artifact"
         open={uploadOpen}

@@ -124,7 +124,7 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
         <Stack spacing={2}>
           {error && <Alert severity="error">{error}</Alert>}
           {success && <Alert severity="success">{success}</Alert>}
-          <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }} useFlexGap>
             <TextField
               label="命令名（cmd）"
               value={cmd}

@@ -42,6 +42,16 @@ const NAV_ITEMS = [
   { path: "/rollouts", label: "OTA 升级", icon: <UpdateIcon /> },
 ] as const;
 
+/** AppBar title: exact nav match, then detail-page patterns. */
+function pageTitle(pathname: string): string {
+  const exact = NAV_ITEMS.find((i) => i.path === pathname);
+  if (exact) return exact.label;
+  if (/^\/devices\/[^/]+$/.test(pathname)) return "设备详情";
+  if (/^\/rollouts\/[^/]+$/.test(pathname)) return "升级详情";
+  if (/^\/ota-jobs\/[^/]+$/.test(pathname)) return "OTA 任务";
+  return "Soulcloud";
+}
+
 export function AppLayout() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
@@ -126,7 +136,7 @@ export function AppLayout() {
             </IconButton>
           )}
           <Typography variant="h6" noWrap sx={{ fontWeight: 600, mr: 3 }}>
-            {NAV_ITEMS.find((i) => i.path === location.pathname)?.label ?? "Soulcloud"}
+            {pageTitle(location.pathname)}
           </Typography>
 
           <Box sx={{ flexGrow: 1 }} />

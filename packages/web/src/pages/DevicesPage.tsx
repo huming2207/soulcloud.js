@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
@@ -117,7 +118,7 @@ export function DevicesPage() {
 
   return (
     <Stack spacing={2}>
-      <Stack direction="row" alignItems="center" spacing={2}>
+      <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
           设备
         </Typography>
@@ -130,6 +131,13 @@ export function DevicesPage() {
           新建设备
         </Button>
       </Stack>
+
+      {devices.data?.total === 0 && (
+        <Alert severity="info">
+          项目里还没有设备——点击右上角「新建设备」录入第一台设备（device_uid
+          需与硬件侧保持一致）。
+        </Alert>
+      )}
 
       <Box sx={{ height: 520 }}>
         <DataGrid

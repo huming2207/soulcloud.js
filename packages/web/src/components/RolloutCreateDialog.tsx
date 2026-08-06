@@ -249,13 +249,13 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                   <Typography variant="subtitle2" gutterBottom>
                     阶段比率（递增，末项 = 1）
                   </Typography>
-                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
                     {ratios.map((r, i) => (
                       <Box key={i} sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                         <TextField
                           size="small"
                           type="number"
-                          inputProps={{ step: 0.05, min: 0, max: 1 }}
+                          slotProps={{ htmlInput: { step: 0.05, min: 0, max: 1 } }}
                           value={Number.isFinite(r) ? r : ""}
                           onChange={(e) => updateRatio(i, e.target.value)}
                           sx={{ width: 90 }}
@@ -284,7 +284,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
             ) : (
               <Stack spacing={2}>
                 {groups.map((g, i) => (
-                  <Stack key={i} direction="row" spacing={1} alignItems="flex-start">
+                  <Stack key={i} direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
                     <Box sx={{ flexGrow: 1 }}>
                       <DeviceMultiSelect
                         options={options}
@@ -340,12 +340,12 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
               <Typography variant="subtitle2" gutterBottom>
                 推进门槛
               </Typography>
-              <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }} useFlexGap>
                 <TextField
                   label="成功率（success_ratio）"
                   type="number"
                   size="small"
-                  inputProps={{ step: 0.05, min: 0, max: 1 }}
+                  slotProps={{ htmlInput: { step: 0.05, min: 0, max: 1 } }}
                   value={successRatio}
                   onChange={(e) => setSuccessRatio(e.target.value)}
                   sx={{ width: 150 }}
@@ -354,7 +354,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                   label="最小样本（min_sample）"
                   type="number"
                   size="small"
-                  inputProps={{ min: 0 }}
+                  slotProps={{ htmlInput: { min: 0 } }}
                   value={minSample}
                   onChange={(e) => setMinSample(e.target.value)}
                   sx={{ width: 130 }}
@@ -363,7 +363,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                   label="阶段超时（小时）"
                   type="number"
                   size="small"
-                  inputProps={{ min: 1 }}
+                  slotProps={{ htmlInput: { min: 1 } }}
                   value={phaseTimeout}
                   onChange={(e) => setPhaseTimeout(e.target.value)}
                   sx={{ width: 140 }}
@@ -372,7 +372,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                   label="卡住判定（小时）"
                   type="number"
                   size="small"
-                  inputProps={{ min: 1 }}
+                  slotProps={{ htmlInput: { min: 1 } }}
                   value={stuckHours}
                   onChange={(e) => setStuckHours(e.target.value)}
                   sx={{ width: 140 }}

@@ -23,6 +23,7 @@ import { BindFirmwareDialog } from "../components/BindFirmwareDialog";
 import { CredentialsDialog } from "../components/CredentialsDialog";
 import { CommandPanel } from "../components/CommandPanel";
 import { LogsView } from "../components/LogsView";
+import { CardSkeleton, QueryError } from "../components/QueryState";
 
 export function DeviceDetailPage() {
   const { deviceId } = useParams<{ deviceId: string }>();
@@ -98,10 +99,15 @@ function OverviewTab({ deviceId }: { deviceId: string }) {
   };
 
   if (device.isLoading) {
-    return <Typography variant="body2" color="text.secondary">加载中…</Typography>;
+    return <CardSkeleton />;
   }
   if (!d) {
-    return <Alert severity="error">设备不存在或已被移除：{device.error?.message}</Alert>;
+    return (
+      <QueryError
+        error={device.error}
+        onRetry={() => device.refetch()}
+      />
+    );
   }
 
   return (

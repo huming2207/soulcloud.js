@@ -15,6 +15,7 @@ import TableRow from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 import { fetchRollouts } from "../api/firmware";
 import { useProject } from "../layout/ProjectContext";
+import { ListSkeleton, QueryError } from "../components/QueryState";
 import type { RolloutState } from "../api/types";
 
 const STATE_COLOR: Record<RolloutState, "primary" | "warning" | "error" | "success"> = {
@@ -59,7 +60,12 @@ export function RolloutsPage() {
       <Typography variant="body2" color="text.secondary">
         分批升级在固件发布页创建（列表每 10 秒自动刷新）
       </Typography>
-      <TableContainer component={Paper} variant="outlined">
+      {rollouts.isLoading ? (
+        <ListSkeleton />
+      ) : rollouts.error ? (
+        <QueryError error={rollouts.error} onRetry={() => rollouts.refetch()} />
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -104,7 +110,7 @@ export function RolloutsPage() {
                   <TableCell>{r.manual_approval ? "是" : "—"}</TableCell>
                   <TableCell>{r.pool_size}</TableCell>
                   <TableCell>
-                    <Stack direction="row" spacing={1} alignItems="center">
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                       <Box sx={{ flexGrow: 1 }}>
                         <LinearProgress
                           variant="determinate"
@@ -132,6 +138,7 @@ export function RolloutsPage() {
           </TableBody>
         </Table>
       </TableContainer>
+      )}
     </Stack>
   );
 }

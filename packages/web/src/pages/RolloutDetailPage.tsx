@@ -21,6 +21,7 @@ import {
   rollbackRollout,
 } from "../api/firmware";
 import { errorMessage } from "../api/http";
+import { CardSkeleton, QueryError } from "../components/QueryState";
 import type { OtaTargetState, RolloutState } from "../api/types";
 
 const ROLLOUT_STATE_COLOR: Record<RolloutState, "primary" | "warning" | "error" | "success"> = {
@@ -84,16 +85,14 @@ export function RolloutDetailPage() {
 
   return (
     <Stack spacing={2}>
-      {rollout.isLoading && (
-        <Typography variant="body2" color="text.secondary">加载中…</Typography>
-      )}
       {error && <Alert severity="error">{error}</Alert>}
-      {!rollout.isLoading && !r && (
-        <Alert severity="error">升级不存在：{rollout.error?.message}</Alert>
-      )}
-      {r && (
+      {rollout.isLoading ? (
+        <CardSkeleton />
+      ) : rollout.error || !r ? (
+        <QueryError error={rollout.error ?? new Error("升级不存在")} onRetry={() => rollout.refetch()} />
+      ) : (
         <>
-          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
             <Typography variant="h5" sx={{ fontWeight: 600 }}>
               升级 {r.rollout_id.slice(0, 8)}
             </Typography>
@@ -106,7 +105,7 @@ export function RolloutDetailPage() {
             {r.manual_approval && <Chip label="需手动批准" size="small" color="warning" />}
           </Stack>
 
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
             <Button
               variant="outlined"
               disabled={r.state !== "running" || acting}
@@ -148,14 +147,14 @@ export function RolloutDetailPage() {
               <Step key={p.index} completed={p.state === "completed"}>
                 <StepLabel
                   optional={
-                    <Stack spacing={0.5} alignItems="flex-start">
+                    <Stack spacing={0.5} sx={{ alignItems: "flex-start" }}>
                       <Typography variant="caption" color="text.secondary">
                         {p.ratio !== null ? `覆盖 ${(p.ratio * 100).toFixed(0)}%` : `第 ${p.group_id} 组`}
                         {" · "}
                         {p.target_count} 台
                       </Typography>
                       {p.summary && (
-                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                        <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap" }} useFlexGap>
                           {Object.entries(p.summary).map(([state, count]) => (
                             <Chip
                               key={state}
@@ -216,10 +215,10 @@ export function RolloutDetailPage() {
 
 function ParamGrid({ entries }: { entries: Array<[string, string]> }) {
   return (
-    <Stack direction="row" flexWrap="wrap" useFlexGap spacing={3}>
+    <Stack direction="row" useFlexGap spacing={3} sx={{ flexWrap: "wrap" }}>
       {entries.map(([label, value]) => (
         <Box key={label}>
-          <Typography variant="caption" color="text.secondary" display="block">
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
             {label}
           </Typography>
           <Typography
