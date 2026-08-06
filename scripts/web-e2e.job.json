@@ -1,0 +1,27 @@
+{
+  "description": "Web <-> API E2E (no devices/broker involved). Requires the API (:8080) and the web dev server (:5173) running, and a seeded user 'e2e-web-user' (register once via POST /v1/auth/register). Re-runnable: the device creation step must use a fresh device_uid (assigned_id is unique per project).",
+  "steps": [
+    { "action": "open", "url": "http://localhost:5173/login", "loadState": "networkidle" },
+    { "action": "fill", "locator": "label", "value": "Username", "text": "e2e-web-user" },
+    { "action": "fill", "locator": "label", "value": "Password", "text": "test-password-123" },
+    { "action": "click", "locator": "role", "role": "button", "name": "Log in" },
+    { "action": "assertUrl", "url": "http://localhost:5173/**" },
+    { "action": "assertText", "text": "Dashboard" },
+    { "action": "assertText", "text": "e2e-web-user's project" },
+    { "action": "open", "url": "http://localhost:5173/devices" },
+    { "action": "assertText", "text": "No devices in this project yet" },
+    { "action": "click", "locator": "role", "role": "button", "name": "New Device" },
+    { "action": "fill", "locator": "label", "value": "assigned_id (human-readable)", "text": "e2e-sensor" },
+    { "action": "fill", "locator": "label", "value": "device_uid (hardware id)", "text": "e2e-uid-1" },
+    { "action": "click", "locator": "role", "role": "button", "name": "Create" },
+    { "action": "assertText", "text": "Device created" },
+    { "action": "assertText", "text": "e2e-uid-1" },
+    { "action": "click", "locator": "role", "role": "button", "name": "I have saved it" },
+    { "action": "assertText", "text": "e2e-sensor" },
+    { "action": "open", "url": "http://localhost:5173/firmware" },
+    { "action": "assertText", "text": "No releases" },
+    { "action": "open", "url": "http://localhost:5173/rollouts" },
+    { "action": "assertText", "text": "No rollouts" },
+    { "action": "screenshot", "path": "/tmp/soulcloud-web-screenshot/e2e-final.png" }
+  ]
+}

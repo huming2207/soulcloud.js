@@ -10,7 +10,7 @@ import type { LinkProps } from "@mui/material/Link";
  * Maps Material UI `href` to react-router `to` so that every MUI link and
  * button navigates client-side (see mui.com/material-ui/integrations/routing).
  */
-const LinkBehavior = forwardRef<
+export const LinkBehavior = forwardRef<
   HTMLAnchorElement,
   Omit<RouterLinkProps, "to"> & { href: RouterLinkProps["to"] }
 >((props, ref) => {
