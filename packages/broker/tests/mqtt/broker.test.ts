@@ -209,6 +209,35 @@ describe("topic authorization", () => {
     device.end();
   });
 
+  test("oversized publish is rejected by the 256KB guard (M6)", async () => {
+    const device = connectDevice();
+    await waitForConnect(device);
+    // authorizePublish fails before the payload is buffered further
+    const disconnected = new Promise<boolean>((resolve) => {
+      device.once("close", () => resolve(true));
+      setTimeout(() => resolve(false), 3000);
+    });
+    await device
+      .publish(`soulcloud/v1/devices/${DEVICE_UID}/stat`, new Uint8Array(256 * 1024 + 1))
+      .catch(() => {});
+    expect(await disconnected).toBe(true);
+    device.end();
+  });
+
+  test("publish to another device's topic is rejected (S3 topic binding)", async () => {
+    const device = connectDevice();
+    await waitForConnect(device);
+    const disconnected = new Promise<boolean>((resolve) => {
+      device.once("close", () => resolve(true));
+      setTimeout(() => resolve(false), 3000);
+    });
+    await device
+      .publish("soulcloud/v1/devices/other-dev/stat", new Uint8Array([1]))
+      .catch(() => {});
+    expect(await disconnected).toBe(true);
+    device.end();
+  });
+
   test("device cannot publish to its own downlink topic", async () => {
     const device = connectDevice();
     await waitForConnect(device);

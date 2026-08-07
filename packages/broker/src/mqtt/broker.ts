@@ -153,8 +153,10 @@ export async function startBroker(
  *
  * Passwords are argon2id-hashed (Bun.password); no legacy formats are
  * accepted (scrypt/plaintext compatibility was removed by user decision).
+ * Exported for unit tests (mock prisma); the broker wires it into
+ * aedes.authenticate with a returnCode-3 mapping on DB failures.
  */
-async function authenticateDevice(
+export async function authenticateDevice(
   prisma: PrismaClient,
   username: string,
   password: Buffer | undefined,
