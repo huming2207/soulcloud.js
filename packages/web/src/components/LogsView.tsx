@@ -7,10 +7,13 @@ import FormControlLabel from "@mui/material/FormControlLabel";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 import { fetchDeviceLogs } from "../api/logs";
 import { alpha } from "@mui/material/styles";
 import { ListSkeleton } from "./QueryState";
+import { LogTerminalView } from "./LogTerminalView";
 import type { LogEvent } from "../api/types";
 import { useI18n } from "../i18n/I18nContext";
 
@@ -41,9 +44,11 @@ function formatTime(iso: string): string {
 /**
  * Decoded on9log event stream for one device. The newest page auto-refreshes
  * every 5s; browsing older pages (cursor set) disables the auto-refresh.
+ * Two views: the paginated table (default) and the live xterm terminal.
  */
 export function LogsView({ deviceId }: { deviceId: string }) {
   const { t } = useI18n();
+  const [view, setView] = useState<"table" | "terminal">("table");
   const [cursor, setCursor] = useState<string | null>(null);
   const [includeRaw, setIncludeRaw] = useState(false);
 
@@ -55,7 +60,8 @@ export function LogsView({ deviceId }: { deviceId: string }) {
         cursor: cursor ?? undefined,
         includeRaw,
       }),
-    // only poll the newest page
+    // only poll the newest page; skip polling while the terminal view is shown
+    enabled: view === "table",
     refetchInterval: cursor === null ? 5000 : false,
   });
 
@@ -64,51 +70,71 @@ export function LogsView({ deviceId }: { deviceId: string }) {
   return (
     <Stack spacing={1}>
       <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={includeRaw}
-              onChange={(e) => {
-                setIncludeRaw(e.target.checked);
-                setCursor(null);
-              }}
-              size="small"
-            />
-          }
-          label={t("logs.showRaw")}
-        />
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={view}
+          onChange={(_e, next: "table" | "terminal" | null) => {
+            if (next) setView(next);
+          }}
+          aria-label="log view"
+        >
+          <ToggleButton value="table">Table</ToggleButton>
+          <ToggleButton value="terminal">Terminal</ToggleButton>
+        </ToggleButtonGroup>
+        {view === "table" && (
+          <FormControlLabel
+            control={
+              <Switch
+                checked={includeRaw}
+                onChange={(e) => {
+                  setIncludeRaw(e.target.checked);
+                  setCursor(null);
+                }}
+                size="small"
+              />
+            }
+            label={t("logs.showRaw")}
+          />
+        )}
         <Box sx={{ flexGrow: 1 }} />
-        {isFetching && (
+        {view === "table" && isFetching && (
           <Typography variant="caption" color="text.secondary">
             {t("logs.refreshing")}
           </Typography>
         )}
       </Stack>
 
-      <Paper variant="outlined" sx={{ maxHeight: 560, overflow: "auto" }}>
-        {isLoading && <ListSkeleton rows={6} />}
-        {!isLoading && events.length === 0 && (
-          <Typography sx={{ p: 2 }} variant="body2" color="text.secondary">
-            {t("logs.noEvents")}
-          </Typography>
-        )}
-        {events.map((e) => (
-          <LogRow key={e.id} event={e} includeRaw={includeRaw} />
-        ))}
-      </Paper>
+      {view === "terminal" ? (
+        <LogTerminalView deviceId={deviceId} />
+      ) : (
+        <>
+          <Paper variant="outlined" sx={{ maxHeight: 560, overflow: "auto" }}>
+            {isLoading && <ListSkeleton rows={6} />}
+            {!isLoading && events.length === 0 && (
+              <Typography sx={{ p: 2 }} variant="body2" color="text.secondary">
+                {t("logs.noEvents")}
+              </Typography>
+            )}
+            {events.map((e) => (
+              <LogRow key={e.id} event={e} includeRaw={includeRaw} />
+            ))}
+          </Paper>
 
-      <Stack direction="row" spacing={1} sx={{ justifyContent: "flex-end" }}>
-        {data?.next_cursor && (
-          <Button size="small" onClick={() => setCursor(data.next_cursor)}>
-            {t("logs.loadEarlier")}
-          </Button>
-        )}
-        {cursor && (
-          <Button size="small" onClick={() => setCursor(null)}>
-            {t("logs.backToLatest")}
-          </Button>
-        )}
-      </Stack>
+          <Stack direction="row" spacing={1} sx={{ justifyContent: "flex-end" }}>
+            {data?.next_cursor && (
+              <Button size="small" onClick={() => setCursor(data.next_cursor)}>
+                {t("logs.loadEarlier")}
+              </Button>
+            )}
+            {cursor && (
+              <Button size="small" onClick={() => setCursor(null)}>
+                {t("logs.backToLatest")}
+              </Button>
+            )}
+          </Stack>
+        </>
+      )}
     </Stack>
   );
 }

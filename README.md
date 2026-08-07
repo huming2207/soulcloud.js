@@ -111,7 +111,7 @@ migrated automatically by `scripts/prepare-test-db.ts`), so the dev MQTT
 broker — whose poller leases the global command queue every ~500ms — and
 QEMU firmware E2E runs can keep going while tests execute.
 
-Frontend coverage: 76% lines / 91% statements across 27 test files
+Frontend coverage: 76% lines / 91% statements across 31 test files
 (`bun run --cwd packages/web test --coverage`).
 
 ## MQTT v1 topics
@@ -124,6 +124,7 @@ Frontend coverage: 76% lines / 91% statements across 27 test files
 | Device to platform | `soulcloud/v1/devices/{dev_uid}/ota/result` | OTA result acknowledgements |
 | Device to platform | `soulcloud/v1/devices/{dev_uid}/log` | on9log binary log packets |
 | Device to platform | `soulcloud/v1/devices/{dev_uid}/stat` | Device status (validated; `fw` drives firmware state) |
+| WebSocket (API → web console) | `GET /v1/ws/logs?device_id=<uuid>` | Realtime decoded log stream (subprotocol auth; see Web UI) |
 
 ## Authentication (G group)
 
@@ -168,8 +169,25 @@ The web console (`packages/web`) covers the human-facing workflows:
 - **Devices**: Data Grid list (server pagination), create device (one-time
   MQTT credential), detail page with firmware-state binding, credential
   issue/revoke, command form + history with batch detail.
+- **Command history**: `useCommandHistory(deviceId)` gives the command
+  form zsh-style ↑/↓ navigation (most recent → oldest; the in-progress
+  draft is preserved and restored when reaching the bottom). Committed
+  commands are deduped (no consecutive repeats), capped at 50 per device
+  and persisted in localStorage (`soulcloud.cmdhistory.<deviceId>`) so
+  history survives reloads and never leaks across devices.
 - **Logs**: per-device decoded on9log stream with level badges, raw packet
-  toggle and auto-refresh.
+  toggle and 5 s REST auto-refresh.
+- **Realtime logs**: `useLogStream(deviceId, {onEvent})` streams decoded
+  events over `GET /v1/ws/logs?device_id=<uuid>` (WebSocket). Browsers
+  cannot set headers, so auth rides the subprotocol list
+  `["soulcloud", "<access token>"]`; the server pushes
+  `{type:"ready"}` on open and `{type:"log", device_id, event}` per
+  event (same shape as the REST logs endpoint), answers ping/pong
+  heartbeats, and the hook reconnects with exponential backoff
+  (1 s → 30 s cap). The Logs page has a Table/Terminal view switch: the
+  terminal (xterm.js) replays recent history via REST then streams live
+  lines with level-colored output, follow/clear controls and dark-mode
+  theming.
 - **Firmware**: ELF artifact upload (dictionary import), release upload
   (bin + optional ELF), deploy dialog (multi-select devices -> OTA job),
   authenticated bin download.

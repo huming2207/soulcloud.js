@@ -83,7 +83,8 @@ export async function decodeRawEvent(
   try {
     packet = parseOn9logPacket(event.rawPacket);
   } catch {
-    return { message: null, tag: null };
+    // unparsable packet: keep the tag (unified with the batch path)
+    return { message: null, tag: tagRow.value };
   }
   if (packet.kind !== "log") {
     return { message: null, tag: null };
@@ -176,7 +177,10 @@ export async function decodeEventsBatch(
       }
       out.push({ tag, message: renderFormat(fmt, packet.args) });
     } catch {
-      out.push({ tag: null, message: null });
+      // format/args mismatch: report as undecodable rather than failing
+      // the whole query; keep the tag (matches decodeRawEvent, tag has
+      // dictionary-address audit value)
+      out.push({ tag, message: null });
     }
   }
   return out;

@@ -2,17 +2,14 @@
  * P2: render-failure behaviour consistency between the single-event and
  * batch decode paths (Kimi audit note; packages/core/src/logging/decode.ts).
  *
- * This file FIXES THE CURRENT BEHAVIOUR — it documents the existing
- * inconsistency, it does not change decode.ts:
+ * Both paths are unified to KEEP THE TAG on render failure:
  *
- *   - decodeRawEvent      (single path)  returns { message: null, tag }   on
- *     render failure (the tag survives)
- *   - decodeEventsBatch   (batch path)   returns { tag: null, message: null }
- *     on render failure (the tag is dropped)
+ *   - decodeRawEvent      (single path)  returns { message: null, tag }
+ *   - decodeEventsBatch   (batch path)   returns { tag, message: null }
  *
- * The tests below assert exactly that asymmetry so the difference is
- * visible and locked in until someone reconciles the two paths in decode.ts
- * (at which point BOTH tests must be updated together).
+ * The tag survives because it has dictionary-address audit value even when
+ * the message cannot be rendered. The tests below assert the unified
+ * behaviour on both paths.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -90,7 +87,7 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("decode render-failure behaviour (current state)", () => {
+describe("decode render-failure behaviour (tag preserved on both paths)", () => {
   test("a matching packet renders identically on both paths", async () => {
     const ok = event(logPacket(TAG_ADDR, FMT_ADDR, [1], le32(7))); // "value=7"
     const single = await decodeRawEvent(prisma, ok);
@@ -108,11 +105,11 @@ describe("decode render-failure behaviour (current state)", () => {
     expect(decoded.tag).toBe("demo");
   });
 
-  test("batch path drops the tag when rendering fails (current inconsistency)", async () => {
-    // same input as above; the batch path reports { tag: null, message: null }
+  test("batch path keeps the tag when rendering fails (unified)", async () => {
+    // same input as above; the batch path reports { tag: "demo", message: null }
     const bad = event(logPacket(TAG_ADDR, FMT_ADDR, [], []));
     const decoded = await decodeEventsBatch(prisma, [bad]);
-    expect(decoded).toEqual([{ tag: null, message: null }]);
+    expect(decoded).toEqual([{ tag: "demo", message: null }]);
   });
 
   test("dictionary gaps are reported consistently (tag null on both paths)", async () => {
@@ -121,6 +118,16 @@ describe("decode render-failure behaviour (current state)", () => {
     expect(await decodeRawEvent(prisma, orphan)).toEqual({ message: null, tag: null });
     expect(await decodeEventsBatch(prisma, [orphan])).toEqual([
       { message: null, tag: null },
+    ]);
+  });
+
+  test("unparsable packets keep the tag on both paths (unified)", async () => {
+    // garbage bytes that fail parseOn9logPacket; the tag address is known
+    // from the dictionary, so both paths keep it
+    const junk = event(new Uint8Array([0x01, 0x02, 0x03]));
+    expect(await decodeRawEvent(prisma, junk)).toEqual({ message: null, tag: "demo" });
+    expect(await decodeEventsBatch(prisma, [junk])).toEqual([
+      { message: null, tag: "demo" },
     ]);
   });
 });

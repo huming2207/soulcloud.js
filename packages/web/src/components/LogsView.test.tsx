@@ -24,6 +24,28 @@ const logsApi = {
 };
 mock.module("../api/logs", () => logsApi);
 
+// LogsView statically imports LogTerminalView, which imports xterm.js and
+// useLogStream; stub those so switching to the terminal view is safe under
+// happy-dom (no real terminal layout, no WebSocket).
+class TerminalStub {
+  options: Record<string, unknown> = {};
+  writeln() {}
+  clear() {}
+  dispose() {}
+  scrollToBottom() {}
+  open() {}
+  loadAddon() {}
+}
+mock.module("@xterm/xterm", () => ({ Terminal: TerminalStub }));
+mock.module("@xterm/addon-fit", () => ({
+  FitAddon: class {
+    fit() {}
+  },
+}));
+mock.module("../api/logStream", () => ({
+  useLogStream: mock(() => "open" as const),
+}));
+
 const { LogsView } = await import("./LogsView");
 
 function renderLogs() {
@@ -294,5 +316,27 @@ describe("LogsView", () => {
       setTimerProvider(defaultTimerProvider);
       result?.unmount();
     }
+  });
+
+  test("switches between table and live terminal views", async () => {
+    renderLogs();
+    await waitFor(() => expect(screen.getByText("hello world")).not.toBeNull());
+    // table view is the default: no terminal, table controls visible
+    expect(screen.queryByTestId("log-terminal")).toBeNull();
+    expect(screen.getByText(/Show raw packets/)).not.toBeNull();
+
+    // switching to the terminal view mounts LogTerminalView (xterm mocked)
+    await userEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    await waitFor(() => expect(screen.getByTestId("log-terminal")).not.toBeNull());
+    // stream status comes from the mocked useLogStream ("open")
+    expect(screen.getByText("Connected")).not.toBeNull();
+    // table-only controls are unmounted with the table view
+    expect(screen.queryByText(/Show raw packets/)).toBeNull();
+
+    // switching back unmounts the terminal view and restores the table
+    await userEvent.click(screen.getByRole("button", { name: "Table" }));
+    await waitFor(() => expect(screen.queryByTestId("log-terminal")).toBeNull());
+    expect(screen.getByText(/Show raw packets/)).not.toBeNull();
+    expect(screen.getByText("hello world")).not.toBeNull();
   });
 });

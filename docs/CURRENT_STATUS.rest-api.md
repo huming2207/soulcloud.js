@@ -64,6 +64,38 @@ many, cap 1000), `404 target_devices_not_found`, `422 invalid_device_uid`,
 | `POST /v1/devices/:id/credentials` | issue device credentials (password returned once, argon2id hash stored, clears revocation) |
 | `POST /v1/devices/:id/credentials/revoke` | refuse new connections AND kill the live session (NOTIFY) |
 
+### Realtime log stream (`packages/api/src/api/log-stream.ts`)
+
+| Endpoint | Auth | Frames |
+| --- | --- | --- |
+| `GET /v1/ws/logs?device_id=<uuid>` | `Sec-WebSocket-Protocol: ["soulcloud", "<access token>"]` | `{type:"ready"}` on open · `{type:"log", device_id, event}` per event · `{type:"pong"}` heartbeat reply |
+
+WebSocket upgrade that streams decoded log events for one device. Because
+browsers cannot set headers on a WebSocket, the access token rides the
+subprotocol list; the upgrade is rejected with `401` unless the token is
+valid, `400` on a non-UUID `device_id`, and `404` when the device does
+not exist or the caller is not a project member (`authenticateRequest`
+is reused by projecting the subprotocol token onto an Authorization
+header).
+
+Data path: `ingestLogPacket` `pg_notify`s the `soulcloud_log_events`
+channel (payload = `raw_log_events` row id, lossy by design — consumers
+fall back to REST paging); the API process runs a process-wide lazy
+LISTEN hub (reconnects on failure) that decodes server-side via
+`decodeEventsBatch` and fans each event out to every subscriber of the
+device.
+
+`event` has the same shape as `GET /v1/devices/:id/logs` items (`id`,
+`received_at`, `device_time_ms`, `sequence`, `packet_type`, `level`,
+`tag`, `message`, `decode_state`; no `raw_packet_b64`). Clients may send
+`"ping"` or `{"type":"ping"}` as a heartbeat.
+
+```json
+{"type":"ready","device_id":"<uuid>"}
+{"type":"log","device_id":"<uuid>","event":{"id":"42","received_at":"2026-08-07T11:00:00Z","device_time_ms":"1700000000123","sequence":7,"packet_type":1,"level":2,"tag":"app","message":"booted","decode_state":"decoded"}}
+{"type":"pong"}
+```
+
 ### Firmware releases & OTA jobs (`packages/api/src/api/firmware.ts`)
 
 | Endpoint | Behavior |

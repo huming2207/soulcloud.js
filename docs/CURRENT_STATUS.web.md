@@ -48,7 +48,7 @@ same path prefixes are expected behind the production reverse proxy.
 | `/` | Dashboard | project summary + device count |
 | `/devices` | Device list | Data Grid, server pagination, empty-state guidance |
 | `/devices/:deviceId` | Device detail | tabs: overview / commands / logs |
-| `/logs` | Logs | device picker + decoded log stream |
+| `/logs` | Logs | device picker + decoded log stream (REST table with 5 s auto-refresh, or the xterm.js live terminal view over the WS stream: history replay + level-colored lines, follow/clear, dark-mode aware) |
 | `/firmware` | Firmware | releases + ELF artifact tabs, upload dialogs |
 | `/rollouts` | OTA list | progress bars, 10 s polling |
 | `/rollouts/:rolloutId` | Rollout detail | per-state actions, phase stepper, 5 s polling |
@@ -64,6 +64,21 @@ Key interactions:
   previously undecodable log events).
 - **Commands**: JSON args validation, delivery timeout, history with
   per-state chips and batch detail dialog, 10 s polling.
+- **Command history**: the command form's name field supports zsh-style
+  ↑/↓ navigation via `useCommandHistory` (newest → oldest, in-progress
+  draft preserved and restored at the bottom); committed commands are
+  deduped (no consecutive repeats), capped at 50 per device and
+  persisted per device in localStorage (`soulcloud.cmdhistory.<deviceId>`)
+  — history survives reloads and never leaks across devices.
+- **Realtime logs**: `useLogStream(deviceId, {onEvent})` opens
+  `GET /v1/ws/logs?device_id=<uuid>` with subprotocol auth
+  `["soulcloud", "<access token>"]` (browsers cannot set headers) and
+  receives `{type:"ready"}` then `{type:"log", device_id, event}`
+  frames (event shape identical to the REST endpoint), reconnecting with
+  exponential backoff (1 s → 30 s cap). The Logs page switches between
+  the REST table (5 s auto-refresh, paging, raw view) and the live
+  terminal (xterm.js: REST history replay oldest-first, then live
+  streamed lines with level colors, follow/clear, dark-mode aware).
 - **Rollout creation**: auto strategy (editable cumulative ratios with
   client-side ascending/last=1 validation) or grouped strategy
   (device-set groups), rollback baseline picker, gating parameters.
