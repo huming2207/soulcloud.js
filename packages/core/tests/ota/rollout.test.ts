@@ -130,7 +130,8 @@ describe("createOtaRollout", () => {
     });
     expect(created.phases).toHaveLength(2);
     expect(created.phases[0]).toMatchObject({ index: 1, target_count: 4, state: "active" });
-    expect(created.phases[1]).toMatchObject({ index: 2, target_count: 8, state: "pending" });
+    // ratios are cumulative coverage: phase 2 gets [4, 8) -> 4 devices
+    expect(created.phases[1]).toMatchObject({ index: 2, target_count: 4, state: "pending" });
     expect(created.jobId).not.toBeNull();
     const targets = await jobTargets(created.jobId);
     expect(targets).toHaveLength(4);
@@ -138,6 +139,66 @@ describe("createOtaRollout", () => {
     const pool = await prisma.otaRolloutPool.count({ where: { rolloutId: created.rolloutId } });
     expect(pool).toBe(8);
     await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
+  test("auto: non-symmetric ratios slice the pool cumulatively (no empty phases)", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId,
+      releaseId,
+      strategy: "auto",
+      deviceIds,
+      ratios: [0.5, 0.75, 1.0],
+      createdBy: randomUUID(),
+    });
+    // N=8: cumulative ceil is 4/6/8 -> slice sizes 4/2/2
+    expect(created.phases.map((p) => p.target_count)).toEqual([4, 2, 2]);
+    expect(created.phases.map((p) => p.index)).toEqual([1, 2, 3]);
+    // only the active phase carries a job; its targets match the first slice
+    expect(created.jobId).not.toBeNull();
+    const targets = await jobTargets(created.jobId!);
+    expect(targets).toHaveLength(4);
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
+  test("auto: tight ratios on a tiny pool merge empty slices", async () => {
+    // N=2 with the default ratios: ceil cumulative is 1/1/2 -> the 0.25
+    // phase adds no devices and must be merged away, not left empty
+    const created = await createOtaRollout(prisma, {
+      projectId,
+      releaseId,
+      strategy: "auto",
+      deviceIds: deviceIds.slice(0, 2),
+      ratios: [0.05, 0.25, 1.0],
+      createdBy: randomUUID(),
+    });
+    expect(created.phases.map((p) => p.target_count)).toEqual([1, 1]);
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
+  test("auto: >256 devices does not hang (crypto.randomInt path)", async () => {
+    const many = await freshDevices(300);
+    let created: Awaited<ReturnType<typeof createOtaRollout>> | null = null;
+    try {
+      created = await createOtaRollout(prisma, {
+        projectId,
+        releaseId,
+        strategy: "auto",
+        deviceIds: many,
+        ratios: [0.1, 0.5, 1.0],
+        createdBy: randomUUID(),
+      });
+      // 300 -> cumulative 30/150/300 -> slices 30/120/150
+      expect(created.phases.map((p) => p.target_count)).toEqual([30, 120, 150]);
+      const targets = await jobTargets(created.jobId!);
+      expect(targets).toHaveLength(30);
+    } finally {
+      if (created) {
+        await prisma.otaTarget.deleteMany({ where: { jobId: created.jobId! } });
+        await prisma.otaJob.deleteMany({ where: { id: created.jobId! } });
+        await prisma.otaRollout.deleteMany({ where: { id: created.rolloutId } });
+      }
+      await prisma.device.deleteMany({ where: { id: { in: many } } });
+    }
   });
 
   test("grouped: client groups become phases in order", async () => {
@@ -377,6 +438,59 @@ describe("lifecycle", () => {
     expect(await abortRollout(prisma, created.rolloutId)).toBe(true);
     // aborted rollouts cannot be resumed
     expect(await resumeRollout(prisma, created.rolloutId)).toBe(false);
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
+  test("resume on a running rollout with an active phase does not bypass the gate", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId,
+      releaseId,
+      strategy: "auto",
+      deviceIds: deviceIds.slice(0, 4),
+      ratios: [0.25, 0.75, 1.0],
+      createdBy: randomUUID(),
+    });
+    // phase 1 is active with a live job; a resume must NOT activate phase 2
+    expect(await resumeRollout(prisma, created.rolloutId)).toBe(false);
+    const phase2 = await prisma.otaRolloutPhase.findUnique({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 2 } },
+    });
+    const phase3 = await prisma.otaRolloutPhase.findUnique({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 3 } },
+    });
+    expect(phase2?.state).toBe("pending");
+    expect(phase2?.jobId).toBeNull();
+    expect(phase3?.state).toBe("pending");
+    // phase 1 keeps its job (single active phase for the rollout)
+    const phase1 = await prisma.otaRolloutPhase.findUnique({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 1 } },
+    });
+    expect(phase1?.jobId).not.toBeNull();
+    expect(phase3?.jobId).toBeNull();
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
+  test("resume after a pause does not leak an extra phase", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId,
+      releaseId,
+      strategy: "auto",
+      deviceIds: deviceIds.slice(0, 4),
+      ratios: [0.25, 0.75, 1.0],
+      createdBy: randomUUID(),
+    });
+    await pauseRollout(prisma, created.rolloutId);
+    // paused: phase 1 (paused) comes back active; phase 2 must stay pending
+    expect(await resumeRollout(prisma, created.rolloutId)).toBe(true);
+    const phase1 = await prisma.otaRolloutPhase.findUnique({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 1 } },
+    });
+    const phase2 = await prisma.otaRolloutPhase.findUnique({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 2 } },
+    });
+    expect(phase1?.state).toBe("active");
+    expect(phase2?.state).toBe("pending");
+    expect(phase2?.jobId).toBeNull();
     await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
   });
 

@@ -129,7 +129,7 @@ describe("POST /v1/firmware-releases/:id/rollouts", () => {
     };
     expect(body.phases).toEqual([
       { index: 1, target_count: 2, state: "active" },
-      { index: 2, target_count: 4, state: "pending" },
+      { index: 2, target_count: 2, state: "pending" },
     ]);
     expect(body.job_id).not.toBeNull();
   });

@@ -22,7 +22,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
 import type { PrismaClient } from "../db";
 import { MAX_OTA_TARGETS, OtaError } from "./deploy";
 import { OTA_NOTIFY_CHANNEL } from "../queue/notify";
@@ -88,17 +88,6 @@ function shuffle<T>(input: T[]): T[] {
   return arr;
 }
 
-function randomInt(max: number): number {
-  // crypto-uniform in [0, max)
-  const limit = 256 - (256 % max);
-  const buf = randomBytes(1);
-  let v = buf[0]!;
-  while (v >= limit) {
-    const again = randomBytes(1);
-    v = again[0]!;
-  }
-  return v % max;
-}
 
 function sha256DeviceOrder(deviceIds: string[]): number[] {
   return deviceIds.map((id) => {
@@ -155,10 +144,32 @@ export async function createOtaRollout(
       throw new OtaError("too_many_targets", "too many target devices");
     }
     poolDeviceIds = options.deviceIds;
-    phases = ratios.map((r, i) => {
-      const targetCount = Math.max(1, Math.ceil(r * poolDeviceIds.length));
-      return { index: i + 1, ratio: r, groupId: null, targetCount };
-    });
+    // ratios are CUMULATIVE coverage: phase k gets the slice
+    // [ceil(r_{k-1}*N), ceil(r_k*N)). Empty slices (ratios that add no
+    // devices, e.g. tight ratios on a tiny pool) are merged into the
+    // next phase instead of creating a phase with a 0-device job that
+    // could never meet its gate.
+    const n = poolDeviceIds.length;
+    const computed: Array<{
+      index: number;
+      ratio: number | null;
+      groupId: number | null;
+      targetCount: number;
+    }> = [];
+    let prior = 0;
+    for (const r of ratios) {
+      const cumulative = Math.ceil(r * n);
+      const size = cumulative - prior;
+      if (size <= 0) continue;
+      computed.push({
+        index: computed.length + 1,
+        ratio: r,
+        groupId: null,
+        targetCount: size,
+      });
+      prior = cumulative;
+    }
+    phases = computed;
   } else {
     if (!options.groups || options.groups.length === 0) {
       throw new OtaError("no_phases", "grouped rollouts need at least one group");
@@ -582,9 +593,17 @@ export async function resumeRollout(prisma: PrismaClient, rolloutId: string): Pr
       where: { rolloutId, state: "paused" },
       data: { state: "active", activatedAt: new Date() },
     });
+    return true;
   }
-  // manual-approval wait (or a fresh resume): activate the next pending
-  // phase immediately (the advance loop would do it on its next pass)
+  // manual-approval wait (rollout running, nothing active): activate the
+  // next pending phase. Guarded: a running rollout with an active phase
+  // must not get its next phase force-activated via resume — that would
+  // bypass the success gate (and double-activate two phases).
+  const active = await prisma.otaRolloutPhase.findFirst({
+    where: { rolloutId, state: "active" },
+    select: { id: true },
+  });
+  if (active) return false;
   const next = await prisma.otaRolloutPhase.findFirst({
     where: { rolloutId, state: "pending" },
     orderBy: { index: "asc" },
