@@ -88,4 +88,33 @@ describe("DevicesPage", () => {
     expect(screen.getByText("uid-1")).not.toBeNull();
     expect(screen.getByText(/已吊销|Revoked|Отозвано|Відкликано|Revocate/i)).not.toBeNull();
   });
+
+  test("a failed load shows the error with a retry action, not an empty table", async () => {
+    devicesApi.fetchDevices.mockRejectedValueOnce(new Error("network down"));
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/network down/)).not.toBeNull());
+    // the empty-state hint must NOT appear (the user must not mistake a
+    // failure for an empty project)
+    expect(screen.queryByText(/还没有设备|No devices in this project/i)).toBeNull();
+    // retry re-runs the query and recovers
+    devicesApi.fetchDevices.mockResolvedValue({
+      total: 1,
+      devices: [
+        {
+          device_id: "d1",
+          device_uid: "uid-1",
+          assigned_id: "sensor-a",
+          auth_revoked: false,
+          firmware: null,
+        },
+      ],
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /重试|Retry|Повторить|Повторити|Riprova/i })).not.toBeNull(),
+    );
+    const retry = screen.getByRole("button", { name: /重试|Retry|Повторить|Повторити|Riprova/i });
+    retry.click();
+    await waitFor(() => expect(screen.getByText("sensor-a")).not.toBeNull());
+    expect(devicesApi.fetchDevices.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
 });

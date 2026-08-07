@@ -14,6 +14,7 @@ import type { GridColDef, GridPaginationModel } from "@mui/x-data-grid";
 import { fetchDevices } from "../api/devices";
 import { useProject } from "../layout/ProjectContext";
 import { NewDeviceDialog } from "../components/NewDeviceDialog";
+import { QueryError } from "../components/QueryState";
 import { useI18n } from "../i18n/I18nContext";
 
 const PAGE_SIZES = [25, 50, 100];
@@ -135,27 +136,33 @@ export function DevicesPage() {
         </Button>
       </Stack>
 
-      {devices.data?.total === 0 && (
+      {devices.isError && (
+        <QueryError error={devices.error} onRetry={() => devices.refetch()} />
+      )}
+
+      {!devices.isError && devices.data?.total === 0 && (
         <Alert severity="info">
           {t("devices.empty")}
         </Alert>
       )}
 
-      <Box sx={{ height: 520 }}>
-        <DataGrid
-          rows={rows}
-          columns={columns}
-          rowCount={devices.data?.total ?? 0}
-          paginationMode="server"
-          paginationModel={pagination}
-          onPaginationModelChange={(model) => setPagination(model)}
-          pageSizeOptions={PAGE_SIZES}
-          loading={devices.isLoading || devices.isFetching}
-          localeText={gridLocaleText}
-          density="compact"
-          disableRowSelectionOnClick
-        />
-      </Box>
+      {!devices.isError && (
+        <Box sx={{ height: 520 }}>
+          <DataGrid
+            rows={rows}
+            columns={columns}
+            rowCount={devices.data?.total ?? 0}
+            paginationMode="server"
+            paginationModel={pagination}
+            onPaginationModelChange={(model) => setPagination(model)}
+            pageSizeOptions={PAGE_SIZES}
+            loading={devices.isLoading || devices.isFetching}
+            localeText={gridLocaleText}
+            density="compact"
+            disableRowSelectionOnClick
+          />
+        </Box>
+      )}
 
       <NewDeviceDialog
         open={newDeviceOpen}
