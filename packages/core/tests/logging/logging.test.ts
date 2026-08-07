@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
+  ArtifactImportError,
   computeBuildId,
   extractArtifactStrings,
   importArtifact,
@@ -10,7 +11,7 @@ import {
   parseOn9logPacket,
   prisma,
 } from "@soulcloud/core";
-import { buildNoloadElf } from "../helpers/elf-builder";
+import { buildNoloadElf, buildTestElf } from "../helpers/elf-builder";
 
 // Integration fixtures are fully synthetic (no /tmp dependency):
 // a minimal ELF with .noload strings plus hand-built on9log packets whose
@@ -146,6 +147,35 @@ describe("artifact import (real demo ELF)", () => {
         elf: new TextEncoder().encode("definitely not an elf"),
       }),
     ).rejects.toMatchObject({ kind: "invalid_elf" });
+  });
+
+  test("rejects a well-formed ELF that contains no on9log strings", () => {
+    // a structurally valid ELF with only a .text section (no
+    // .noload/rodata strings) must fail extraction as invalid_elf
+    const bare = buildTestElf({
+      bits: 32,
+      littleEndian: true,
+      machine: 0,
+      sections: [
+        {
+          name: ".text",
+          type: 1,
+          flags: 2, // SHF_ALLOC
+          addr: 0x40000000,
+          content: new Uint8Array([0x00, 0x01, 0x02, 0x03]),
+        },
+      ],
+    });
+    for (const elf of [bare, buildNoloadElf([], [], 32, true)]) {
+      let caught: unknown;
+      try {
+        extractArtifactStrings(elf);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ArtifactImportError);
+      expect((caught as ArtifactImportError).kind).toBe("invalid_elf");
+    }
   });
 });
 

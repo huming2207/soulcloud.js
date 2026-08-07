@@ -95,4 +95,35 @@ describe("OtaJobPage", () => {
       ).not.toBeNull(),
     );
   });
+
+  test("a failed load shows the error with a retry action, not the empty targets state", async () => {
+    firmwareApi.fetchOtaJob.mockRejectedValueOnce(new Error("job down"));
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/job down/)).not.toBeNull());
+    // the empty targets hint must NOT appear (a failure must not look like an empty job)
+    expect(screen.queryByText(/无目标设备|No target devices|Целевых устройств нет/i)).toBeNull();
+    // retry re-runs the query and recovers
+    firmwareApi.fetchOtaJob.mockResolvedValue({
+      job_id: "j1",
+      release_id: "rel-1",
+      created_at: "2026-08-06T00:00:00Z",
+      targets: [
+        {
+          device_id: "d1",
+          device_uid: "uid-1",
+          state: "pending",
+          delivered_at: null,
+          confirmed_at: null,
+          result_code: null,
+          result_message: null,
+          current_fw: null,
+        },
+      ],
+      summary: { pending: 1 },
+    });
+    const retry = await screen.findByRole("button", { name: /重试|Retry|Повторить|Повторити|Riprova/i });
+    retry.click();
+    await waitFor(() => expect(screen.getByText("uid-1")).not.toBeNull());
+    expect(firmwareApi.fetchOtaJob.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
 });

@@ -497,3 +497,84 @@ describe("recordDeviceResult edge cases", () => {
     // command is already terminal; beforeEach cleans up the rows
   });
 });
+
+describe("P2 boundaries: lease_time_overflow / invalid_sequence", () => {
+  /**
+   * Directly seeds a `queued` command row via SQL (bypassing enqueueBatch)
+   * so the boundary tests control the exact row state.
+   */
+  async function seedQueuedCommand(deviceId: string): Promise<string> {
+    const batchId = randomUUID();
+    const cmdId = randomUUID();
+    await prisma.$executeRaw`
+      INSERT INTO command_batches (id, device_count, created_at)
+      VALUES (${batchId}::uuid, 1, now())
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO device_commands
+        (id, batch_id, device_id, sequence, payload, state, attempt_count,
+         available_at, created_at)
+      VALUES (${cmdId}::uuid, ${batchId}::uuid, ${deviceId}::uuid, 1,
+              ${Buffer.from([0x80])}::bytea, 'queued', 0, now(), now())
+    `;
+    return cmdId;
+  }
+
+  test("lease durations outside the supported range -> lease_time_overflow (rejection, not a 500)", async () => {
+    // any duration that could overflow the PG timestamp is NOT a safe
+    // integer (or is non-positive); the guard must reject it before the
+    // SQL runs, so leaseNext never surfaces a raw database error
+    const outOfRange = [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1];
+    for (const duration of outOfRange) {
+      await expect(leaseNext(prisma, duration)).rejects.toMatchObject({
+        kind: "lease_time_overflow",
+      });
+    }
+  });
+
+  test("the largest safe lease duration is accepted without timestamp overflow", async () => {
+    const cmdId = await seedQueuedCommand(deviceIds[0]!);
+    const leased = await leaseNext(prisma, Number.MAX_SAFE_INTEGER);
+    expect(leased).not.toBeNull();
+    expect(leased!.id).toBe(cmdId);
+    const row = await prisma.deviceCommand.findUniqueOrThrow({
+      where: { id: leased!.id },
+    });
+    expect(row.state).toBe("leased");
+    expect(row.leaseExpiresAt).not.toBeNull();
+    await releaseLease(prisma, leased!.id);
+  });
+
+  test("a device with sequence counter 0 -> invalid_sequence on enqueue", async () => {
+    // The boundary state (next_command_sequence = 0) is refused by the
+    // CHECK constraint devices_next_command_sequence_positive, so it is
+    // seeded by dropping the constraint for the duration of the test and
+    // restoring it immediately afterwards.
+    await prisma.$executeRawUnsafe(
+      "ALTER TABLE devices DROP CONSTRAINT devices_next_command_sequence_positive",
+    );
+    try {
+      await prisma.device.update({
+        where: { id: deviceIds[0]! },
+        data: { nextCommandSeq: 0n },
+      });
+      await expect(
+        enqueueBatch(prisma, [deviceIds[0]!], { cmd: "reboot" }),
+      ).rejects.toMatchObject({ kind: "invalid_sequence" });
+      // the failed enqueue must not have advanced the counter (checked
+      // BEFORE the finally reset, otherwise the assertion is vacuous)
+      const mid = await prisma.device.findUniqueOrThrow({
+        where: { id: deviceIds[0]! },
+      });
+      expect(mid.nextCommandSeq).toBe(0n);
+    } finally {
+      await prisma.device.updateMany({
+        where: { id: deviceIds[0]! },
+        data: { nextCommandSeq: 1n },
+      });
+      await prisma.$executeRawUnsafe(
+        "ALTER TABLE devices ADD CONSTRAINT devices_next_command_sequence_positive CHECK (next_command_sequence > 0)",
+      );
+    }
+  });
+});

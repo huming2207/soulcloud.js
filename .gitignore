@@ -36,3 +36,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 /packages/core/generated/prisma
 
 /generated/prisma
+
+# pi subagent runtime artifacts (config lives in .pi/settings.json)
+.pi-subagents/

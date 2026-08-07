@@ -128,6 +128,13 @@ function waitForConnect(client: MqttTestClient): Promise<void> {
   });
 }
 
+/** Polls until the client's socket has closed (replaces one-shot close-event
+ * waits with fixed deadlines, which raced slow pg_notify delivery under
+ * full-suite parallel load). */
+function waitForDisconnect(client: MqttTestClient, what = "client disconnect", timeoutMs = 5000): Promise<void> {
+  return waitFor(async () => !client.connected, what, timeoutMs);
+}
+
 /** Attempts a connection and returns the outcome string (connect/error/timeout). */
 async function tryConnect(overrides: Partial<MqttTestClientOptions> = {}): Promise<string> {
   const client = connectDevice(overrides);
@@ -654,16 +661,14 @@ describe("G group: credential revocation kills live sessions", () => {
       prisma.$executeRaw`SELECT pg_notify(${CREDENTIAL_REVOKED_CHANNEL}, ${uid})`,
     ]);
 
-    // the live session must be killed
-    const disconnected = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), 4000);
-      client.once("close", () => {
-        clearTimeout(timer);
-        resolve(true);
-      });
-    });
-    expect(disconnected).toBe(true);
-    expect(revoked).toContain(uid);
+    // the live session must be killed. Poll instead of racing a one-shot
+    // close-event wait against a fixed deadline: pg_notify delivery can lag
+    // under full-suite parallel load and blow the old 4s window.
+    await waitForDisconnect(client, "revoked device to be disconnected");
+    // the production notifier (kicks the session) and the test-local notifier
+    // (records the revocation) listen on separate connections, so delivery
+    // order is not guaranteed; poll for the observed revocation as well.
+    await waitFor(async () => revoked.includes(uid), `revocation notification for ${uid}`);
 
     await notifier.close();
     await prisma.device.deleteMany({ where: { deviceUid: uid } });
@@ -762,15 +767,10 @@ describe("G group: kickDeviceSession", () => {
       prisma.$executeRaw`SELECT pg_notify(${CREDENTIAL_REVOKED_CHANNEL}, ${uid})`,
     ]);
 
-    const disconnected = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), 4000);
-      client.once("close", () => {
-        clearTimeout(timer);
-        resolve(true);
-      });
-    });
-    expect(disconnected).toBe(true);
-    expect(kicked).toContain(uid);
+    // same flaky pattern as the revocation test: poll instead of racing a
+    // fixed close-event deadline against pg_notify delivery
+    await waitForDisconnect(client, "kicked device to be disconnected");
+    await waitFor(async () => kicked.includes(uid), `kick notification for ${uid}`);
 
     await notifier.close();
     await prisma.device.deleteMany({ where: { deviceUid: uid } });

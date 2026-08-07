@@ -51,6 +51,17 @@ function emitUplink(
   }, { id: uid } as never);
 }
 
+/** Polls a predicate until it is true (replaces fixed sleeps; avoids flaky
+ * timing-dependent assertions on asynchronous DB writes). */
+async function waitFor(predicate: () => Promise<boolean>, what: string, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timeout waiting for ${what}`);
+}
+
 beforeAll(async () => {
   projectId = randomUUID();
   await prisma.project.create({ data: { id: projectId, name: "dispatch-test" } });
@@ -147,10 +158,15 @@ describe("handleStat", () => {
       rateBurst: 100,
     });
     emitUplink(aedes, deviceUid, `soulcloud/v1/devices/${deviceUid}/stat`, validStat());
-    await new Promise((r) => setTimeout(r, 100));
+    // poll instead of a fixed sleep: the upsert runs several async DB
+    // round-trips that can lag past a sleep window under full-suite
+    // parallel load (observed flake at 273ms with a 100ms sleep)
+    await waitFor(async () => {
+      const s = await prisma.deviceFirmwareState.findUnique({ where: { deviceId } });
+      return s !== null && log.entries.some((e) => e.msg === "recorded device firmware state");
+    }, "firmware state upsert and log entry");
     const state = await prisma.deviceFirmwareState.findUnique({ where: { deviceId } });
     expect(state?.fwHash).toBe("00".repeat(32));
-    expect(log.entries.some((e) => e.msg === "recorded device firmware state")).toBe(true);
   });
 
   test("invalid stat payload is rejected", async () => {
@@ -167,8 +183,12 @@ describe("handleStat", () => {
     attachDispatch(aedes, prisma, log);
     const ghostUid = `ghost-${randomUUID().slice(0, 8)}`;
     emitUplink(aedes, ghostUid, `soulcloud/v1/devices/${ghostUid}/stat`, validStat());
-    await new Promise((r) => setTimeout(r, 50));
-    expect(log.entries.some((e) => e.msg === "ignored stat from unknown device")).toBe(true);
+    // poll instead of a fixed sleep: the ignore decision follows an async
+    // device lookup that can lag under full-suite parallel load
+    await waitFor(
+      async () => log.entries.some((e) => e.msg === "ignored stat from unknown device"),
+      "ignored stat from unknown device",
+    );
   });
 });
 
@@ -189,7 +209,11 @@ describe("other uplink kinds", () => {
     attachDispatch(aedes, prisma, log);
     const ghostUid = `ghost-${randomUUID().slice(0, 8)}`;
     emitUplink(aedes, ghostUid, `soulcloud/v1/devices/${ghostUid}/log`, "x");
-    await new Promise((r) => setTimeout(r, 50));
-    expect(log.entries.some((e) => e.msg === "ignored log from unknown device")).toBe(true);
+    // poll instead of a fixed sleep: the ignore decision follows an async
+    // device lookup that can lag under full-suite parallel load
+    await waitFor(
+      async () => log.entries.some((e) => e.msg === "ignored log from unknown device"),
+      "ignored log from unknown device",
+    );
   });
 });

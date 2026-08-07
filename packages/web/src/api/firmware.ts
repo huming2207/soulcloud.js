@@ -4,7 +4,6 @@ import type {
   ArtifactUploadResponse,
   DeployResponse,
   OtaJobDetail,
-  OtaJobListResponse,
   ReleaseDetail,
   ReleaseListResponse,
   ReleaseUploadResponse,
@@ -97,20 +96,6 @@ export async function deployRelease(
 
 export async function fetchOtaJob(jobId: string): Promise<OtaJobDetail> {
   const res = await http.get<OtaJobDetail>(`/v1/ota-jobs/${jobId}`);
-  return res.data;
-}
-
-export async function fetchOtaJobs(
-  projectId: string,
-  params: { limit?: number; offset?: number } = {},
-): Promise<OtaJobListResponse> {
-  const res = await http.get<OtaJobListResponse>("/v1/ota-jobs", {
-    params: {
-      project_id: projectId,
-      limit: params.limit ?? 50,
-      offset: params.offset ?? 0,
-    },
-  });
   return res.data;
 }
 

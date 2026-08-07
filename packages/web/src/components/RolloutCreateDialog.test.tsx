@@ -28,7 +28,6 @@ const firmwareApi = {
   downloadRelease: mock(async () => new Blob()),
   deployRelease: mock(async () => ({})),
   fetchOtaJob: mock(async () => ({})),
-  fetchOtaJobs: mock(async () => ({ total: 0, jobs: [] })),
   fetchRollouts: mock(async () => ({ total: 0, rollouts: [] })),
   fetchRollout: mock(async () => ({})),
   createRollout: mock(async () => ({

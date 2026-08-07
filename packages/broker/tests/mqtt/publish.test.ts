@@ -48,6 +48,17 @@ beforeEach(async () => {
   await prisma.commandBatch.deleteMany({ where: { commands: { none: {} } } });
 });
 
+/** Polls a predicate until it is true (replaces fixed sleeps; avoids flaky
+ * timing-dependent assertions on asynchronous DB writes). */
+async function waitFor(predicate: () => Promise<boolean>, what: string, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timeout waiting for ${what}`);
+}
+
 describe("startCommandPoller", () => {
   test("wake() polls: an offline device command is deferred back to queued", async () => {
     const poller = startCommandPoller(
@@ -64,8 +75,13 @@ describe("startCommandPoller", () => {
       expect(before.state).toBe("queued");
       poller.wake();
       // the poll leases the command, sees the device offline and defers
-      // it back to queued (offlineRetryMs backoff) — attempt count 1
-      await new Promise((r) => setTimeout(r, 300));
+      // it back to queued (offlineRetryMs backoff) — attempt count 1.
+      // Poll for the deferred state instead of a fixed sleep: the lease +
+      // defer writes can lag past a sleep window under parallel load.
+      await waitFor(async () => {
+        const row = await prisma.deviceCommand.findFirst({ where: { batchId: batch.id } });
+        return row?.state === "queued" && row.attemptCount === 1;
+      }, "command deferred back to queued with attempt count 1");
       const after = await prisma.deviceCommand.findFirstOrThrow({
         where: { batchId: batch.id },
       });

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../../src/api/app";
-import { prisma } from "@soulcloud/core";
+import { MAX_ELF_BYTES, prisma } from "@soulcloud/core";
 import { buildNoloadElf } from "../../../core/tests/helpers/elf-builder";
 
 // G group: these endpoints require a logged-in user.
@@ -178,6 +178,96 @@ describe("POST /v1/firmware-artifacts", () => {
     );
     expect(res.status).toBe(413);
     expect(await res.json()).toMatchObject({ error: "payload_too_large" });
+  });
+});
+
+// S5 regression: oversized uploads must be rejected BEFORE the body is fully
+// buffered. Note that Bun never sets a content-length header on constructed
+// Requests, so `app.handle` bodies always reach the handler with
+// content-length === null and are read through the chunked stream-cap path.
+// These tests pin down that path (early stream abort -> 413) which the plain
+// 33MB test above does not distinguish (it would still 413 via a full-buffer
+// import-time too_large check).
+describe("S5: oversized upload rejection (declared + chunked)", () => {
+  test("chunked upload over the cap -> 413, aborted mid-stream", async () => {
+    const CHUNK = 1024 * 1024; // 1MiB
+    const TOTAL_CHUNKS = 40; // 40MiB total, well over the 32MiB + 64KiB cap
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        if (pulls <= TOTAL_CHUNKS) controller.enqueue(new Uint8Array(CHUNK));
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const res = await app.handle(
+      new Request("http://localhost/v1/firmware-artifacts", {
+        method: "POST",
+        headers: authHeaders(), // no content-length: chunked path
+        body,
+      }),
+    );
+    expect(res.status).toBe(413);
+    expect(await res.json()).toMatchObject({ error: "payload_too_large" });
+    // early rejection: the body stream was cancelled before being drained
+    expect(cancelled).toBe(true);
+    expect(pulls).toBeLessThan(TOTAL_CHUNKS);
+  });
+
+  test("chunked upload under the cap is not rejected as 413", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024 * 1024)); // 1MiB < cap
+        controller.close();
+      },
+    });
+    const res = await app.handle(
+      new Request("http://localhost/v1/firmware-artifacts", {
+        method: "POST",
+        headers: authHeaders(),
+        body,
+      }),
+    );
+    // size gate must not fire; the raw bytes then fail multipart parsing
+    expect(res.status).not.toBe(413);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_request" });
+  });
+
+  test("declared content-length over the cap -> 413 from the header check alone", async () => {
+    // a tiny actual body with an oversized declared length: only the cheap
+    // header check can produce the 413 (the real bytes are far under the cap)
+    const res = await app.handle(
+      new Request("http://localhost/v1/firmware-artifacts", {
+        method: "POST",
+        headers: {
+          ...authHeaders(),
+          "content-length": String(MAX_ELF_BYTES + 2 * 1024 * 1024),
+        },
+        body: new Uint8Array(16),
+      }),
+    );
+    expect(res.status).toBe(413);
+    expect(await res.json()).toMatchObject({ error: "payload_too_large" });
+  });
+
+  test("declared content-length under the cap is not rejected as 413", async () => {
+    const res = await app.handle(
+      new Request("http://localhost/v1/firmware-artifacts", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-length": "1024" },
+        body: new Uint8Array(16),
+      }),
+    );
+    // declared 1024 < cap -> size gate must not fire; raw bytes then fail
+    // multipart parsing -> 400 invalid_request
+    expect(res.status).not.toBe(413);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_request" });
   });
 });
 

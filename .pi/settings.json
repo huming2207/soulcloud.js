@@ -1,0 +1,15 @@
+{
+  "subagents": {
+    "defaultThinking": "max",
+    "agentOverrides": {
+      "worker": { "thinking": "max" },
+      "reviewer": { "thinking": "max" },
+      "planner": { "thinking": "max" },
+      "oracle": { "thinking": "max" },
+      "scout": { "thinking": "max" },
+      "researcher": { "thinking": "max" },
+      "context-builder": { "thinking": "max" },
+      "delegate": { "thinking": "max" }
+    }
+  }
+}

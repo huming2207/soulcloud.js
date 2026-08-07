@@ -285,11 +285,6 @@ export interface OtaJobSummary {
   summary: Partial<Record<OtaTargetState, number>>;
 }
 
-export interface OtaJobListResponse {
-  total: number;
-  jobs: OtaJobSummary[];
-}
-
 export interface DeployResponse {
   job_id: string;
   targets: Array<{ device_id: string; device_uid: string; state: string }>;

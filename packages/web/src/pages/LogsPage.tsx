@@ -43,7 +43,7 @@ export function LogsPage() {
         onChange={(e) => setDeviceId(e.target.value)}
         disabled={devices.isLoading || list.length === 0}
         sx={{ maxWidth: 420 }}
-        helperText={list.length === 0 ? t("logs.noDevices") : undefined}
+        helperText={!devices.error && list.length === 0 ? t("logs.noDevices") : undefined}
       >
         {list.map((d) => (
           <MenuItem key={d.device_id} value={d.device_id}>
@@ -54,7 +54,7 @@ export function LogsPage() {
 
       {selected ? (
         <LogsView deviceId={selected.device_id} />
-      ) : (
+      ) : devices.error ? null : (
         <Alert severity="info">{t("logs.selectDevice")}</Alert>
       )}
     </Stack>

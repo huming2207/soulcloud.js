@@ -20,7 +20,6 @@ const firmwareApi = {
   triggerReleaseDownload: mock(async () => {}),
   deployRelease: mock(async () => ({})),
   fetchOtaJob: mock(async () => ({})),
-  fetchOtaJobs: mock(async () => ({ total: 0, jobs: [] })),
   fetchRollouts: mock(async () => ({ total: 0, rollouts: [] })),
   fetchRollout: mock(async () => ({})),
   createRollout: mock(async () => ({})),
@@ -120,6 +119,58 @@ describe("FirmwarePage", () => {
     await waitFor(() =>
       expect(screen.getByText(/暂无发布|No releases|Релизов нет|Релизів немає/i)).not.toBeNull(),
     );
+  });
+
+  test("a failed releases load shows the error with a retry action, not the empty state", async () => {
+    firmwareApi.fetchReleases.mockRejectedValueOnce(new Error("network down"));
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/network down/)).not.toBeNull());
+    // the empty-state hint must NOT appear (a failure must not look like an empty project)
+    expect(screen.queryByText(/暂无发布|No releases|Релизов нет|Релизів немає/i)).toBeNull();
+    // retry re-runs the query and recovers
+    firmwareApi.fetchReleases.mockResolvedValue({
+      items: [
+        {
+          release_id: "r1",
+          bin_hash: "aa".repeat(32),
+          bin_size: 1024,
+          version: "v2.1.0",
+          artifact_id: null,
+          created_at: "2026-08-06T00:00:00Z",
+        },
+      ],
+      next_cursor: null,
+    });
+    const retry = await screen.findByRole("button", { name: /重试|Retry|Повторить|Повторити|Riprova/i });
+    retry.click();
+    await waitFor(() => expect(screen.getByText("v2.1.0")).not.toBeNull());
+    expect(firmwareApi.fetchReleases.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a failed artifacts load shows the error with a retry action, not the empty state", async () => {
+    firmwareApi.fetchArtifacts.mockRejectedValueOnce(new Error("artifacts down"));
+    renderPage();
+    await userEvent.click(screen.getByRole("tab", { name: /ELF 构件|ELF Artifacts|ELF-артефакт/i }));
+    await waitFor(() => expect(screen.getByText(/artifacts down/)).not.toBeNull());
+    expect(screen.queryByText(/暂无构件|No artifacts|Артефактов нет/i)).toBeNull();
+    // retry re-runs the query and recovers
+    firmwareApi.fetchArtifacts.mockResolvedValue({
+      artifacts: [
+        {
+          artifact_id: "a1",
+          build_id: "bb".repeat(32),
+          version: "v3.0.0",
+          elf_size: 2048,
+          import_state: "imported",
+          uploaded_at: "2026-08-06T00:00:00Z",
+          dictionary_entries: 7,
+        },
+      ],
+    });
+    const retry = await screen.findByRole("button", { name: /重试|Retry|Повторить|Повторити|Riprova/i });
+    retry.click();
+    await waitFor(() => expect(screen.getByText("v3.0.0")).not.toBeNull());
+    expect(firmwareApi.fetchArtifacts.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });
 

@@ -12,7 +12,6 @@ const firmwareApi = {
   fetchRollouts: mock(
     async (): Promise<RolloutListResponse> => ({ total: 0, rollouts: [] }),
   ),
-  fetchOtaJobs: mock(async () => ({ total: 0, jobs: [] })),
   fetchOtaJob: mock(async () => ({})),
   fetchReleases: mock(async () => ({ items: [], next_cursor: null })),
   fetchRelease: mock(async () => ({})),
@@ -98,5 +97,34 @@ describe("RolloutsPage", () => {
     await waitFor(() =>
       expect(screen.getByText(/暂无升级|No rollouts|Развёртываний нет|Розгортань немає|Nessuna distribuzione/i)).not.toBeNull(),
     );
+  });
+
+  test("a failed load shows the error with a retry action, not the empty state", async () => {
+    firmwareApi.fetchRollouts.mockRejectedValueOnce(new Error("rollouts down"));
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/rollouts down/)).not.toBeNull());
+    // the empty-state hint must NOT appear (a failure must not look like an empty project)
+    expect(screen.queryByText(/暂无升级|No rollouts|Развёртываний нет|Розгортань немає|Nessuna distribuzione/i)).toBeNull();
+    // retry re-runs the query and recovers
+    firmwareApi.fetchRollouts.mockResolvedValue({
+      total: 1,
+      rollouts: [
+        {
+          rollout_id: "r2",
+          release_id: "rel-2",
+          from_release_id: null,
+          state: "completed",
+          strategy: "auto",
+          manual_approval: false,
+          created_at: "2026-08-06T00:00:00Z",
+          pool_size: 5,
+          progress: { completed: 5, failed: 0 },
+        },
+      ],
+    });
+    const retry = await screen.findByRole("button", { name: /重试|Retry|Повторить|Повторити|Riprova/i });
+    retry.click();
+    await waitFor(() => expect(screen.getByText("5/5")).not.toBeNull());
+    expect(firmwareApi.fetchRollouts.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });

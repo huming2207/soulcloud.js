@@ -114,4 +114,31 @@ describe("LogsPage", () => {
       expect.objectContaining({ limit: 100 }),
     );
   });
+
+  test("a failed device load shows the error with a retry action, not the empty state", async () => {
+    devicesApi.fetchDevices.mockRejectedValueOnce(new Error("devices down"));
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/devices down/)).not.toBeNull());
+    // the empty-state hints must NOT appear (a failure must not look like an empty project)
+    expect(screen.queryByText(/选择一台设备|Select a device/i)).toBeNull();
+    expect(
+      screen.queryByText(/暂无设备|No devices in this project|нет устройств|немає пристроїв/i),
+    ).toBeNull();
+    // retry re-runs the query and recovers
+    devicesApi.fetchDevices.mockResolvedValue({
+      total: 1,
+      devices: [
+        { device_id: "d1", device_uid: "uid-1", assigned_id: "sensor-b", auth_revoked: false, firmware: null },
+      ],
+    });
+    const retry = await screen.findByRole("button", { name: /重试|Retry|Повторить|Повторити|Riprova/i });
+    retry.click();
+    // recovery re-runs the query and re-enables the picker; open it to reveal the device
+    await waitFor(() =>
+      expect(devicesApi.fetchDevices.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+    await userEvent.click(screen.getByRole("combobox", { name: /设备|Device/i }));
+    const option = await screen.findByText(/sensor-b/);
+    expect(option).not.toBeNull();
+  });
 });

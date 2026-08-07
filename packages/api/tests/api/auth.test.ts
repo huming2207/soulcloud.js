@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@soulcloud/core";
 import { createApp } from "../../src/api/app";
@@ -394,6 +394,38 @@ describe("login throttling (M5 round-5)", () => {
     );
     expect(locked.status).toBe(401);
     expect(await locked.json()).toMatchObject({ error: "invalid_credentials" });
+  });
+
+  test("the lock auto-expires after LOGIN_LOCK_SECONDS and login succeeds again", async () => {
+    const username = `throttle-expire-${randomUUID().slice(0, 8)}`;
+    await register(username);
+
+    // five failures -> locked
+    for (let i = 0; i < 5; i++) {
+      const res = await app.handle(
+        jsonRequest("/v1/auth/login", "POST", { username, password: "wrong-password" }),
+      );
+      expect(res.status).toBe(401);
+    }
+    const locked = await app.handle(
+      jsonRequest("/v1/auth/login", "POST", { username, password: "test-password-123" }),
+    );
+    expect(locked.status).toBe(401);
+    expect(await locked.json()).toMatchObject({ error: "invalid_credentials" });
+
+    // the lock is Date.now()-based and module-internal (not injectable);
+    // advance the process clock past the 60s window instead of waiting
+    setSystemTime(new Date(Date.now() + 61_000));
+    try {
+      const unlocked = await app.handle(
+        jsonRequest("/v1/auth/login", "POST", { username, password: "test-password-123" }),
+      );
+      expect(unlocked.status).toBe(200);
+      const body = (await unlocked.json()) as { access_token: string };
+      expect(body.access_token).toBeTruthy();
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("a successful login clears the failure counter", async () => {
