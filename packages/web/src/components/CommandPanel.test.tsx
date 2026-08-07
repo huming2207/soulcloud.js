@@ -42,6 +42,181 @@ function renderPanel() {
 beforeEach(() => {
   devicesApi.postCommandBatch.mockClear();
   devicesApi.postCommandBatch.mockResolvedValue({ batch_id: "b1", device_count: 1 });
+  devicesApi.fetchDeviceCommands.mockClear();
+  devicesApi.fetchDeviceCommands.mockResolvedValue({ commands: [], next_cursor: null });
+  devicesApi.fetchCommandBatch.mockClear();
+  devicesApi.fetchCommandBatch.mockResolvedValue({
+    batch_id: "b1",
+    device_count: 1,
+    created_at: "2026-08-06T00:00:00Z",
+    summary: { device_completed: 1 },
+    commands: [],
+  });
+});
+
+describe("CommandHistory", () => {
+  const rows = [
+    {
+      command_id: "c1",
+      batch_id: "batch-12345678-0000-0000-0000-000000000000",
+      sequence: "1",
+      command: { cmd: "reboot", args: [{ enabled: true }] },
+      state: "device_completed",
+      result_code: 0,
+      result: { code: 0, payload: { ok: true } },
+      created_at: "2026-08-06T00:00:00Z",
+      delivery_expires_at: null,
+      device_completed_at: null,
+    },
+    {
+      command_id: "c2",
+      batch_id: "batch-87654321-0000-0000-0000-000000000000",
+      sequence: "2",
+      command: { cmd: "get_status", args: null },
+      state: "delivery_failed",
+      result_code: -1,
+      result: { code: -1, payload: "boom" },
+      created_at: "2026-08-06T00:01:00Z",
+      delivery_expires_at: null,
+      device_completed_at: null,
+    },
+  ] as const;
+
+  test("renders command name, args, state chip, result and batch link", async () => {
+    devicesApi.fetchDeviceCommands.mockResolvedValue({
+      commands: [...rows],
+      next_cursor: null,
+    });
+    renderPanel();
+    await waitFor(() => expect(screen.getByText("reboot")).not.toBeNull());
+    // args formatted as JSON under the command name
+    expect(screen.getByText(/\[\{"enabled":true\}\]/)).not.toBeNull();
+    // state chip
+    expect(screen.getByText(/Completed|已完成/i)).not.toBeNull();
+    // success result: code=0 in green
+    expect(screen.getByText(/code=0/)).not.toBeNull();
+    // failure row: state chip + red result
+    expect(screen.getByText(/Delivery failed|投递失败/i)).not.toBeNull();
+    expect(screen.getByText(/code=-1/)).not.toBeNull();
+    // batch links show the first 8 chars
+    expect(screen.getByText(/batch-12/)).not.toBeNull();
+    expect(screen.getByText(/batch-87/)).not.toBeNull();
+  });
+
+  test("shows the empty hint when there are no commands", async () => {
+    renderPanel();
+    await waitFor(() =>
+      expect(screen.getByText(/No commands|暂无命令/)).not.toBeNull(),
+    );
+  });
+
+  test("load earlier fetches with the cursor", async () => {
+    devicesApi.fetchDeviceCommands.mockResolvedValue({
+      commands: [...rows],
+      next_cursor: "cursor-abc",
+    });
+    renderPanel();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Load earlier|加载更早/i })).not.toBeNull(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Load earlier|加载更早/i }));
+    await waitFor(() =>
+      expect(devicesApi.fetchDeviceCommands).toHaveBeenCalledWith("d1", {
+        limit: 50,
+        cursor: "cursor-abc",
+      }),
+    );
+  });
+
+  test("back to latest clears the cursor", async () => {
+    // first page has a cursor -> user goes back to page 0
+    devicesApi.fetchDeviceCommands
+      .mockResolvedValueOnce({ commands: [...rows], next_cursor: "cursor-abc" })
+      .mockResolvedValue({ commands: [...rows], next_cursor: null });
+    renderPanel();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Load earlier|加载更早/i })).not.toBeNull(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Load earlier|加载更早/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Back to latest|回到最新/i })).not.toBeNull(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Back to latest|回到最新/i }));
+    await waitFor(() =>
+      expect(devicesApi.fetchDeviceCommands).toHaveBeenLastCalledWith("d1", {
+        limit: 50,
+        cursor: undefined,
+      }),
+    );
+  });
+
+  test("clicking a batch link opens the batch dialog", async () => {
+    devicesApi.fetchDeviceCommands.mockResolvedValue({
+      commands: [...rows],
+      next_cursor: null,
+    });
+    devicesApi.fetchCommandBatch.mockResolvedValue({
+      batch_id: "batch-12345678-0000-0000-0000-000000000000",
+      device_count: 2,
+      created_at: "2026-08-06T00:00:00Z",
+      summary: { device_completed: 1, queued: 1 },
+      commands: [],
+    });
+    renderPanel();
+    await waitFor(() => expect(screen.getByText(/batch-12/)).not.toBeNull());
+    await userEvent.click(screen.getByText(/batch-12/));
+    await waitFor(() =>
+      expect(devicesApi.fetchCommandBatch).toHaveBeenCalledWith(
+        "batch-12345678-0000-0000-0000-000000000000",
+      ),
+    );
+    // dialog opens with its summary chips
+    await waitFor(() =>
+      expect(screen.getByText(/Batch batch-12345678-0000-0000-0000-000000000000|批次/)).not.toBeNull(),
+    );
+    expect(screen.getByText(/Completed 1|已完成 1/)).not.toBeNull();
+    expect(screen.getByText(/Queued 1|排队中 1/)).not.toBeNull();
+    // close button calls onClose (dialog unmounts)
+    await userEvent.click(screen.getByRole("button", { name: /Close|关闭/ }));
+    await waitFor(() =>
+      expect(screen.queryByText(/Batch batch-12345678-0000-0000-0000-000000000000|批次/)).toBeNull(),
+    );
+  });
+
+  test("batch dialog renders per-device command rows", async () => {
+    devicesApi.fetchDeviceCommands.mockResolvedValue({
+      commands: [...rows],
+      next_cursor: null,
+    });
+    devicesApi.fetchCommandBatch.mockResolvedValue({
+      batch_id: "batch-12345678-0000-0000-0000-000000000000",
+      device_count: 1,
+      created_at: "2026-08-06T00:00:00Z",
+      summary: { device_completed: 1 },
+      commands: [
+        {
+          command_id: "c1",
+          batch_id: "batch-12345678-0000-0000-0000-000000000000",
+          sequence: "1",
+          command: { cmd: "reboot", args: null },
+          state: "device_completed",
+          result_code: 0,
+          result: { code: 0, payload: null },
+          created_at: "2026-08-06T00:00:00Z",
+          delivery_expires_at: null,
+          device_completed_at: null,
+          device_id: "d1",
+          device_uid: "uid-1",
+        },
+      ],
+    });
+    renderPanel();
+    await waitFor(() => expect(screen.getByText(/batch-12/)).not.toBeNull());
+    await userEvent.click(screen.getByText(/batch-12/));
+    // the batch dialog lists the device and its command
+    await waitFor(() => expect(screen.getAllByText("uid-1").length).toBeGreaterThan(0));
+    expect(screen.getAllByText("reboot").length).toBeGreaterThan(0);
+  });
 });
 
 describe("CommandPanel form validation", () => {
