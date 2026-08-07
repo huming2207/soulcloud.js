@@ -125,6 +125,42 @@ export async function otaPollOnce(
     return;
   }
 
+  let topic: string;
+  try {
+    topic = otaCommand(target.deviceUid);
+  } catch (error) {
+    // unsafe UID cannot form a topic; abandon the target
+    log.warn("ota target has an invalid device UID", {
+      targetId: target.id,
+      deviceUid: target.deviceUid,
+      error: (error as Error).message,
+    });
+    await releaseOtaTarget(prisma, target.id, options.offlineRetryMs ?? 5_000);
+    return;
+  }
+
+  // Check the subscription, not just the connection: a client can be
+  // connected while its SUBSCRIBE is still in flight (esp-mqtt subscribes
+  // asynchronously after CONNACK). Publishing to a topic with no
+  // subscriber is silently dropped on a clean-session client, yet
+  // aedes.publish still resolves and the target gets marked delivered -
+  // the notice is then lost forever. Defer until the subscription is
+  // registered. client.subscriptions is populated for both clean and
+  // persistent sessions (persistence.subscriptionsByTopic only covers
+  // the latter).
+  const mqttClient = (aedes as unknown as {
+    clients?: Record<string, { subscriptions?: Record<string, unknown> }>;
+  }).clients?.[target.deviceUid];
+  const subscribed = !!mqttClient && !!mqttClient.subscriptions?.[topic];
+  if (!subscribed) {
+    log.debug("device not subscribed yet; deferring ota notice", {
+      targetId: target.id,
+      deviceUid: target.deviceUid,
+    });
+    await releaseOtaTarget(prisma, target.id, 1_000);  // subscription registers within ms
+    return;
+  }
+
   const token = await signOtaToken(
     options.secret,
     { deviceUid: target.deviceUid, releaseId: target.releaseId, jobId: target.jobId },
@@ -146,7 +182,6 @@ export async function otaPollOnce(
   };
   if (target.version) notice.version = target.version;
 
-  let topic: string;
   try {
     topic = otaCommand(target.deviceUid);
   } catch (error) {
