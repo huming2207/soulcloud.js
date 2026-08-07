@@ -14,7 +14,7 @@ const firmwareApi = {
   pauseRollout: mock(async () => {}),
   resumeRollout: mock(async () => {}),
   abortRollout: mock(async () => {}),
-  rollbackRollout: mock(async () => ({ rollback_job_id: null, target_devices: 0 })),
+  rollbackRollout: mock(async () => ({ rollback_job_id: null as string | null, target_devices: 0 })),
 };
 mock.module("../api/firmware", () => firmwareApi);
 
@@ -81,7 +81,10 @@ beforeEach(() => {
   firmwareApi.fetchRollout.mockClear();
   firmwareApi.fetchRollout.mockResolvedValue(rolloutFixture);
   firmwareApi.pauseRollout.mockClear();
+  firmwareApi.resumeRollout.mockClear();
   firmwareApi.abortRollout.mockClear();
+  firmwareApi.rollbackRollout.mockClear();
+  firmwareApi.rollbackRollout.mockResolvedValue({ rollback_job_id: null, target_devices: 0 });
 });
 
 describe("RolloutDetailPage", () => {
@@ -125,6 +128,69 @@ describe("RolloutDetailPage", () => {
       }) as HTMLButtonElement;
       expect(resume.disabled).toBe(false);
     });
+  });
+
+  test("resuming calls the API and refetches the rollout", async () => {
+    firmwareApi.fetchRollout.mockResolvedValue({
+      ...rolloutFixture,
+      state: "paused",
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /恢复|Resume|Продолжить/i }),
+      ).not.toBeNull(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /恢复|Resume|Продолжить/i }));
+    await waitFor(() => expect(firmwareApi.resumeRollout).toHaveBeenCalledWith("r1"));
+  });
+
+  test("aborting calls the API and refetches the rollout", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /中止|Abort|Прервать|Перервати/i }),
+      ).not.toBeNull(),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /中止|Abort|Прервать|Перервати/i }),
+    );
+    await waitFor(() => expect(firmwareApi.abortRollout).toHaveBeenCalledWith("r1"));
+  });
+
+  test("rollback calls the API and links to the new rollback job", async () => {
+    firmwareApi.fetchRollout.mockResolvedValue({
+      ...rolloutFixture,
+      state: "aborted",
+      rollback_job_id: null,
+    });
+    firmwareApi.rollbackRollout.mockResolvedValue({
+      rollback_job_id: "rb-12345678-0000-0000-0000-000000000000",
+      target_devices: 2,
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /回滚|Rollback|Откат|Відкат/i }),
+      ).not.toBeNull(),
+    );
+    // the refetch triggered by the rollback reports the new job
+    firmwareApi.fetchRollout.mockResolvedValueOnce({
+      ...rolloutFixture,
+      state: "aborted",
+      rollback_job_id: "rb-12345678-0000-0000-0000-000000000000",
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: /回滚|Rollback|Откат|Відкат/i }),
+    );
+    await waitFor(() => expect(firmwareApi.rollbackRollout).toHaveBeenCalledWith("r1"));
+    // the rollback job link appears once the detail refetch lands
+    const link = await screen.findByRole("link", {
+      name: /查看回滚任务|View rollback|Просмотр отката|Перегляд відкату|Visualizza rollback/i,
+    });
+    expect(link.getAttribute("href")).toBe(
+      "/ota-jobs/rb-12345678-0000-0000-0000-000000000000",
+    );
   });
 
   test("renders the phase stepper with per-phase summaries", async () => {
