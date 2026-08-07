@@ -55,6 +55,11 @@ export function startWsBroker(
         return undefined;
       },
       websocket: {
+        // MQTT carries its own keepalive (device CONNECT keepalive, checked
+        // by aedes), so Bun's ws-level ping/pong is redundant and harmful on
+        // slow clients (an emulated device under host CPU pressure can miss
+        // the pong deadline and get its healthy connection torn down).
+        sendPings: false,
         open(ws: ServerWebSocket) {
           const duplex = createWsDuplex(ws);
           ws.data.duplex = duplex;
@@ -148,11 +153,13 @@ function createWsDuplex(ws: ServerWebSocket): Duplex {
         const data = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array);
         let sendError: Error | null = null;
         framer.push(data, (frame) => {
-          // backpressure: Bun's ws.send returns -1 when the socket buffer is
-          // full (frame dropped) - report it so aedes does not believe the
-          // QoS1 packet was delivered
-          if (sendError === null && ws.send(frame) < 0) {
-            sendError = new Error("websocket send buffer full; frame dropped");
+          // Bun's ws.send returns: >=0 bytes queued, -1 when the message was
+          // queued with backpressure (NOT a failure - the frame is still
+          // sent once the socket drains), and 0 when the connection is
+          // unusable (closed). Only 0 is a real failure; reporting -1 as an
+          // error made aedes tear down healthy connections under load.
+          if (sendError === null && ws.send(frame) === 0) {
+            sendError = new Error("websocket send failed; connection unusable");
           }
         });
         callback(sendError);
