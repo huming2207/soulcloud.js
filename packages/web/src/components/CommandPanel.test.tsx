@@ -271,4 +271,35 @@ describe("CommandPanel form validation", () => {
       expect(screen.getByText(/target_devices_not_found/)).not.toBeNull(),
     );
   });
+
+  test("ArrowUp recalls the previous command from history", async () => {
+    // seed history for device d1 (the panel's device)
+    localStorage.setItem(
+      "soulcloud.cmdhistory.d1",
+      JSON.stringify(["status", "reboot"]),
+    );
+    renderPanel();
+    const input = screen.getByLabelText(/命令名|Command name/) as HTMLInputElement;
+    await userEvent.type(input, "x");
+    await userEvent.keyboard("{ArrowUp}");
+    await waitFor(() => expect(input.value).toBe("reboot"));
+    await userEvent.keyboard("{ArrowUp}");
+    await waitFor(() => expect(input.value).toBe("status"));
+    await userEvent.keyboard("{ArrowDown}");
+    await waitFor(() => expect(input.value).toBe("reboot"));
+    await userEvent.keyboard("{ArrowDown}");
+    await waitFor(() => expect(input.value).toBe("x")); // draft restored
+  });
+
+  test("a successful enqueue is recorded into history", async () => {
+    localStorage.clear();
+    renderPanel();
+    await userEvent.type(screen.getByLabelText(/命令名|Command name/), "reboot");
+    await userEvent.click(screen.getByRole("button", { name: /发送到设备|Send to device/i }));
+    await waitFor(() => expect(devicesApi.postCommandBatch).toHaveBeenCalled());
+    const stored = JSON.parse(
+      localStorage.getItem("soulcloud.cmdhistory.d1") ?? "[]",
+    );
+    expect(stored).toEqual(["reboot"]);
+  });
 });

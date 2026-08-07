@@ -28,6 +28,7 @@ import {
 import { errorMessage } from "../api/http";
 import type { CommandState } from "../api/types";
 import { useI18n } from "../i18n/I18nContext";
+import { useCommandHistory } from "../hooks/useCommandHistory";
 import type { DictKey } from "../i18n/dictionary";
 
 const STATE_COLOR: Record<CommandState, "default" | "info" | "primary" | "success" | "error"> = {
@@ -70,6 +71,7 @@ export function CommandPanel({ deviceId }: { deviceId: string }) {
 
 function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: () => void }) {
   const { t } = useI18n();
+  const history = useCommandHistory(deviceId);
   const [cmd, setCmd] = useState("");
   const [argsText, setArgsText] = useState("");
   const [timeoutText, setTimeoutText] = useState("");
@@ -108,6 +110,7 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
         ...(deliveryTimeoutSeconds !== undefined ? { delivery_timeout_seconds: deliveryTimeoutSeconds } : {}),
       });
       setSuccess(t("cmd.queuedOk", { batch: res.batch_id.slice(0, 8), count: String(res.device_count) }));
+      history.commit(cmd);
       setArgsText("");
       setTimeoutText("");
       onEnqueued();
@@ -132,6 +135,23 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
               label={t("cmd.name")}
               value={cmd}
               onChange={(e) => setCmd(e.target.value)}
+              onKeyDown={(e) => {
+                // zsh-style history navigation (single-line field: the
+                // arrows have no other default behaviour to override)
+                if (e.key === "ArrowUp") {
+                  const v = history.up(cmd);
+                  if (v !== null) {
+                    e.preventDefault();
+                    setCmd(v);
+                  }
+                } else if (e.key === "ArrowDown") {
+                  const v = history.down();
+                  if (v !== null) {
+                    e.preventDefault();
+                    setCmd(v);
+                  }
+                }
+              }}
               required
               sx={{ flex: "1 1 200px" }}
             />
