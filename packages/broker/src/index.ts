@@ -34,6 +34,24 @@ const { aedes, close: closeBroker } = await startBroker(prisma, {
   port: config.MQTT_BROKER_PORT,
   path: config.MQTT_BROKER_PATH,
 });
+
+// Diagnostics: log why live sessions go away (keepalive timeout, stream
+// errors, kicks). Aedes closes connections silently by default, which
+// makes reconnect storms hard to attribute.
+aedes.on("keepaliveTimeout", (client) => {
+  logger.warn("client keepalive timeout", { clientId: client.id });
+});
+aedes.on("clientError", (client, err) => {
+  logger.warn("client error", { clientId: client.id, error: err.message });
+});
+aedes.on("connectionError", (client, err) => {
+  logger.warn("connection error", { clientId: client?.id, error: err.message });
+});
+aedes.on("client", (client) => {
+  client.on("close", () => {
+    logger.info("client closed", { clientId: client.id });
+  });
+});
 attachDispatch(aedes, prisma, logger, {
   maxPacketBytes: config.UPLINK_MAX_PACKET_BYTES,
   ratePerSecond: config.UPLINK_RATE_PER_SECOND,
