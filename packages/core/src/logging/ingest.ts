@@ -8,6 +8,7 @@
  */
 
 import type { PrismaClient } from "../db";
+import { LOG_EVENTS_CHANNEL } from "../queue/notify";
 import {
   On9logPacketType,
   parseOn9logPacket,
@@ -121,6 +122,13 @@ export async function ingestLogPacket(
         decodeState: artifactId ? "decodable" : "unknown_fw",
       },
     });
+    // wake the web console's realtime log stream (lossy: a missed
+    // notification only costs latency - consumers fall back to REST)
+    try {
+      await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${String(event.id)})`;
+    } catch {
+      // notification failure must not drop the stored event
+    }
     return { stored: true, eventId: event.id, packetType: packet.header.type };
   } catch (error) {
     throw new LogIngestError(

@@ -30,6 +30,15 @@ export function setAccessToken(token: string | null): void {
   accessToken = token;
 }
 
+/**
+ * Returns the current in-memory access token, or null when signed out.
+ * Needed where headers cannot be set (e.g. the WebSocket log stream
+ * carries the token in its subprotocol list).
+ */
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
 let sessionEndHandler: (() => void) | null = null;
 
 /**

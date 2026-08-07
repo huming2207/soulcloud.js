@@ -21,3 +21,10 @@ export const OTA_NOTIFY_CHANNEL = "soulcloud_ota";
 
 /** Wake-up channel for device credential revocation (session kill). */
 export const CREDENTIAL_REVOKED_CHANNEL = "soulcloud_credentials_revoked";
+
+/**
+ * Log event channel for the web console's realtime log stream (payload =
+ * the raw_log_events row id). Lossy by design: the WS fanout falls back
+ * to the REST paging API when a notification is missed.
+ */
+export const LOG_EVENTS_CHANNEL = "soulcloud_log_events";

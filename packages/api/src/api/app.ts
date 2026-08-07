@@ -26,6 +26,7 @@ import {
 } from "@soulcloud/core";
 import { createAuthRoutes } from "./auth";
 import { createLoggingRoutes } from "./logging";
+import { createLogStreamRoutes } from "./log-stream";
 import { createFirmwareRoutes } from "./firmware";
 import { createRolloutRoutes } from "./rollout";
 import { createMeRoutes } from "./me";
@@ -116,6 +117,7 @@ export function createApp(
     })
     .use(createAuthRoutes(prisma, auth))
     .use(createLoggingRoutes(prisma, auth))
+    .use(createLogStreamRoutes(prisma, auth))
     .use(createFirmwareRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createRolloutRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createMeRoutes(prisma, auth))

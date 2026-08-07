@@ -12,10 +12,12 @@
     "@soulcloud/core": "workspace:*",
     "elysia": "^1.4.29",
     "jose": "^6.2.8",
+    "pg": "^8.22.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/pg": "^8.20.4",
     "typescript": "^5"
   }
 }
