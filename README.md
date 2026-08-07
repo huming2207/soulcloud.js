@@ -221,7 +221,7 @@ the web console:
 ```sh
 # .env must set JWT_SECRET (>= 32 chars)
 docker compose up -d --build
-# web console: http://localhost:8081 (Bun serves the SPA)
+# web console: http://localhost:8081 (nginx serves the SPA)
 # REST API:    http://localhost:8080
 # MQTT (WS):   ws://localhost:1883/mqtt
 ```

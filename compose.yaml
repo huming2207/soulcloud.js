@@ -6,9 +6,10 @@ services:
     environment:
       POSTGRES_DB: soulcloud
       POSTGRES_USER: soulcloud
-      POSTGRES_PASSWORD: soulcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soulcloud}
     ports:
       - "127.0.0.1:5432:5432"
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U soulcloud -d soulcloud"]
       interval: 2s
@@ -25,12 +26,13 @@ services:
       dockerfile: Dockerfile.backend
       target: api
     environment:
-      DATABASE_URL: postgres://soulcloud:soulcloud@postgres:5432/soulcloud
+      DATABASE_URL: postgres://soulcloud:${POSTGRES_PASSWORD:-soulcloud}@postgres:5432/soulcloud
       # shared with the broker; must be set in .env (>= 32 chars)
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       API_BIND_ADDRESS: 0.0.0.0:8080
     ports:
       - "127.0.0.1:8080:8080"
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,14 +48,22 @@ services:
       dockerfile: Dockerfile.backend
       target: broker
     environment:
-      DATABASE_URL: postgres://soulcloud:soulcloud@postgres:5432/soulcloud
+      DATABASE_URL: postgres://soulcloud:${POSTGRES_PASSWORD:-soulcloud}@postgres:5432/soulcloud
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       MQTT_BROKER_PORT: 1883
     ports:
       - "1883:1883"
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+    # MQTT over WS has no HTTP endpoint; probe the TCP listener directly
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/1883"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
   web:
     build:
@@ -64,6 +74,7 @@ services:
       # proxy in front (traefik) routes /v1 + /health to the api
       # service and terminates TLS
       - "8081:80"
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/"]
       interval: 5s
