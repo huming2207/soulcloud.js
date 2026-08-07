@@ -93,7 +93,7 @@ export function BindFirmwareDialog({ deviceId, open, onClose, onBound }: Props) 
             {list.map((a) => (
               <MenuItem key={a.artifact_id} value={a.artifact_id}>
                 {a.version ?? a.build_id.slice(0, 12)} · {a.build_id.slice(0, 12)}…
-                ({a.dictionary_entries} 字典条目)
+                ({t("fw.dictionaryEntries", { count: String(a.dictionary_entries) })})
               </MenuItem>
             ))}
           </TextField>

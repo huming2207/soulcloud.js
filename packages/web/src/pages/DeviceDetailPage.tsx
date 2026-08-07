@@ -125,12 +125,12 @@ function OverviewTab({ deviceId }: { deviceId: string }) {
           <InfoRow label="project_id" value={d.project_id} monospace small />
           <InfoRow label={t("detail.nextSeq")} value={d.next_command_sequence} monospace />
           <InfoRow
-            label="凭据"
+            label={t("device.credentials")}
             value={
               d.auth_revoked ? (
-                <Chip size="small" label="已吊销" color="error" variant="outlined" />
+                <Chip size="small" label={t("device.revoked")} color="error" variant="outlined" />
               ) : (
-                <Chip size="small" label="正常" color="success" variant="outlined" />
+                <Chip size="small" label={t("device.active")} color="success" variant="outlined" />
               )
             }
           />
@@ -209,7 +209,7 @@ function OverviewTab({ deviceId }: { deviceId: string }) {
           {revokeError && <Alert severity="error" sx={{ mt: 2 }}>{revokeError}</Alert>}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setRevokeOpen(false)}>取消</Button>
+          <Button onClick={() => setRevokeOpen(false)}>{t("common.cancel")}</Button>
           <Button color="error" variant="contained" onClick={doRevoke} disabled={revoking}>
             {revoking ? t("detail.revoking") : t("detail.confirmRevoke")}
           </Button>

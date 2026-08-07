@@ -26,7 +26,7 @@ import {
   postCommandBatch,
 } from "../api/devices";
 import { errorMessage } from "../api/http";
-import type { CommandRecord, CommandState } from "../api/types";
+import type { CommandState } from "../api/types";
 import { useI18n } from "../i18n/I18nContext";
 import type { DictKey } from "../i18n/dictionary";
 
@@ -85,9 +85,9 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
     if (argsText.trim() !== "") {
       try {
         args = JSON.parse(argsText);
-        if (!Array.isArray(args)) throw new Error("args 必须是数组");
+        if (!Array.isArray(args)) throw new Error(t("cmd.argsInvalid"));
       } catch (err) {
-        setError(`args 不是合法的 JSON 数组：${(err as Error).message}`);
+        setError(t("cmd.argsInvalidJson", { message: (err as Error).message }));
         return;
       }
     }
@@ -95,7 +95,7 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
     if (timeoutText.trim() !== "") {
       const n = Number(timeoutText);
       if (!Number.isInteger(n) || n <= 0) {
-        setError("投递超时必须是正整数（秒）");
+        setError(t("cmd.deliveryTimeoutInvalid"));
         return;
       }
       deliveryTimeoutSeconds = n;
@@ -107,7 +107,7 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
         command: { cmd: cmd.trim(), args },
         ...(deliveryTimeoutSeconds !== undefined ? { delivery_timeout_seconds: deliveryTimeoutSeconds } : {}),
       });
-      setSuccess(`已入队（批次 ${res.batch_id.slice(0, 8)}…，共 ${res.device_count} 台）`);
+      setSuccess(t("cmd.queuedOk", { batch: res.batch_id.slice(0, 8), count: String(res.device_count) }));
       setArgsText("");
       setTimeoutText("");
       onEnqueued();
@@ -152,7 +152,7 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
             maxRows={6}
             fullWidth
             placeholder='[{"enabled": true}]'
-            helperText={'每个元素为单键对象，如 [{"enabled": true}]'}
+            helperText={t("cmd.argsShapeHint")}
           />
           <Box>
             <Button type="submit" variant="contained" disabled={submitting}>
@@ -295,7 +295,7 @@ function BatchDialog({ batchId, onClose }: { batchId: string; onClose: () => voi
       <DialogTitle>
         {t("cmd.batchTitle", { id: batchId })}
         <IconButton
-          aria-label="关闭"
+          aria-label={t("cmd.close")}
           onClick={onClose}
           sx={{ position: "absolute", right: 8, top: 8 }}
         >

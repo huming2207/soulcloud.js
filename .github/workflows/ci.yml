@@ -71,6 +71,9 @@ jobs:
       - name: Web typecheck
         run: bun run --cwd packages/web typecheck
 
+      - name: Web lint
+        run: bun run --cwd packages/web lint
+
       - name: Web unit tests
         run: bun run --cwd packages/web test
 
@@ -121,3 +124,11 @@ jobs:
         run: bash scripts/web-e2e-ci.sh
         env:
           JWT_SECRET: ci-web-e2e-jwt-secret-0123456789-0123456789
+
+      - name: Upload E2E screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-screenshots
+          path: /tmp/soulcloud-web-screenshot/*.png
+          if-no-files-found: ignore

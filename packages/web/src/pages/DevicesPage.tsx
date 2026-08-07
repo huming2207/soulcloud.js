@@ -19,7 +19,7 @@ import { useI18n } from "../i18n/I18nContext";
 const PAGE_SIZES = [25, 50, 100];
 
 export function DevicesPage() {
-  const { t, gridLocaleText } = useI18n();
+  const { t, gridLocaleText, locale } = useI18n();
   const { projectId } = useProject();
   const navigate = useNavigate();
   const [pagination, setPagination] = useState<GridPaginationModel>({
@@ -77,7 +77,9 @@ export function DevicesPage() {
             <Tooltip
               title={
                 params.row.fw_reported_at
-                  ? `上报于 ${new Date(params.row.fw_reported_at).toLocaleString("zh-CN")}`
+                  ? t("devices.fwReportedAt", {
+                      time: new Date(params.row.fw_reported_at).toLocaleString(locale),
+                    })
                   : ""
               }
             >

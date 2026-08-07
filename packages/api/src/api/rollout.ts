@@ -54,7 +54,11 @@ const CreateRolloutBody = z
   })
   .strict();
 
-export function createRolloutRoutes(prisma: PrismaClient, jwt: JwtConfig) {
+export function createRolloutRoutes(
+  prisma: PrismaClient,
+  jwt: JwtConfig,
+  otaTargetTtlSeconds = 15 * 60,
+) {
   return new Elysia({ prefix: "/v1" })
     // --- create ------------------------------------------------------------
 
@@ -111,6 +115,7 @@ export function createRolloutRoutes(prisma: PrismaClient, jwt: JwtConfig) {
             phaseTimeoutHours: parsed.data.phase_timeout_hours,
             stuckHours: parsed.data.stuck_hours,
             manualApproval: parsed.data.manual_approval,
+            targetTtlSeconds: otaTargetTtlSeconds,
             createdBy: authUser.user.id,
           });
           set.status = 201;
@@ -258,7 +263,7 @@ export function createRolloutRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 404;
           return { error: "not_found", message: "rollout does not exist" };
         }
-        if (!(await canManageRollout(prisma, jwt, authUser.user.id, id.data))) {
+        if (!(await canManageRollout(prisma, authUser.user.id, id.data))) {
           set.status = 404;
           return { error: "not_found", message: "rollout does not exist" };
         }
@@ -285,11 +290,11 @@ export function createRolloutRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 404;
           return { error: "not_found", message: "rollout does not exist" };
         }
-        if (!(await canManageRollout(prisma, jwt, authUser.user.id, id.data))) {
+        if (!(await canManageRollout(prisma, authUser.user.id, id.data))) {
           set.status = 404;
           return { error: "not_found", message: "rollout does not exist" };
         }
-        const resumed = await resumeRollout(prisma, id.data);
+        const resumed = await resumeRollout(prisma, id.data, otaTargetTtlSeconds);
         if (!resumed) {
           set.status = 409;
           return { error: "wrong_state", message: "rollout is not paused" };
@@ -312,7 +317,7 @@ export function createRolloutRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 404;
           return { error: "not_found", message: "rollout does not exist" };
         }
-        if (!(await canManageRollout(prisma, jwt, authUser.user.id, id.data))) {
+        if (!(await canManageRollout(prisma, authUser.user.id, id.data))) {
           set.status = 404;
           return { error: "not_found", message: "rollout does not exist" };
         }
@@ -339,12 +344,12 @@ export function createRolloutRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 404;
           return { error: "not_found", message: "rollout does not exist" };
         }
-        if (!(await canManageRollout(prisma, jwt, authUser.user.id, id.data))) {
+        if (!(await canManageRollout(prisma, authUser.user.id, id.data))) {
           set.status = 404;
           return { error: "not_found", message: "rollout does not exist" };
         }
         try {
-          const result = await rollbackRollout(prisma, id.data);
+          const result = await rollbackRollout(prisma, id.data, otaTargetTtlSeconds);
           return {
             rollout_id: id.data,
             state: "aborted",
@@ -403,8 +408,8 @@ export function createRolloutRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           return { error: "project_not_found", message: "project does not exist" };
         }
         if (!(await userCanAccessProject(prisma, authUser.user.id, projectId.data))) {
-          set.status = 403;
-          return { error: "forbidden", message: "not a member of this project" };
+          set.status = 404;
+          return { error: "not_found", message: "project does not exist" };
         }
         const [total, rollouts] = await Promise.all([
           prisma.otaRollout.count({ where: { projectId: projectId.data } }),
@@ -480,7 +485,6 @@ export function createRolloutRoutes(prisma: PrismaClient, jwt: JwtConfig) {
 /** Membership + existence check for rollout lifecycle operations. */
 async function canManageRollout(
   prisma: PrismaClient,
-  jwt: JwtConfig,
   userId: string,
   rolloutId: string,
 ): Promise<boolean> {

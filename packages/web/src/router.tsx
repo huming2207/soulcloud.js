@@ -36,6 +36,9 @@ const RolloutDetailPage = lazy(() =>
 const OtaJobPage = lazy(() =>
   import("./pages/OtaJobPage").then((m) => ({ default: m.OtaJobPage })),
 );
+const NotFoundPage = lazy(() =>
+  import("./pages/NotFoundPage").then((m) => ({ default: m.NotFoundPage })),
+);
 
 function PageLoader() {
   return (
@@ -69,4 +72,5 @@ export const router = createBrowserRouter([
       { path: "/ota-jobs/:jobId", element: withLoader(<OtaJobPage />) },
     ],
   },
+  { path: "*", element: withLoader(<NotFoundPage />) },
 ]);

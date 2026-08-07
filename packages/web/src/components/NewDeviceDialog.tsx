@@ -145,7 +145,7 @@ export function NewDeviceDialog({ open, onClose, onCreated }: Props) {
             </Stack>
           </DialogContent>
           <DialogActions>
-            <Button onClick={handleClose}>取消</Button>
+            <Button onClick={handleClose}>{t("common.cancel")}</Button>
             <Button type="submit" variant="contained" disabled={submitting}>
               {submitting ? t("newdev.creating") : t("newdev.create")}
             </Button>

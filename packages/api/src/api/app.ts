@@ -117,7 +117,7 @@ export function createApp(
     .use(createAuthRoutes(prisma, auth))
     .use(createLoggingRoutes(prisma, auth))
     .use(createFirmwareRoutes(prisma, auth, otaTargetTtlSeconds))
-    .use(createRolloutRoutes(prisma, auth))
+    .use(createRolloutRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createMeRoutes(prisma, auth))
     .use(createDeviceRoutes(prisma, auth));
 }

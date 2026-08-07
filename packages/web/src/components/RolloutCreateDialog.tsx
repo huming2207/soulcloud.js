@@ -119,7 +119,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
         .filter((r) => r.release_id !== releaseId)
         .map((r) => ({
           release_id: r.release_id,
-          label: `${r.version ?? "（未命名）"} · ${r.release_id.slice(0, 8)}`,
+          label: `${r.version ?? t("rollout.unnamed")} · ${r.release_id.slice(0, 8)}`,
         })),
     [releases.data, releaseId],
   );
@@ -273,7 +273,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                           size="small"
                           disabled={ratios.length <= 1}
                           onClick={() => setRatios(ratios.filter((_, j) => j !== i))}
-                          aria-label="删除比率"
+                          aria-label={t("rollout.deleteRatio")}
                         >
                           <DeleteIcon fontSize="small" />
                         </IconButton>
@@ -308,7 +308,7 @@ export function RolloutCreateDialog({ releaseId, open, onClose }: Props) {
                       size="small"
                       disabled={groups.length <= 1}
                       onClick={() => setGroups(groups.filter((_, j) => j !== i))}
-                      aria-label="删除分组"
+                      aria-label={t("rollout.deleteGroup")}
                     >
                       <DeleteIcon fontSize="small" />
                     </IconButton>

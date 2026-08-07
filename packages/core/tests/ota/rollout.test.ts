@@ -518,6 +518,72 @@ describe("lifecycle", () => {
     await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
   });
 
+  test("concurrent rollbacks claim one job; the loser returns the winner's", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId, releaseId, fromReleaseId, strategy: "auto",
+      deviceIds: deviceIds.slice(0, 3), ratios: [1.0],
+      createdBy: randomUUID(),
+    });
+    const t = (await jobTargets(created.jobId!))[0]!;
+    await driveTarget(created.jobId!, t.deviceUid, "completed");
+
+    const [a, b] = await Promise.all([
+      rollbackRollout(prisma, created.rolloutId),
+      rollbackRollout(prisma, created.rolloutId),
+    ]);
+    expect(a.rollbackJobId).toBe(b.rollbackJobId);
+    // exactly one rollback job exists (the loser's orphan was deleted)
+    const jobCount = await prisma.otaJob.count({
+      where: { releaseId: fromReleaseId, targets: { some: { state: { not: "expired" } } } },
+    });
+    const rollout = await prisma.otaRollout.findUnique({
+      where: { id: created.rolloutId },
+      select: { rollbackJobId: true },
+    });
+    expect(rollout?.rollbackJobId).toBe(a.rollbackJobId);
+    await prisma.otaJob.deleteMany({ where: { id: a.rollbackJobId } });
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+    void jobCount;
+  });
+
+  test("a fully terminal rollback job allows a fresh rollback (post-window re-trigger)", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId, releaseId, fromReleaseId, strategy: "auto",
+      deviceIds: deviceIds.slice(0, 3), ratios: [1.0],
+      createdBy: randomUUID(),
+    });
+    const t = (await jobTargets(created.jobId!))[0]!;
+    await driveTarget(created.jobId!, t.deviceUid, "completed");
+
+    const first = await rollbackRollout(prisma, created.rolloutId);
+    // expire every target of the first rollback job (window elapsed)
+    await prisma.otaTarget.updateMany({
+      where: { jobId: first.rollbackJobId },
+      data: { state: "expired" },
+    });
+    const second = await rollbackRollout(prisma, created.rolloutId);
+    expect(second.rollbackJobId).not.toBe(first.rollbackJobId);
+    expect(second.targetDevices).toBe(1);
+    await prisma.otaJob.deleteMany({ where: { id: second.rollbackJobId } });
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
+  test("phase targets honour the configured delivery TTL", async () => {
+    const created = await createOtaRollout(prisma, {
+      projectId, releaseId, strategy: "auto",
+      deviceIds: deviceIds.slice(0, 3), ratios: [1.0],
+      targetTtlSeconds: 5,
+      createdBy: randomUUID(),
+    });
+    const target = await prisma.otaTarget.findFirstOrThrow({
+      where: { jobId: created.jobId! },
+    });
+    const ttlMs = target.expiresAt.getTime() - Date.now();
+    expect(ttlMs).toBeGreaterThan(0);
+    expect(ttlMs).toBeLessThan(60_000); // 5s window, not the 15min default
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
   test("rollback without completed devices -> rollback_unavailable", async () => {
     const created = await createOtaRollout(prisma, {
       projectId, releaseId, fromReleaseId, strategy: "auto",

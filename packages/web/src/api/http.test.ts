@@ -57,7 +57,7 @@ mock.module("axios", () => ({
   },
 }));
 
-const { http, setAccessToken, setRefreshToken, getRefreshToken, setSessionEndHandler } = await import(
+const { setAccessToken, setRefreshToken, getRefreshToken, setSessionEndHandler } = await import(
   "./http"
 );
 

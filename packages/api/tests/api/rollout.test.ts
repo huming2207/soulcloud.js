@@ -387,7 +387,7 @@ describe("GET /v1/ota-rollouts (list)", () => {
         headers: auth(outsiderToken),
       }),
     );
-    expect(denied.status).toBe(403);
+    expect(denied.status).toBe(404);
     const noAuth = await app.handle(
       new Request(`http://localhost/v1/ota-rollouts?project_id=${projectId}`),
     );

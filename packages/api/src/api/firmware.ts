@@ -623,8 +623,8 @@ export function createFirmwareRoutes(
           return { error: "project_not_found", message: "project does not exist" };
         }
         if (!(await userCanAccessProject(prisma, authUser.user.id, projectId.data))) {
-          set.status = 403;
-          return { error: "forbidden", message: "not a member of this project" };
+          set.status = 404;
+          return { error: "not_found", message: "project does not exist" };
         }
         const [total, jobs] = await Promise.all([
           prisma.otaJob.count({ where: { projectId: projectId.data } }),

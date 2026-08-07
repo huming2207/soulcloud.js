@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "bun test --preload ./src/test-setup.ts --isolate",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "oxlint src"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -32,6 +33,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "happy-dom": "^20.11.1",
+    "oxlint": "^1.77.0",
     "typescript": "^7.0.2",
     "vite": "^6.0.0"
   }

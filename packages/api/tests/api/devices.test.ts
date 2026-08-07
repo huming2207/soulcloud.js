@@ -249,7 +249,7 @@ describe("POST /v1/devices", () => {
       assigned_id: "no-membership",
       device_uid: `no-membership-${randomUUID().slice(0, 8)}`,
     }, outsiderToken);
-    expect(forbidden.status).toBe(403);
+    expect(forbidden.status).toBe(404);
     const noAuth = await app.handle(
       new Request("http://localhost/v1/devices", {
         method: "POST",
@@ -297,7 +297,7 @@ describe("GET /v1/projects/:id/devices", () => {
     expect((await getJson(`/v1/projects/${projectId}/devices?limit=0`)).status).toBe(400);
     expect((await getJson(`/v1/projects/${projectId}/devices?offset=-1`)).status).toBe(400);
     expect((await getJson(`/v1/projects/${randomUUID()}/devices`)).status).toBe(404);
-    expect((await getJson(`/v1/projects/${projectId}/devices`, outsiderToken)).status).toBe(403);
+    expect((await getJson(`/v1/projects/${projectId}/devices`, outsiderToken)).status).toBe(404);
     expect((await app.handle(new Request(`http://localhost/v1/projects/${projectId}/devices`))).status).toBe(401);
   });
 });
@@ -323,7 +323,7 @@ describe("GET /v1/devices/:id", () => {
 
   test("unknown device -> 404; non-member -> 403; no auth -> 401", async () => {
     expect((await getJson(`/v1/devices/${randomUUID()}`)).status).toBe(404);
-    expect((await getJson(`/v1/devices/${deviceIds[0]}`, outsiderToken)).status).toBe(403);
+    expect((await getJson(`/v1/devices/${deviceIds[0]}`, outsiderToken)).status).toBe(404);
     expect((await app.handle(new Request(`http://localhost/v1/devices/${deviceIds[0]}`))).status).toBe(401);
   });
 });
@@ -414,7 +414,7 @@ describe("GET /v1/devices/:id/commands", () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as { commands: unknown[] }).commands).toEqual([]);
     expect((await getJson(`/v1/devices/${randomUUID()}/commands`)).status).toBe(404);
-    expect((await getJson(`/v1/devices/${deviceIds[0]}/commands`, outsiderToken)).status).toBe(403);
+    expect((await getJson(`/v1/devices/${deviceIds[0]}/commands`, outsiderToken)).status).toBe(404);
   });
 });
 
@@ -451,7 +451,7 @@ describe("GET /v1/command-batches/:id", () => {
       command: { cmd: "noop" },
     });
     const { batch_id } = (await batch.json()) as { batch_id: string };
-    expect((await getJson(`/v1/command-batches/${batch_id}`, outsiderToken)).status).toBe(403);
+    expect((await getJson(`/v1/command-batches/${batch_id}`, outsiderToken)).status).toBe(404);
     expect((await app.handle(new Request(`http://localhost/v1/command-batches/${batch_id}`))).status).toBe(401);
   });
 });

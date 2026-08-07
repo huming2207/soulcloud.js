@@ -1,14 +1,12 @@
 import { http } from "./http";
 import type {
   ArtifactListResponse,
-  ArtifactSummary,
   ArtifactUploadResponse,
   DeployResponse,
   OtaJobDetail,
   OtaJobListResponse,
   ReleaseDetail,
   ReleaseListResponse,
-  ReleaseSummary,
   ReleaseUploadResponse,
   RolloutCreateRequest,
   RolloutCreateResponse,

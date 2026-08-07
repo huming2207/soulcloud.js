@@ -110,7 +110,7 @@ export function RolloutsPage() {
                       color={STATE_COLOR[r.state]}
                     />
                   </TableCell>
-                  <TableCell>{r.manual_approval ? "是" : "—"}</TableCell>
+                  <TableCell>{r.manual_approval ? t("common.yes") : "—"}</TableCell>
                   <TableCell>{r.pool_size}</TableCell>
                   <TableCell>
                     <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>

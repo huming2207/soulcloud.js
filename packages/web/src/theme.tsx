@@ -1,4 +1,4 @@
-import { forwardRef, type Ref } from "react";
+import { forwardRef } from "react";
 import {
   Link as RouterLink,
   type LinkProps as RouterLinkProps,

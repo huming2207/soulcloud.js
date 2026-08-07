@@ -13,6 +13,8 @@ import { advanceRollouts, type PrismaClient } from "@soulcloud/core";
 export interface RolloutPollerOptions {
   /** Poll interval in milliseconds. */
   pollIntervalMs: number;
+  /** Delivery window for phase targets (seconds). */
+  targetTtlSeconds?: number;
 }
 
 export interface RolloutPollerLog {
@@ -41,7 +43,9 @@ export function startRolloutPoller(
     if (running || stopped) return;
     running = true;
     try {
-      const summary = await advanceRollouts(prisma);
+      const summary = await advanceRollouts(prisma, {
+        targetTtlSeconds: options.targetTtlSeconds,
+      });
       if (
         summary.phasesActivated > 0 ||
         summary.phasesCompleted > 0 ||

@@ -26,7 +26,13 @@ mkdir -p "$SHOT_DIR"
 
 API_BIND_ADDRESS="127.0.0.1:$API_PORT" bun run start:api > /tmp/ci-web-e2e-api.log 2>&1 &
 API_PID=$!
-(cd packages/web && bun run dev --port 5173 --strictPort > /tmp/ci-web-e2e-web.log 2>&1) &
+# serve the PRODUCTION build (vite build + preview), not the dev server:
+# CI must exercise the actual bundles (chunking, compression, CSP-era
+# assets) the nginx container ships
+echo "[web-e2e] building the production bundle..."
+(cd packages/web && bun run build > /tmp/ci-web-e2e-build.log 2>&1) || {
+  echo "[web-e2e] production build failed"; tail -20 /tmp/ci-web-e2e-build.log; exit 1; }
+(cd packages/web && VITE_API_TARGET="http://localhost:$API_PORT" bun run preview --port 5173 --strictPort > /tmp/ci-web-e2e-web.log 2>&1) &
 WEB_PID=$!
 
 cleanup() {

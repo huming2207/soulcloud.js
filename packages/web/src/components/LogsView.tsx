@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
@@ -157,7 +156,7 @@ function LogRow({ event, includeRaw }: { event: LogEvent; includeRaw: boolean })
           color: "text.secondary",
           whiteSpace: "nowrap",
         }}
-        title={`boot 相对时间 ${event.device_time_ms} ms`}
+        title={t("log.bootRelative", { ms: String(event.device_time_ms) })}
       >
         {formatDeviceTime(event.device_time_ms)}
       </Box>

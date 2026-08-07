@@ -38,7 +38,10 @@ app.listen({ hostname, port: Number(port) });
 // rollout FSM (proposal 19): slow, DB-only advance loop
 const rolloutPoller = startRolloutPoller(
   prisma,
-  { pollIntervalMs: config.ROLLOUT_POLL_INTERVAL_MS },
+  {
+    pollIntervalMs: config.ROLLOUT_POLL_INTERVAL_MS,
+    targetTtlSeconds: config.OTA_TARGET_TTL_SECONDS,
+  },
   {
     info: (msg, fields) => console.log(`[soulcloud-api] ${msg}`, fields ?? ""),
     warn: (msg, fields) => console.warn(`[soulcloud-api] ${msg}`, fields ?? ""),

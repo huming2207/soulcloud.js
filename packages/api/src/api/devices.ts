@@ -159,8 +159,8 @@ export function createDeviceRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           return { error: "project_not_found", message: "project does not exist" };
         }
         if (!(await userCanAccessProject(prisma, authUser.user.id, projectId.data))) {
-          set.status = 403;
-          return { error: "forbidden", message: "not a member of this project" };
+          set.status = 404;
+          return { error: "not_found", message: "project does not exist" };
         }
         const [total, rows] = await Promise.all([
           prisma.device.count({ where: { projectId: projectId.data } }),
@@ -233,8 +233,8 @@ export function createDeviceRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           return { error: "not_found", message: "device does not exist" };
         }
         if (!(await userCanAccessProject(prisma, authUser.user.id, device.projectId))) {
-          set.status = 403;
-          return { error: "forbidden", message: "not a member of this device's project" };
+          set.status = 404;
+          return { error: "not_found", message: "device does not exist" };
         }
         return {
           device_id: device.id,
@@ -287,8 +287,8 @@ export function createDeviceRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           return { error: "project_not_found", message: "project does not exist" };
         }
         if (!(await userCanAccessProject(prisma, authUser.user.id, parsed.data.project_id))) {
-          set.status = 403;
-          return { error: "forbidden", message: "not a member of this project" };
+          set.status = 404;
+          return { error: "not_found", message: "project does not exist" };
         }
         // credential contract identical to POST /devices/:id/credentials:
         // the password is generated server-side, hashed with argon2id and
@@ -368,8 +368,8 @@ export function createDeviceRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           return { error: "not_found", message: "device does not exist" };
         }
         if (!(await userCanAccessProject(prisma, authUser.user.id, device.projectId))) {
-          set.status = 403;
-          return { error: "forbidden", message: "not a member of this device's project" };
+          set.status = 404;
+          return { error: "not_found", message: "device does not exist" };
         }
         const rows = await prisma.deviceCommand.findMany({
           where: { deviceId: id.data, ...(cursor ? { sequence: { lt: cursor } } : {}) },
@@ -450,8 +450,8 @@ export function createDeviceRoutes(prisma: PrismaClient, jwt: JwtConfig) {
         });
         const accessible = new Set(links.map((l) => l.projectId));
         if (!batch.commands.every((c) => accessible.has(c.device.projectId))) {
-          set.status = 403;
-          return { error: "forbidden", message: "not a member of a target device's project" };
+          set.status = 404;
+          return { error: "not_found", message: "command batch does not exist" };
         }
         const summary: Record<string, number> = {};
         for (const c of batch.commands) {
