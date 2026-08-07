@@ -9,6 +9,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { ProjectProvider } from "./layout/ProjectContext";
 import { router } from "./router";
 import { useI18n, I18nProvider } from "./i18n/I18nContext";
+import { setSessionEndHandler } from "./api/http";
 
 export function App() {
   return (
@@ -35,6 +36,9 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// forced logout (refresh failure mid-session) must drop cached data too
+setSessionEndHandler(() => queryClient.clear());
 
 /** Applies the locale-aware MUI theme (component texts follow the locale). */
 function ThemedApp({ children }: { children: ReactNode }) {

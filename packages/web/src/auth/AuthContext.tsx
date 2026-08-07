@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import * as authApi from "../api/auth";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   getRefreshToken,
   setAccessToken,
@@ -33,6 +34,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<"loading" | "authed" | "anon">("loading");
   const [user, setUser] = useState<AuthUser | null>(null);
+  const queryClient = useQueryClient();
 
   // Session restore: with only a refresh token stored, fetchMe() gets a 401
   // and the http interceptor transparently refreshes + retries it.
@@ -52,6 +54,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         setAccessToken(null);
         setRefreshToken(null);
+        // the stored session is gone; drop cached data so it cannot leak
+        // into a later account on this browser
+        queryClient.clear();
         setStatus("anon");
       }
     })();
@@ -83,9 +88,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await authApi.logout();
     setAccessToken(null);
     setRefreshToken(null);
+    // wipe all cached queries (devices/logs/rollouts belong to the
+    // previous account; a later login on this browser must start clean)
+    queryClient.clear();
     setUser(null);
     setStatus("anon");
-  }, []);
+  }, [queryClient]);
 
   const value = useMemo(
     () => ({ status, user, login, register, logout }),

@@ -57,7 +57,7 @@ mock.module("axios", () => ({
   },
 }));
 
-const { http, setAccessToken, setRefreshToken, getRefreshToken } = await import(
+const { http, setAccessToken, setRefreshToken, getRefreshToken, setSessionEndHandler } = await import(
   "./http"
 );
 
@@ -154,15 +154,19 @@ describe("401 refresh + retry", () => {
     expect(refreshCalls).toBe(0);
   });
 
-  test("a failed refresh wipes tokens and bounces to /login", async () => {
+  test("a failed refresh wipes tokens, clears session data and bounces to /login", async () => {
     refreshError = new Error("refresh failed");
     const assign = spyOn(window.location, "assign").mockImplementation(() => {});
+    const onEnd = mock(() => {});
+    setSessionEndHandler(onEnd);
     setAccessToken("stale");
     setRefreshToken("rt-1");
     await expect(runResponseError(makeError(401, "/v1/devices"))).rejects.toThrow();
     expect(getRefreshToken()).toBeNull();
+    expect(onEnd).toHaveBeenCalled();
     expect(assign).toHaveBeenCalledWith("/login");
     assign.mockRestore();
+    setSessionEndHandler(null);
   });
 
   test("non-401 errors pass through untouched", async () => {

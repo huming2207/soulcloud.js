@@ -4,6 +4,8 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 
 const authApi = {
   login: mock(async () => ({
@@ -40,16 +42,25 @@ function Consumer() {
   );
 }
 
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false } },
+});
+
+function renderWithAuth(ui: ReactNode) {
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
+
 beforeEach(() => {
   authApi.login.mockClear();
   authApi.logout.mockClear();
   authApi.fetchMe.mockClear();
   localStorage.clear();
+  queryClient.clear();
 });
 
 describe("AuthContext", () => {
   test("starts anonymous without a stored refresh token", async () => {
-    render(
+    renderWithAuth(
       <AuthProvider>
         <Consumer />
       </AuthProvider>,
@@ -60,7 +71,7 @@ describe("AuthContext", () => {
 
   test("restores the session from a stored refresh token", async () => {
     localStorage.setItem("soulcloud.refresh_token", "ref-1");
-    render(
+    renderWithAuth(
       <AuthProvider>
         <Consumer />
       </AuthProvider>,
@@ -73,17 +84,20 @@ describe("AuthContext", () => {
   test("falls back to anonymous when restore fails", async () => {
     localStorage.setItem("soulcloud.refresh_token", "stale");
     authApi.fetchMe.mockRejectedValueOnce(new Error("expired"));
-    render(
+    queryClient.setQueryData(["devices"], [{ id: "leak" }]);
+    renderWithAuth(
       <AuthProvider>
         <Consumer />
       </AuthProvider>,
     );
     await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("anon"));
     expect(localStorage.getItem("soulcloud.refresh_token")).toBeNull();
+    // the failed session must not leave cached data behind
+    expect(queryClient.getQueryData(["devices"])).toBeUndefined();
   });
 
   test("login stores tokens and flips to authed", async () => {
-    render(
+    renderWithAuth(
       <AuthProvider>
         <Consumer />
       </AuthProvider>,
@@ -95,9 +109,11 @@ describe("AuthContext", () => {
     expect(localStorage.getItem("soulcloud.refresh_token")).toBe("ref-1");
   });
 
-  test("logout revokes server-side and returns to anonymous", async () => {
+  test("logout revokes server-side, clears caches and returns to anonymous", async () => {
     localStorage.setItem("soulcloud.refresh_token", "ref-1");
-    render(
+    queryClient.setQueryData(["devices"], [{ id: "a" }]);
+    queryClient.setQueryData(["logs"], [{ id: "b" }]);
+    renderWithAuth(
       <AuthProvider>
         <Consumer />
       </AuthProvider>,
@@ -107,5 +123,8 @@ describe("AuthContext", () => {
     await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("anon"));
     expect(authApi.logout).toHaveBeenCalled();
     expect(localStorage.getItem("soulcloud.refresh_token")).toBeNull();
+    // previous account's cached queries must not survive into the next login
+    expect(queryClient.getQueryData(["devices"])).toBeUndefined();
+    expect(queryClient.getQueryData(["logs"])).toBeUndefined();
   });
 });

@@ -30,6 +30,17 @@ export function setAccessToken(token: string | null): void {
   accessToken = token;
 }
 
+let sessionEndHandler: (() => void) | null = null;
+
+/**
+ * Registers a callback invoked when the session ends (failed refresh,
+ * i.e. forced logout). The app wires it to queryClient.clear() so one
+ * account's cached data can never leak into the next session.
+ */
+export function setSessionEndHandler(fn: (() => void) | null): void {
+  sessionEndHandler = fn;
+}
+
 /** Refreshes the token pair once; concurrent callers share the promise. */
 function refreshTokens(): Promise<string> {
   if (!refreshInFlight) {
@@ -80,6 +91,7 @@ http.interceptors.response.use(
       } catch {
         accessToken = null;
         setRefreshToken(null);
+        sessionEndHandler?.();
         if (window.location.pathname !== "/login") {
           window.location.assign("/login");
         }
