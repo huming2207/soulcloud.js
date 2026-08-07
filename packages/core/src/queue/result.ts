@@ -12,6 +12,7 @@ import type { PrismaClient } from "../db";
 import { CommandQueueError } from "./errors";
 import type { DeviceCommandResult } from "../protocol/command";
 import { decodeDeviceCommandResult } from "../protocol/command";
+import { COMMAND_RESULT_CHANNEL } from "./notify";
 
 export type ResultRecordOutcome = "recorded" | "already_recorded";
 
@@ -21,6 +22,7 @@ interface StoredRow {
   sequence: bigint;
   state: string;
   result_packet: Buffer | null;
+  batch_id: string;
   device_uid: string;
 }
 
@@ -43,7 +45,7 @@ export async function recordDeviceResult(
   const commandId = uuidFromBytes(result.id);
   return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<StoredRow[]>`
-      SELECT dc.sequence, dc.state, dc.result_packet, d.device_uid
+      SELECT dc.sequence, dc.state, dc.result_packet, dc.batch_id, d.device_uid
       FROM device_commands dc
       INNER JOIN devices d ON d.id = dc.device_id
       WHERE dc.id = ${commandId}
@@ -105,6 +107,12 @@ export async function recordDeviceResult(
         deviceCompletedAt: now,
       },
     });
+    // Wake the realtime command stream: the notification carries the batch
+    // id and is delivered by PostgreSQL only after this transaction
+    // commits, so listeners never observe a half-written row. Only the
+    // state transition path notifies (replayed/conflicting results return
+    // earlier and must not spam the channel).
+    await tx.$executeRaw`SELECT pg_notify(${COMMAND_RESULT_CHANNEL}, ${stored.batch_id})`;
     return "recorded" as const;
   });
 }

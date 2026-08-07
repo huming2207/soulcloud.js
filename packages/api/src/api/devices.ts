@@ -123,6 +123,81 @@ function uniqueViolationFields(error: unknown): string[] {
   return [];
 }
 
+/**
+ * Loads a command batch in the REST detail shape (the payload of
+ * GET /v1/command-batches/:id). Shared with the realtime command stream,
+ * which re-queries the batch on every result notification. Returns null
+ * when the batch is unknown. `projects` carries the target devices'
+ * project ids for the caller's membership check (not part of the payload).
+ */
+export async function loadCommandBatchDetail(
+  prisma: PrismaClient,
+  batchId: string,
+): Promise<{
+  detail: {
+    batch_id: string;
+    device_count: number;
+    created_at: Date;
+    summary: Record<string, number>;
+    commands: Array<{
+      command_id: string;
+      device_id: string;
+      device_uid: string;
+      sequence: string;
+      command: { cmd: string; args: unknown } | null;
+      state: string;
+      result_code: number | null;
+      result: { code: number; payload: unknown } | null;
+      created_at: Date;
+      delivery_expires_at: Date | null;
+      device_completed_at: Date | null;
+    }>;
+  };
+  projects: Set<string>;
+} | null> {
+  const batch = await prisma.commandBatch.findUnique({
+    where: { id: batchId },
+    include: {
+      commands: {
+        include: {
+          device: { select: { deviceUid: true, projectId: true } },
+        },
+      },
+    },
+  });
+  if (!batch) return null;
+  const summary: Record<string, number> = {};
+  for (const c of batch.commands) {
+    summary[c.state] = (summary[c.state] ?? 0) + 1;
+  }
+  const projects = new Set(batch.commands.map((c) => c.device.projectId));
+  return {
+    detail: {
+      batch_id: batch.id,
+      device_count: batch.deviceCount,
+      created_at: batch.createdAt,
+      summary,
+      commands: batch.commands.map((c) => {
+        const decoded = decodeCommandPayload(c.payload);
+        return {
+          command_id: c.id,
+          device_id: c.deviceId,
+          device_uid: c.device.deviceUid,
+          sequence: c.sequence.toString(),
+          command: decoded,
+          state: c.state,
+          result_code: c.resultCode,
+          result: c.resultPacket ? decodeResultPacket(c.resultPacket) : null,
+          created_at: c.createdAt,
+          delivery_expires_at: c.deliveryExpiresAt,
+          device_completed_at: c.deviceCompletedAt,
+        };
+      }),
+    },
+    projects,
+  };
+}
+
 export function createDeviceRoutes(prisma: PrismaClient, jwt: JwtConfig) {
   return new Elysia({ prefix: "/v1" })
     // --- device list -------------------------------------------------------
@@ -428,17 +503,8 @@ export function createDeviceRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           set.status = 404;
           return { error: "not_found", message: "batch does not exist" };
         }
-        const batch = await prisma.commandBatch.findUnique({
-          where: { id: id.data },
-          include: {
-            commands: {
-              include: {
-                device: { select: { deviceUid: true, projectId: true } },
-              },
-            },
-          },
-        });
-        if (!batch) {
+        const loaded = await loadCommandBatchDetail(prisma, id.data);
+        if (!loaded) {
           set.status = 404;
           return { error: "not_found", message: "batch does not exist" };
         }
@@ -449,36 +515,11 @@ export function createDeviceRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           select: { projectId: true },
         });
         const accessible = new Set(links.map((l) => l.projectId));
-        if (!batch.commands.every((c) => accessible.has(c.device.projectId))) {
+        if (![...loaded.projects].every((p) => accessible.has(p))) {
           set.status = 404;
           return { error: "not_found", message: "command batch does not exist" };
         }
-        const summary: Record<string, number> = {};
-        for (const c of batch.commands) {
-          summary[c.state] = (summary[c.state] ?? 0) + 1;
-        }
-        return {
-          batch_id: batch.id,
-          device_count: batch.deviceCount,
-          created_at: batch.createdAt,
-          summary,
-          commands: batch.commands.map((c) => {
-            const decoded = decodeCommandPayload(c.payload);
-            return {
-              command_id: c.id,
-              device_id: c.deviceId,
-              device_uid: c.device.deviceUid,
-              sequence: c.sequence.toString(),
-              command: decoded,
-              state: c.state,
-              result_code: c.resultCode,
-              result: c.resultPacket ? decodeResultPacket(c.resultPacket) : null,
-              created_at: c.createdAt,
-              delivery_expires_at: c.deliveryExpiresAt,
-              device_completed_at: c.deviceCompletedAt,
-            };
-          }),
-        };
+        return loaded.detail;
       } catch (error) {
         return handleApiError(error, set);
       }

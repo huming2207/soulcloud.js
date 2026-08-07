@@ -1,21 +1,15 @@
 /**
- * API_BIND_ADDRESS parsing (P2).
+ * API_BIND_ADDRESS handling (P2) — entrypoint-level guard tests.
  *
- * The host:port / [v6]:port regex lives inline at the top of
- * packages/api/src/index.ts (module top level, followed by
- * process.exit(1) on mismatch). It is NOT importable, and refactoring
- * index.ts is explicitly out of scope for this test round, so these tests
- * exercise the real entrypoint as a subprocess:
+ * Parsing itself lives in `parseBindAddress` (packages/api/src/config.ts,
+ * unit-tested in tests/config.test.ts incl. the `[::1]:port` branch).
+ * index.ts consumes it and exits(1) with a clear error on a null result,
+ * so these tests exercise the real entrypoint as a subprocess:
  *
  *   - an unparseable address must terminate the process (exit 1) with a
  *     clear error instead of starting a misconfigured server
- *   - a valid host:port must extract the host/port from the regex, bind
- *     the HTTP server on it, and shut down cleanly on SIGTERM
- *
- * Suggested minimal refactor (not done here): move the parse into a pure
- * function, e.g. `parseBindAddress(addr: string)` exported from
- * packages/api/src/config.ts, and have index.ts consume it; the unit
- * tests would then cover both branches (incl. `[::1]:port`) directly.
+ *   - a valid host:port must be bound by the HTTP server, and the process
+ *     shuts down cleanly on SIGTERM
  */
 
 import { describe, expect, test } from "bun:test";

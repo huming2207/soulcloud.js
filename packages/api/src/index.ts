@@ -9,21 +9,19 @@
 import { prisma } from "@soulcloud/core";
 import { createApp } from "./api/app";
 import { startRolloutPoller } from "./rollout-poller";
-import { loadApiConfig } from "./config";
+import { loadApiConfig, parseBindAddress } from "./config";
 
 const config = loadApiConfig();
 
-// API_BIND_ADDRESS is "host:port" (e.g. "0.0.0.0:8080")
 // API_BIND_ADDRESS is "host:port" (e.g. "0.0.0.0:8080" or "[::1]:8080")
-const bindMatch = /^\[([^\]]+)\]:(\d+)$|^([^:]+):(\d+)$/.exec(config.API_BIND_ADDRESS);
-if (!bindMatch) {
+const bind = parseBindAddress(config.API_BIND_ADDRESS);
+if (!bind) {
   console.error(
     `Invalid API_BIND_ADDRESS: ${config.API_BIND_ADDRESS} (expected host:port)`,
   );
   process.exit(1);
 }
-const hostname = (bindMatch[1] ?? bindMatch[3])!;
-const port = Number(bindMatch[2] ?? bindMatch[4]);
+const { hostname, port } = bind;
 
 const app = createApp(
   prisma,
@@ -34,7 +32,7 @@ const app = createApp(
   },
   config.OTA_TARGET_TTL_SECONDS,
 );
-app.listen({ hostname, port: Number(port) });
+app.listen({ hostname, port });
 // rollout FSM (proposal 19): slow, DB-only advance loop
 const rolloutPoller = startRolloutPoller(
   prisma,

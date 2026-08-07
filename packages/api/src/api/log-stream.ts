@@ -23,7 +23,6 @@
 
 import { Elysia } from "elysia";
 import type { ServerWebSocket } from "bun";
-import { Client } from "pg";
 import {
   decodeEventsBatch,
   LOG_EVENTS_CHANNEL,
@@ -31,6 +30,7 @@ import {
   type PrismaClient,
 } from "@soulcloud/core";
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
+import { createPgChannelListener, type PgListenLog } from "../pg-listen";
 
 const WS_PROTOCOL = "soulcloud";
 
@@ -42,10 +42,6 @@ interface LogStreamHub {
   close(): Promise<void>;
 }
 
-interface HubLog {
-  warn: (msg: string, fields?: Record<string, unknown>) => void;
-}
-
 let hubSingleton: LogStreamHub | null = null;
 
 /**
@@ -55,53 +51,23 @@ let hubSingleton: LogStreamHub | null = null;
 export function getLogStreamHub(
   prisma: PrismaClient,
   databaseUrl: string,
-  log: HubLog,
+  log: PgListenLog,
 ): LogStreamHub {
   if (hubSingleton) return hubSingleton;
 
   const subscribers = new Map<string, Set<ServerWebSocket>>();
-  let client: Client | null = null;
-  let closed = false;
-
-  async function listen(): Promise<void> {
-    if (closed || client) return;
-    const c = new Client({ connectionString: databaseUrl });
-    client = c;
-    try {
-      await c.connect();
-      await c.query(`LISTEN ${LOG_EVENTS_CHANNEL}`);
-      c.on("notification", (msg) => {
-        const eventId = msg.payload;
-        if (!eventId) return;
-        void pushEvent(prisma, subscribers, eventId, log);
-      });
-      c.on("error", (err) => {
-        log.warn("log stream listener error", { error: (err as Error).message });
-        void reconnect();
-      });
-      log.warn("log stream listener ready", {});
-    } catch (error) {
-      log.warn("log stream listener connect failed", {
-        error: (error as Error).message,
-      });
-      void reconnect();
-    }
-  }
-
-  async function reconnect(): Promise<void> {
-    // a pg Client cannot be reused after an error
-    if (client) {
-      try {
-        await client.end();
-      } catch {
-        // already dead
-      }
-      client = null;
-    }
-    if (closed) return;
-    await Bun.sleep(1000);
-    void listen();
-  }
+  // LISTEN plumbing (connect + reconnect) is shared with the command
+  // stream via createPgChannelListener; only the subscriber map and the
+  // per-notification fanout are specific to this stream.
+  const listener = createPgChannelListener(
+    databaseUrl,
+    LOG_EVENTS_CHANNEL,
+    (payload) => {
+      if (!payload) return;
+      void pushEvent(prisma, subscribers, payload, log);
+    },
+    log,
+  );
 
   hubSingleton = {
     subscribe(deviceId: string, ws: ServerWebSocket) {
@@ -111,7 +77,7 @@ export function getLogStreamHub(
         subscribers.set(deviceId, set);
       }
       set.add(ws);
-      void listen();
+      listener.start();
     },
     unsubscribe(deviceId: string, ws: ServerWebSocket) {
       const set = subscribers.get(deviceId);
@@ -120,15 +86,7 @@ export function getLogStreamHub(
       if (set.size === 0) subscribers.delete(deviceId);
     },
     async close() {
-      closed = true;
-      if (client) {
-        try {
-          await client.end();
-        } catch {
-          // ignore
-        }
-        client = null;
-      }
+      await listener.close();
       subscribers.clear();
       hubSingleton = null;
     },
@@ -145,7 +103,7 @@ async function pushEvent(
   prisma: PrismaClient,
   subscribers: Map<string, Set<ServerWebSocket>>,
   eventId: string,
-  log: HubLog,
+  log: PgListenLog,
 ): Promise<void> {
   let row: Awaited<ReturnType<typeof prisma.rawLogEvent.findUnique>>;
   try {
@@ -195,11 +153,11 @@ async function pushEvent(
 export function createLogStreamRoutes(
   prisma: PrismaClient,
   jwt: JwtConfig,
-  options: { databaseUrl: string; log?: HubLog } = {
+  options: { databaseUrl: string; log?: PgListenLog } = {
     databaseUrl: process.env.DATABASE_URL ?? "",
   },
 ) {
-  const log: HubLog = options.log ?? { warn: (m, f) => console.warn(`[soulcloud-api] ${m}`, f ?? "") };
+  const log: PgListenLog = options.log ?? { warn: (m, f) => console.warn(`[soulcloud-api] ${m}`, f ?? "") };
   const hub = getLogStreamHub(prisma, options.databaseUrl, log);
 
   return new Elysia().ws("/v1/ws/logs", {

@@ -28,3 +28,12 @@ export const CREDENTIAL_REVOKED_CHANNEL = "soulcloud_credentials_revoked";
  * to the REST paging API when a notification is missed.
  */
 export const LOG_EVENTS_CHANNEL = "soulcloud_log_events";
+
+/**
+ * Command-result channel for the web console's realtime command stream
+ * (payload = the device_commands.batch_id whose result just landed).
+ * Fired inside the recording transaction, so PostgreSQL delivers it only
+ * after the commit. Lossy by design: the WS fanout re-queries the durable
+ * batch rows on every notification and the client falls back to REST.
+ */
+export const COMMAND_RESULT_CHANNEL = "soulcloud_command_results";

@@ -27,6 +27,8 @@ import {
 import { createAuthRoutes } from "./auth";
 import { createLoggingRoutes } from "./logging";
 import { createLogStreamRoutes } from "./log-stream";
+import { createCommandStreamRoutes } from "./command-stream";
+import { createOtaStreamRoutes } from "./ota-stream";
 import { createFirmwareRoutes } from "./firmware";
 import { createRolloutRoutes } from "./rollout";
 import { createMeRoutes } from "./me";
@@ -118,6 +120,8 @@ export function createApp(
     .use(createAuthRoutes(prisma, auth))
     .use(createLoggingRoutes(prisma, auth))
     .use(createLogStreamRoutes(prisma, auth))
+    .use(createCommandStreamRoutes(prisma, auth))
+    .use(createOtaStreamRoutes(prisma, auth))
     .use(createFirmwareRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createRolloutRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createMeRoutes(prisma, auth))
