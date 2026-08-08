@@ -2,7 +2,7 @@
  * CommandPanel tests: args JSON validation and the enqueue flow.
  */
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "../i18n/I18nContext";
@@ -23,6 +23,13 @@ const devicesApi = {
   bindFirmwareState: mock(async () => ({})),
 };
 mock.module("../api/devices", () => devicesApi);
+
+const commandStreamApi = {
+  useCommandStream: mock<(batchId?: string, opts?: { onUpdate?: () => void }) => "idle">(
+    () => "idle",
+  ),
+};
+mock.module("../api/commandStream", () => commandStreamApi);
 
 const { CommandPanel } = await import("./CommandPanel");
 
@@ -52,6 +59,7 @@ beforeEach(() => {
     summary: { device_completed: 1 },
     commands: [],
   });
+  commandStreamApi.useCommandStream.mockClear();
 });
 
 describe("CommandHistory", () => {
@@ -301,5 +309,28 @@ describe("CommandPanel form validation", () => {
       localStorage.getItem("soulcloud.cmdhistory.d1") ?? "[]",
     );
     expect(stored).toEqual(["reboot"]);
+  });
+});
+
+describe("CommandPanel stream", () => {
+  test("subscribes to the submitted batch and refreshes history on update", async () => {
+    renderPanel();
+    // no batch submitted yet -> the stream stays closed (undefined batch id)
+    expect(commandStreamApi.useCommandStream.mock.calls.at(-1)?.[0]).toBeUndefined();
+    await userEvent.type(screen.getByLabelText(/命令名|Command name/), "reboot");
+    await userEvent.click(screen.getByRole("button", { name: /发送到设备|Send to device/i }));
+    await waitFor(() => expect(devicesApi.postCommandBatch).toHaveBeenCalled());
+    // after a successful enqueue the hook receives the returned batch id
+    await waitFor(() =>
+      expect(commandStreamApi.useCommandStream.mock.calls.at(-1)?.[0]).toBe("b1"),
+    );
+    const before = devicesApi.fetchDeviceCommands.mock.calls.length;
+    act(() => {
+      commandStreamApi.useCommandStream.mock.calls.at(-1)?.[1]?.onUpdate?.();
+    });
+    // the pushed batch update invalidates the history query -> refetch
+    await waitFor(() =>
+      expect(devicesApi.fetchDeviceCommands.mock.calls.length).toBeGreaterThan(before),
+    );
   });
 });

@@ -2,7 +2,7 @@
  * RolloutDetailPage tests: per-state action buttons and phase stepper.
  */
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -17,6 +17,13 @@ const firmwareApi = {
   rollbackRollout: mock(async () => ({ rollback_job_id: null as string | null, target_devices: 0 })),
 };
 mock.module("../api/firmware", () => firmwareApi);
+
+const otaStreamApi = {
+  useOtaStream: mock<(jobId?: string, opts?: { onUpdate?: () => void }) => "idle">(
+    () => "idle",
+  ),
+};
+mock.module("../api/otaStream", () => otaStreamApi);
 
 const { RolloutDetailPage } = await import("./RolloutDetailPage");
 
@@ -85,6 +92,7 @@ beforeEach(() => {
   firmwareApi.abortRollout.mockClear();
   firmwareApi.rollbackRollout.mockClear();
   firmwareApi.rollbackRollout.mockResolvedValue({ rollback_job_id: null, target_devices: 0 });
+  otaStreamApi.useOtaStream.mockClear();
 });
 
 describe("RolloutDetailPage", () => {
@@ -214,5 +222,26 @@ describe("RolloutDetailPage", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: /暂停|Pause|Пауза/i }));
     await waitFor(() => expect(screen.getByText(/wrong_state/)).not.toBeNull());
+  });
+});
+
+describe("RolloutDetailPage stream", () => {
+  test("subscribes to the active phase job and refetches the rollout on update", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /暂停|Pause|Пауза/i }),
+      ).not.toBeNull(),
+    );
+    // the active phase (state === "active") carries job_id "j2"
+    expect(otaStreamApi.useOtaStream.mock.calls.at(-1)?.[0]).toBe("j2");
+    const before = firmwareApi.fetchRollout.mock.calls.length;
+    act(() => {
+      otaStreamApi.useOtaStream.mock.calls.at(-1)?.[1]?.onUpdate?.();
+    });
+    // the pushed update invalidates the rollout query -> refetch
+    await waitFor(() =>
+      expect(firmwareApi.fetchRollout.mock.calls.length).toBeGreaterThan(before),
+    );
   });
 });

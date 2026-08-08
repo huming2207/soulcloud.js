@@ -116,5 +116,41 @@ agent-browser --session "$SESSION" wait --text "No releases" --timeout 20000
 agent-browser --session "$SESSION" open "$WEB/rollouts"
 agent-browser --session "$SESSION" wait --text "No rollouts" --timeout 20000
 
+# logs page: device picker + live xterm terminal view (real-browser check)
+# resolve the E2E device's UUID from the API (creation may 409 on re-runs)
+DEV_ID=$(curl -s "$API/v1/projects/$PID/devices?limit=100&offset=0" \
+  -H "authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(next((x['device_id'] for x in d.get('devices', []) if x['device_uid'] == 'e2e-uid-1'), ''))
+except Exception:
+    print('')
+" 2>/dev/null || true)
+[ -n "$DEV_ID" ] || { echo "[web-e2e] e2e-uid-1 missing from the device list"; exit 1; }
+
+agent-browser --session "$SESSION" open "$WEB/logs"
+agent-browser --session "$SESSION" wait --text "Select a device to view the decoded log stream" --timeout 20000
+# the device select stays disabled until its list has loaded; wait for it
+agent-browser --session "$SESSION" wait --fn "document.querySelectorAll('div[role=combobox][aria-disabled]').length === 0" --timeout 20000
+# MUI Select: click the device combobox (the layout header has its own
+# project combobox, so match by accessible name), then pick the E2E device
+agent-browser --session "$SESSION" find role combobox click --name Device
+agent-browser --session "$SESSION" wait '[role="option"]' --timeout 10000
+agent-browser --session "$SESSION" click "[role=\"option\"][data-value=\"$DEV_ID\"]"
+# wait out the menu close transition before interacting again
+agent-browser --session "$SESSION" wait --fn "!document.querySelector('[role=listbox]')" --timeout 10000
+# table view renders the (empty) history for the E2E device
+agent-browser --session "$SESSION" wait --text "No log events" --timeout 20000
+# switch to the live xterm terminal view
+agent-browser --session "$SESSION" find role button click --name Terminal
+# xterm rendered: .xterm container with laid-out .xterm-screen and the
+# xterm.css rules applied (computed position relative; a static/zero-size
+# terminal means the xterm CSS is missing from the bundle)
+agent-browser --session "$SESSION" wait --fn "(() => { const x = document.querySelector('[data-testid=log-terminal] .xterm'); const s = x && document.querySelector('[data-testid=log-terminal] .xterm-screen'); return !!x && getComputedStyle(x).position === 'relative' && !!s && s.getBoundingClientRect().width > 0 })()" --timeout 20000
+# live WebSocket log stream reached the server ('ready' frame -> "Connected")
+agent-browser --session "$SESSION" wait --text Connected --timeout 30000
+agent-browser --session "$SESSION" screenshot "$SHOT_DIR/e2e-terminal.png" > /dev/null
+
 agent-browser --session "$SESSION" screenshot "$SHOT_DIR/e2e-final.png" > /dev/null
 echo "[web-e2e] done"

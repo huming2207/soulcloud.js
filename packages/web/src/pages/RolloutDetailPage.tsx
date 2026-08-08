@@ -21,6 +21,7 @@ import {
   rollbackRollout,
 } from "../api/firmware";
 import { errorMessage } from "../api/http";
+import { useOtaStream } from "../api/otaStream";
 import { CardSkeleton, QueryError } from "../components/QueryState";
 import type { OtaTargetState, RolloutState } from "../api/types";
 import { useI18n } from "../i18n/I18nContext";
@@ -67,7 +68,19 @@ export function RolloutDetailPage() {
     queryKey: ["rollout", rolloutId],
     queryFn: () => fetchRollout(rolloutId ?? ""),
     enabled: Boolean(rolloutId),
-    refetchInterval: 5000,
+  });
+
+  // Live updates: subscribe to the active phase's OTA job; any push means
+  // phase progress moved, so refetch the rollout detail (phase gating and
+  // state transitions live at the rollout layer). The hook reconnects
+  // automatically when the active phase's job changes. REST stays the
+  // initial load.
+  const activeJobId =
+    rollout.data?.phases.find((p) => p.state === "active")?.job_id ?? undefined;
+  useOtaStream(activeJobId, {
+    onUpdate: () => {
+      queryClient.invalidateQueries({ queryKey: ["rollout", rolloutId] });
+    },
   });
 
   if (!rolloutId) return null;

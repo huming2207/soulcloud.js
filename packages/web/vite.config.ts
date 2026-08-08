@@ -10,7 +10,9 @@ import react from "@vitejs/plugin-react";
 const apiTarget = process.env.VITE_API_TARGET ?? "http://localhost:8080";
 
 const proxy = {
-  "/v1": apiTarget,
+  // ws: true so WebSocket upgrades (/v1/ws/logs, /v1/ws/commands, /v1/ws/ota)
+  // reach the API through the dev/preview proxy, not just plain HTTP
+  "/v1": { target: apiTarget, ws: true },
   "/health": apiTarget,
 };
 

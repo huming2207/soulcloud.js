@@ -1,5 +1,5 @@
 import { useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
 import Paper from "@mui/material/Paper";
@@ -13,8 +13,9 @@ import TableRow from "@mui/material/TableRow";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { fetchOtaJob } from "../api/firmware";
+import { useOtaStream } from "../api/otaStream";
 import { CardSkeleton, QueryError } from "../components/QueryState";
-import type { OtaTargetState } from "../api/types";
+import type { OtaJobDetail, OtaTargetState } from "../api/types";
 import { useI18n } from "../i18n/I18nContext";
 import type { DictKey } from "../i18n/dictionary";
 
@@ -53,15 +54,29 @@ function formatTime(iso: string | null): string {
     : d.toLocaleString("zh-CN", { hour12: false });
 }
 
-/** OTA job detail: per-device target states, polled while active. */
+/** OTA job detail: per-device target states, live via WS, REST as fallback. */
 export function OtaJobPage() {
   const { t } = useI18n();
   const { jobId } = useParams<{ jobId: string }>();
+  const queryClient = useQueryClient();
   const job = useQuery({
     queryKey: ["ota-job", jobId],
     queryFn: () => fetchOtaJob(jobId ?? ""),
     enabled: Boolean(jobId),
-    refetchInterval: 5000,
+    // WS frames drive live updates; the long REST poll only covers pushes
+    // missed while the socket was down (the server does not replay state
+    // on reconnect, so without it a missed final update would leave the
+    // page stale indefinitely).
+    refetchInterval: 30_000,
+  });
+
+  // Live updates: WS frames mirror the REST detail (plus a derived
+  // job-level `state` the page does not render), so the update replaces
+  // the query cache entry as-is. REST stays the initial load.
+  useOtaStream(jobId, {
+    onUpdate: (update) => {
+      queryClient.setQueryData<OtaJobDetail>(["ota-job", jobId], update);
+    },
   });
 
   if (!jobId) return null;

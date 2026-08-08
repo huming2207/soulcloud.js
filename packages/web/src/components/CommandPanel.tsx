@@ -26,6 +26,7 @@ import {
   postCommandBatch,
 } from "../api/devices";
 import { errorMessage } from "../api/http";
+import { useCommandStream } from "../api/commandStream";
 import type { CommandState } from "../api/types";
 import { useI18n } from "../i18n/I18nContext";
 import { useCommandHistory } from "../hooks/useCommandHistory";
@@ -59,17 +60,39 @@ function formatArgs(args: unknown): string {
 /** Command issue form + history table + batch detail dialog for one device. */
 export function CommandPanel({ deviceId }: { deviceId: string }) {
   const queryClient = useQueryClient();
+  // batch id of the last successful enqueue; the stream stays closed
+  // (useCommandStream with an undefined batch id does not connect)
+  const [recentBatchId, setRecentBatchId] = useState<string | undefined>(undefined);
   const refreshHistory = () =>
     queryClient.invalidateQueries({ queryKey: ["commands", deviceId] });
+
+  // Live updates: any device state change in the submitted batch refreshes
+  // the history list immediately; the 10s poll stays as fallback.
+  useCommandStream(recentBatchId, {
+    onUpdate: () => refreshHistory(),
+  });
+
   return (
     <Stack spacing={3}>
-      <CommandForm deviceId={deviceId} onEnqueued={refreshHistory} />
+      <CommandForm
+        deviceId={deviceId}
+        onEnqueued={(batchId) => {
+          setRecentBatchId(batchId);
+          refreshHistory();
+        }}
+      />
       <CommandHistory deviceId={deviceId} />
     </Stack>
   );
 }
 
-function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: () => void }) {
+function CommandForm({
+  deviceId,
+  onEnqueued,
+}: {
+  deviceId: string;
+  onEnqueued: (batchId: string) => void;
+}) {
   const { t } = useI18n();
   const history = useCommandHistory(deviceId);
   const [cmd, setCmd] = useState("");
@@ -113,7 +136,7 @@ function CommandForm({ deviceId, onEnqueued }: { deviceId: string; onEnqueued: (
       history.commit(cmd);
       setArgsText("");
       setTimeoutText("");
-      onEnqueued();
+      onEnqueued(res.batch_id);
     } catch (err) {
       setError(errorMessage(err));
     } finally {

@@ -48,9 +48,11 @@ aedes.on("connectionError", (client, err) => {
   logger.warn("connection error", { clientId: client?.id, error: err.message });
 });
 aedes.on("client", (client) => {
-  client.on("close", () => {
-    logger.info("client closed", { clientId: client.id });
-  });
+  // NOTE: aedes Client has no "close" event (the type definition is
+  // right) - disconnects surface on the broker as "clientDisconnect"
+});
+aedes.on("clientDisconnect", (client) => {
+  logger.info("client disconnected", { clientId: client.id });
 });
 attachDispatch(aedes, prisma, logger, {
   maxPacketBytes: config.UPLINK_MAX_PACKET_BYTES,
