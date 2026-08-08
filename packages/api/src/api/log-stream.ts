@@ -36,6 +36,7 @@ import {
 } from "@soulcloud/core";
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
 import { createPgChannelListener, type PgListenLog } from "../pg-listen";
+import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
 
 const WS_PROTOCOL = "soulcloud";
 
@@ -289,6 +290,8 @@ function jwtExp(token: string): number | undefined {
 
 /** Tracks per-socket exp timers so close() can clean them up. */
 const expTimers = new WeakMap<ServerWebSocket, ReturnType<typeof setInterval>>();
+/** Tracks per-socket membership re-check stops (close handler cleans up). */
+const accessCleanups = new WeakMap<ServerWebSocket, () => void>();
 
 /** Creates the realtime log stream route (attached to the API app). */
 export function createLogStreamRoutes(
@@ -368,10 +371,24 @@ export function createLogStreamRoutes(
       }
       const socket = ws as unknown as ServerWebSocket;
       hub.subscribe(deviceId, socket);
-      // M2: close once the handshake token expired (the client hook
-      // reconnects with a fresh token, so this self-heals)
+      // membership re-check (Kimi round-8 low): a user removed from the
+      // project must stop receiving frames even on an established socket
       const protocol = data.headers?.["sec-websocket-protocol"] ?? "";
       const [, token] = protocol.split(",").map((s) => s.trim());
+      const userId = jwtSubject(token);
+      if (userId) {
+        void prisma.device
+          .findUnique({ where: { id: deviceId }, select: { projectId: true } })
+          .then((device) => {
+            if (!device) return;
+            accessCleanups.set(
+              socket,
+              scheduleMembershipCheck(socket, prisma, userId, [device.projectId], expCheckIntervalMs),
+            );
+          });
+      }
+      // M2: close once the handshake token expired (the client hook
+      // reconnects with a fresh token, so this self-heals)
       const exp = token ? jwtExp(token) : undefined;
       if (typeof exp === "number" && Number.isFinite(exp)) {
         const check = () => {
@@ -407,6 +424,11 @@ export function createLogStreamRoutes(
     },
     close(ws) {
       const socket = ws as unknown as ServerWebSocket;
+      const stop = accessCleanups.get(socket);
+      if (stop) {
+        stop();
+        accessCleanups.delete(socket);
+      }
       const timer = expTimers.get(socket);
       if (timer) {
         clearInterval(timer);

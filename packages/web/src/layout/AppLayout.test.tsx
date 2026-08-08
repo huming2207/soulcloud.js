@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { ThemeProvider } from "@mui/material/styles";
+import { baseTheme } from "../theme";
 import { I18nProvider } from "../i18n/I18nContext";
 
 const authCtx = {
@@ -37,16 +39,19 @@ const { AppLayout } = await import("./AppLayout");
 
 function renderLayout() {
   return render(
-    <I18nProvider>
+    <ThemeProvider theme={baseTheme}>
+      <I18nProvider>
       <MemoryRouter initialEntries={["/devices"]}>
         <Routes>
           <Route element={<AppLayout />}>
             <Route path="/devices" element={<div>DEVICES-PAGE</div>} />
             <Route path="/" element={<div>HOME-PAGE</div>} />
           </Route>
+          <Route path="/login" element={<div>LOGIN-PAGE</div>} />
         </Routes>
       </MemoryRouter>
-    </I18nProvider>,
+      </I18nProvider>
+    </ThemeProvider>,
   );
 }
 
@@ -81,11 +86,27 @@ describe("AppLayout", () => {
     expect(screen.getAllByText(/Devices/i).length).toBeGreaterThan(1);
   });
 
-  test("logout calls the auth logout", async () => {
+  test("logout calls the auth logout and navigates to /login", async () => {
     renderLayout();
     await userEvent.click(screen.getByRole("button", { name: /账户|Account|Аккаунт/i }));
     await userEvent.click(screen.getByRole("menuitem", { name: /退出登录|Log out|Выйти/i }));
     expect(authCtx.logout).toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByText("LOGIN-PAGE")).not.toBeNull());
+  });
+
+  test("dark mode toggle flips the theme and the button label", async () => {
+    renderLayout();
+    const toggle = screen.getByRole("button", {
+      name: /切换到深色模式|Switch to dark mode|Тёмная тема|Темна тема|Tema scura/i,
+    });
+    await userEvent.click(toggle);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", {
+          name: /切换到浅色模式|Switch to light mode|Светлая тема|Світла тема|Tema chiara/i,
+        }),
+      ).not.toBeNull(),
+    );
   });
 });
 
@@ -93,7 +114,8 @@ describe("AppLayout page titles and project switching", () => {
   test("detail routes get specific app bar titles", () => {
     function renderAt(path: string) {
       return render(
-        <I18nProvider>
+        <ThemeProvider theme={baseTheme}>
+          <I18nProvider>
           <MemoryRouter initialEntries={[path]}>
             <Routes>
               <Route element={<AppLayout />}>
@@ -103,7 +125,8 @@ describe("AppLayout page titles and project switching", () => {
               </Route>
             </Routes>
           </MemoryRouter>
-        </I18nProvider>,
+          </I18nProvider>
+        </ThemeProvider>,
       );
     }
     const first = renderAt("/devices/d1");

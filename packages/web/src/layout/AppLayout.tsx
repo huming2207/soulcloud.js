@@ -205,6 +205,7 @@ export function AppLayout() {
           <Tooltip title={isDark ? t("layout.switchLight") : t("layout.switchDark")}>
             <IconButton
               color="inherit"
+              aria-label={isDark ? t("layout.switchLight") : t("layout.switchDark")}
               onClick={() => setMode(isDark ? "light" : "dark")}
             >
               {isDark ? <LightModeIcon /> : <DarkModeIcon />}

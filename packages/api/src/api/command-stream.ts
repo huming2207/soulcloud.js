@@ -39,6 +39,7 @@ import {
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
 import { loadCommandBatchDetail } from "./devices";
 import { createPgChannelListener, type PgListenLog } from "../pg-listen";
+import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
 
 const WS_PROTOCOL = "soulcloud";
 
@@ -243,6 +244,7 @@ export function createCommandStreamRoutes(
   // expires so the client hook reconnects with a fresh token
   const expiryByWs = new Map<ServerWebSocket, number>();
   const expiryTimers = new Map<ServerWebSocket, ReturnType<typeof setInterval>>();
+  const accessCleanups = new WeakMap<ServerWebSocket, () => void>();
 
   function canonicalId(raw: string | undefined): string | null {
     if (!raw) return null;
@@ -346,8 +348,34 @@ export function createCommandStreamRoutes(
         ws.close(4401, "unauthorized");
         return;
       }
-      hub.subscribe(batchId, ws as unknown as ServerWebSocket);
-      armExpiryCheck(ws as unknown as ServerWebSocket);
+      const socket = ws as unknown as ServerWebSocket;
+      hub.subscribe(batchId, socket);
+      // membership re-check (Kimi round-8 low): a user removed from any
+      // of the batch's projects stops receiving frames
+      const protocol = (ws.data as unknown as { headers?: Record<string, unknown> }).headers?.[
+        "sec-websocket-protocol"
+      ];
+      const token = String(protocol ?? "")
+        .split(",")
+        .map((s) => s.trim())[1];
+      const userId = jwtSubject(token);
+      if (userId) {
+        void loadCommandBatchDetail(prisma, batchId)
+          .then((loaded) => {
+            // the socket may have closed while the detail loaded; a
+            // WeakMap entry would still leak via the closure otherwise
+            if (!loaded || socket.readyState !== 1) return;
+            accessCleanups.set(
+              socket,
+              scheduleMembershipCheck(socket, prisma, userId, [...loaded.projects], expCheckIntervalMs),
+            );
+          })
+          .catch(() => {
+            // DB hiccup during scheduling: the M2 expiry check still
+            // bounds the connection; membership re-check is best-effort
+          });
+      }
+      armExpiryCheck(socket);
       ws.send(JSON.stringify({ type: "ready", batch_id: batchId }));
     },
     message(ws, message) {
@@ -366,7 +394,13 @@ export function createCommandStreamRoutes(
         (ws.data as { query?: { batch_id?: string } }).query?.batch_id,
       );
       if (batchId) hub.unsubscribe(batchId, ws as unknown as ServerWebSocket);
-      clearExpiry(ws as unknown as ServerWebSocket);
+      const socket = ws as unknown as ServerWebSocket;
+      const stop = accessCleanups.get(socket);
+      if (stop) {
+        stop();
+        accessCleanups.delete(socket);
+      }
+      clearExpiry(socket);
     },
   });
 }

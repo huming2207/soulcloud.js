@@ -269,13 +269,14 @@ afterAll(async () => {
   await (
     await getOtaStreamHub(prisma, process.env.DATABASE_URL ?? "", { warn: () => {} })
   ).close();
-  // force-stop the underlying Bun server with a bounded race: a lingering
-  // WebSocket teardown must not hang the whole suite
-  await Bun.sleep(500);
-  await Promise.race([
-    (server.server as unknown as { stop: (force?: boolean) => Promise<void> }).stop(true),
-    Bun.sleep(2000).then(() => console.warn("[afterAll] server stop timed out")),
-  ]);
+  // NOTE: server.stop() is intentionally NOT called here. Bun 1.3.13's
+  // stop() hangs on connections the SERVER closed (the M2 expiry kick and
+  // the M3 cap rejection close(4401) from the subscribe handler), even
+  // after the client observed close and closed its side. Every socket in
+  // this file is closed explicitly in its test; the leftover server just
+  // dies with the process (bun test --isolate gives this file its own
+  // process, so nothing leaks to other files). Same workaround as
+  // log-stream.test.ts.
   await prisma.otaTarget.deleteMany({
     where: { job: { projectId: { in: [projectId, otherProjectId] } } },
   });
@@ -349,8 +350,11 @@ describe("GET /v1/ws/ota", () => {
   test("expired access token: the connection is closed (M2)", async () => {
     // a short-lived (1s) access token for the existing test user; the
     // expiry check must close the connection once it expires
+    // 2s TTL: iat is floored to the integer second, so a 1s TTL leaves
+    // only a few ms on the second boundary; the 200ms env check still
+    // closes the socket well inside the 4s race window
     const shortToken = await signAccessToken(
-      { ...TEST_JWT, accessTtlSeconds: 1 },
+      { ...TEST_JWT, accessTtlSeconds: 2 },
       { sub: userId, username: "otastream-user" },
     );
     const client = connectWs(wsUrl(jobId), [WS_PROTOCOL, shortToken]);
@@ -506,4 +510,42 @@ describe("GET /v1/ws/ota", () => {
     expect(client.messages.filter(isOtaFrame).length).toBe(before);
     client.ws.close();
   });
+  test("removed project membership closes the connection (re-check)", async () => {
+    const app6 = createApp(prisma, TEST_JWT, undefined, {
+      debounceMs: 25,
+      expCheckIntervalMs: 100,
+    });
+    const server6 = app6.listen({ port: 0, hostname: "127.0.0.1" });
+    const base6 = `ws://127.0.0.1:${server6.server!.port}`;
+    try {
+      const client = connectWs(`${base6}/v1/ws/ota?job_id=${jobId}`, [
+        WS_PROTOCOL,
+        accessToken,
+      ]);
+      expect(await waitForSettle(client)).toBe("open");
+      await waitForMessage(client, (m) => m.type === "ready");
+
+      // revoke the membership; the 100ms re-check must close the socket
+      await prisma.userProject.delete({
+        where: { userId_projectId: { userId, projectId } },
+      });
+      const closed = await Promise.race([
+        client.closed.then(() => true),
+        Bun.sleep(2000).then(() => false),
+      ]);
+      expect(closed).toBe(true);
+      expect(client.closeCode).toBe(4403);
+      client.ws.close();
+      await Bun.sleep(100);
+    } finally {
+      // restore the membership for the rest of the suite; skip
+      // server.stop() (Bun server-initiated-close quirk)
+      await prisma.userProject.upsert({
+        where: { userId_projectId: { userId, projectId } },
+        update: {},
+        create: { userId, projectId },
+      });
+    }
+  });
+
 });

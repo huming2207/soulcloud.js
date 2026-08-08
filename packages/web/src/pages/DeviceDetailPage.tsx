@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Alert from "@mui/material/Alert";
@@ -12,10 +12,13 @@ import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogContentText from "@mui/material/DialogContentText";
 import DialogTitle from "@mui/material/DialogTitle";
+import IconButton from "@mui/material/IconButton";
 import Stack from "@mui/material/Stack";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Tooltip from "@mui/material/Tooltip";
+import CheckIcon from "@mui/icons-material/Check";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import Typography from "@mui/material/Typography";
 import { fetchDevice, fetchDeviceFirmwareState, revokeCredentials } from "../api/devices";
 import { errorMessage } from "../api/http";
@@ -121,8 +124,8 @@ function OverviewTab({ deviceId }: { deviceId: string }) {
             {t("detail.deviceInfo")}
           </Typography>
           <InfoRow label="assigned_id" value={d.assigned_id} />
-          <InfoRow label="device_uid" value={d.device_uid} monospace />
-          <InfoRow label="project_id" value={d.project_id} monospace small />
+          <InfoRow label="device_uid" value={d.device_uid} monospace copyable />
+          <InfoRow label="project_id" value={d.project_id} monospace small copyable />
           <InfoRow label={t("detail.nextSeq")} value={d.next_command_sequence} monospace />
           <InfoRow
             label={t("device.credentials")}
@@ -224,12 +227,41 @@ function InfoRow({
   value,
   monospace = false,
   small = false,
+  copyable = false,
 }: {
   label: string;
   value: React.ReactNode;
   monospace?: boolean;
   small?: boolean;
+  /** Adds a copy-to-clipboard button (string values only). */
+  copyable?: boolean;
 }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // clear the copied-state timer on unmount (cosmetic, but keeps the
+  // timer from firing after the row is gone)
+  useEffect(
+    () => () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+  const copyableString = copyable && typeof value === "string" ? value : null;
+
+  const handleCopy = async () => {
+    if (!copyableString) return;
+    try {
+      await navigator.clipboard.writeText(copyableString);
+      setCopied(true);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard unavailable (permissions/secure-context): keep the
+      // value visible; the tooltip still lets the user select it
+    }
+  };
+
   return (
     <Box sx={{ display: "flex", gap: 2, py: 0.5 }}>
       <Typography
@@ -240,15 +272,33 @@ function InfoRow({
         {label}
       </Typography>
       <Tooltip title={typeof value === "string" ? value : ""} placement="top">
-        <Box
-          sx={{
-            fontFamily: monospace ? "monospace" : undefined,
-            fontSize: small ? 12 : 14,
-            wordBreak: "break-all",
-            minWidth: 0,
-          }}
-        >
-          {value}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}>
+          <Box
+            component="span"
+            sx={{
+              fontFamily: monospace ? "monospace" : undefined,
+              fontSize: small ? 12 : 14,
+              wordBreak: "break-all",
+              minWidth: 0,
+            }}
+          >
+            {value}
+          </Box>
+          {copyableString !== null && (
+            <Tooltip title={copied ? t("detail.copied") : t("detail.copy")}>
+              <IconButton
+                size="small"
+                aria-label={t("detail.copyValue", { value: copyableString })}
+                onClick={() => void handleCopy()}
+              >
+                {copied ? (
+                  <CheckIcon fontSize="inherit" color="success" />
+                ) : (
+                  <ContentCopyIcon fontSize="inherit" />
+                )}
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
       </Tooltip>
     </Box>

@@ -1,8 +1,10 @@
 # Testing & Quality
 
-**Baseline**: 398 backend tests (isolated `soulcloud_test` DB) + 115 web
-unit tests green, `tsc --noEmit` clean. E2E scripts (command loop, log
-ingestion, OTA, rollout, web <-> API) pass.
+**Baseline**: 524 backend tests across 42 files (isolated
+`soulcloud_test` DB, `--isolate` per-file processes) + 201 web unit
+tests across 33 files, `tsc --noEmit` clean, oxlint clean, and a CI
+hard-coded-CJK scan (scripts/scan-hardcoded-i18n.sh) green. E2E scripts
+(command loop, log ingestion, OTA, rollout, web <-> API) pass.
 
 ## Strategy
 
@@ -13,6 +15,17 @@ ingestion, OTA, rollout, web <-> API) pass.
 - **Integration tests** against a real PostgreSQL (local Docker or CI
   service): command queue state machine, API endpoints, broker + dispatch,
   LISTEN/NOTIFY.
+- **WebSocket stream tests**: real listeners on random ports + real
+  `pg_notify` triggers — handshake auth/membership rejection paths,
+  debounce merging, max-wait, token-expiry close (4401), connection
+  caps, subscriber-key normalization, and "no subscribers never touches
+  the database".
+- **Terminal sanitize tests**: C0/C1 control characters are stripped
+  from device-controlled text before `writeln` (escape-sequence
+  injection cannot reach xterm).
+- **CI guardrails**: actionlint on `ci.yml` (pinned v1.7.12) and a
+  static scan that fails the build on hard-coded CJK outside the i18n
+  dictionary.
 - **Real-device-equivalent tests**: a mini MQTT-over-WebSocket client
   (`packages/broker/tests/helpers/mqtt-client.ts`) built on Bun's native
   WebSocket + `mqtt-packet` (mqtt.js's WS transport is broken under Bun).
@@ -68,10 +81,10 @@ packages/broker/tests/mqtt/
 parallel jobs:
 
 1. **backend** (postgres service): install → `db:generate` → `db:deploy`
-   → `bun run typecheck` → `bash scripts/test.sh` (398 tests on the
+   → `bun run typecheck` → `bash scripts/test.sh` (524 tests on the
    isolated `soulcloud_test` database) → both-process E2E
    (`scripts/run-e2e.sh`)
-2. **web** (no database): install → web typecheck → 115 unit tests
+2. **web** (no database): install → web typecheck → 201 unit tests
    (`bun run --cwd packages/web test`) → production build
 3. **web-e2e** (postgres service): install → `db:generate`/`db:deploy`
    → install agent-browser (Chrome for Testing) →
@@ -84,8 +97,8 @@ parallel jobs:
   happy-dom globals (injected by `src/test-setup.ts`), React Testing
   Library + user-event. Files run with `--isolate` so module mocks
   (`mock.module`) do not leak across files.
-- **Coverage**: `bun run --cwd packages/web test --coverage` — 76% lines /
-  91% statements across 27 files (i18n dictionary, axios auth flow,
+- **Coverage**: `bun run --cwd packages/web test --coverage` — 94% lines /
+  85% funcs across 33 files (i18n dictionary, axios auth flow,
   contexts, every page/dialog, API helpers, theme).
 - **Browser E2E**: `scripts/web-e2e-ci.sh` (needs agent-browser on PATH)
   — starts API + Vite, seeds a user, creates a device via the API, then

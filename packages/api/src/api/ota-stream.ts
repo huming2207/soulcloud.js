@@ -36,6 +36,7 @@ import type { ServerWebSocket } from "bun";
 import { decodeJwt } from "jose";
 import { OTA_NOTIFY_CHANNEL, type JwtConfig, type PrismaClient } from "@soulcloud/core";
 import { createPgChannelListener } from "../pg-listen";
+import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
 
 const WS_PROTOCOL = "soulcloud";
@@ -305,6 +306,7 @@ export function createOtaStreamRoutes(
   // expires so the client hook reconnects with a fresh token
   const expiryByWs = new Map<ServerWebSocket, number>();
   const expiryTimers = new Map<ServerWebSocket, ReturnType<typeof setInterval>>();
+  const accessCleanups = new WeakMap<ServerWebSocket, () => void>();
 
   function canonicalId(raw: string | undefined): string | null {
     if (!raw) return null;
@@ -402,8 +404,35 @@ export function createOtaStreamRoutes(
         ws.close(4401, "unauthorized");
         return;
       }
-      hub.subscribe(jobId, ws as unknown as ServerWebSocket);
-      armExpiryCheck(ws as unknown as ServerWebSocket);
+      const socket = ws as unknown as ServerWebSocket;
+      hub.subscribe(jobId, socket);
+      // membership re-check (Kimi round-8 low): a user removed from the
+      // job's project stops receiving frames
+      const protocol = (ws.data as unknown as { headers?: Record<string, unknown> }).headers?.[
+        "sec-websocket-protocol"
+      ];
+      const token = String(protocol ?? "")
+        .split(",")
+        .map((s) => s.trim())[1];
+      const userId = jwtSubject(token);
+      if (userId) {
+        void prisma.otaJob
+          .findUnique({ where: { id: jobId }, select: { projectId: true } })
+          .then((job) => {
+            // the socket may have closed while the job loaded; a
+            // WeakMap entry would still leak via the closure otherwise
+            if (!job || socket.readyState !== 1) return;
+            accessCleanups.set(
+              socket,
+              scheduleMembershipCheck(socket, prisma, userId, [job.projectId], expCheckIntervalMs),
+            );
+          })
+          .catch(() => {
+            // DB hiccup during scheduling: the M2 expiry check still
+            // bounds the connection; membership re-check is best-effort
+          });
+      }
+      armExpiryCheck(socket);
       ws.send(JSON.stringify({ type: "ready", job_id: jobId }));
     },
     message(ws, message) {
@@ -420,7 +449,13 @@ export function createOtaStreamRoutes(
     close(ws) {
       const jobId = canonicalId((ws.data as { query?: { job_id?: string } }).query?.job_id);
       if (jobId) hub.unsubscribe(jobId, ws as unknown as ServerWebSocket);
-      clearExpiry(ws as unknown as ServerWebSocket);
+      const socket = ws as unknown as ServerWebSocket;
+      const stop = accessCleanups.get(socket);
+      if (stop) {
+        stop();
+        accessCleanups.delete(socket);
+      }
+      clearExpiry(socket);
     },
   });
 }

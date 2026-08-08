@@ -123,6 +123,35 @@ describe("DeviceDetailPage", () => {
   });
 });
 
+  test("copy buttons write the identifier to the clipboard", async () => {
+    const writeText = mock(async () => {});
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    try {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("sensor-a")).not.toBeNull());
+    const copyUid = screen.getByRole("button", {
+      name: /复制 uid-1|Copy uid-1|Копировать uid-1|Копіювати uid-1|Copia uid-1/i,
+    });
+    await userEvent.click(copyUid);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("uid-1"));
+    // project id row is copyable too
+    const copyPid = screen.getByRole("button", {
+      name: /复制 p1|Copy p1|Копировать p1|Копіювати p1|Copia p1/i,
+    });
+    await userEvent.click(copyPid);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("p1"));
+    } finally {
+      Object.defineProperty(navigator, "clipboard", {
+        value: originalClipboard,
+        configurable: true,
+      });
+    }
+  });
+
 describe("DeviceDetailPage firmware state fallbacks", () => {
   test("shows the no-firmware hint when the state query 404s", async () => {
     devicesApi.fetchDeviceFirmwareState.mockRejectedValue({

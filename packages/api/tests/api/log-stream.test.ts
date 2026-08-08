@@ -71,6 +71,8 @@ interface WsClient {
   open: Promise<void>;
   /** Resolves when the socket closes (handshake rejected or closed). */
   closed: Promise<void>;
+  /** The close code observed by the client (0 until closed). */
+  closeCode: number;
 }
 
 function connectWs(url: string, protocols?: string[]): WsClient {
@@ -79,12 +81,16 @@ function connectWs(url: string, protocols?: string[]): WsClient {
   let resolveClosed!: () => void;
   const open = new Promise<void>((r) => (resolveOpen = r));
   const closed = new Promise<void>((r) => (resolveClosed = r));
+  let closeCode = 0;
   const ws = new WebSocket(url, protocols);
   ws.onopen = () => resolveOpen();
   ws.onmessage = (ev) => messages.push(String(ev.data));
   ws.onerror = () => {};
-  ws.onclose = () => resolveClosed();
-  return { ws, messages, open, closed };
+  ws.onclose = (ev) => {
+    closeCode = ev.code;
+    resolveClosed();
+  };
+  return { ws, messages, open, closed, closeCode };
 }
 
 /** Waits until the connection either opened or closed (or timed out). */
@@ -447,9 +453,12 @@ describe("GET /v1/ws/logs", () => {
     const server4 = app4.listen({ port: 0, hostname: "127.0.0.1" });
     const base4 = `ws://127.0.0.1:${server4.server!.port}`;
     try {
-      // 1-second TTL token: the expiry check must close the socket
+      // short-lived token: iat is floored to the integer second, so a 1s
+      // TTL leaves as little as a few ms on the second boundary; 2s keeps
+      // the handshake safe while the 100ms expiry check still closes the
+      // socket well inside the 3s race window
       const shortToken = await signAccessToken(
-        { ...TEST_JWT, accessTtlSeconds: 1 },
+        { ...TEST_JWT, accessTtlSeconds: 2 },
         { sub: registeredUserId, username: "logstream-user" },
       );
       const client = connectWs(`${base4}/v1/ws/logs?device_id=${deviceId}`, [
@@ -511,4 +520,45 @@ describe("GET /v1/ws/logs", () => {
       await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
     }
   });
+
+  test("removed project membership closes the connection (re-check)", async () => {
+    await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
+    const app6 = createApp(prisma, TEST_JWT, 900, {
+      debounceMs: 60,
+      expCheckIntervalMs: 100,
+    });
+    const server6 = app6.listen({ port: 0, hostname: "127.0.0.1" });
+    const base6 = `ws://127.0.0.1:${server6.server!.port}`;
+    try {
+      const client = connectWs(`${base6}/v1/ws/logs?device_id=${deviceId}`, [
+        WS_PROTOCOL,
+        accessToken,
+      ]);
+      expect(await waitForSettle(client)).toBe("open");
+      await waitForMessage(client, (m) => m.type === "ready");
+
+      // revoke the membership; the 100ms re-check must close the socket
+      await prisma.userProject.delete({
+        where: { userId_projectId: { userId: registeredUserId, projectId } },
+      });
+      const closed = await Promise.race([
+        client.closed.then(() => true),
+        Bun.sleep(2000).then(() => false),
+      ]);
+      expect(closed).toBe(true);
+      expect(client.closeCode).toBe(4403);
+      client.ws.close();
+      await Bun.sleep(100);
+    } finally {
+      // restore the membership for the rest of the suite (and skip
+      // server.stop(): same Bun server-initiated-close quirk as M2/M3)
+      await prisma.userProject.upsert({
+        where: { userId_projectId: { userId: registeredUserId, projectId } },
+        update: {},
+        create: { userId: registeredUserId, projectId },
+      });
+      await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
+    }
+  });
 });
+

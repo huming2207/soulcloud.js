@@ -240,8 +240,6 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // stop(true): Bun's server.stop() defaults to waiting for active
-  // connections, which would hang on lingering WebSockets
   // close the process-wide LISTEN session first (the singleton is reset
   // to null, so a fresh hub is created if anything else subscribes later)
   await (
@@ -250,13 +248,14 @@ afterAll(async () => {
   await prisma.deviceCommand.deleteMany({
     where: { batchId: { in: [batchId, otherBatchId] } },
   });
-  // let client-side close() frames propagate, then force-stop with a
-  // bounded race: a lingering socket must not hang the whole suite
-  await Bun.sleep(500);
-  await Promise.race([
-    (server.server as unknown as { stop: (force?: boolean) => Promise<void> }).stop(true),
-    Bun.sleep(2000).then(() => console.warn("[afterAll] server stop timed out")),
-  ]);
+  // NOTE: server.stop() is intentionally NOT called here. Bun 1.3.13's
+  // stop() hangs on connections the SERVER closed (the M2 expiry kick and
+  // the M3 cap rejection close(4401) from the subscribe handler), even
+  // after the client observed close and closed its side. Every socket in
+  // this file is closed explicitly in its test; the leftover server just
+  // dies with the process (bun test --isolate gives this file its own
+  // process, so nothing leaks to other files). Same workaround as
+  // log-stream.test.ts.
   await prisma.commandBatch.deleteMany({
     where: { id: { in: [batchId, otherBatchId] } },
   });
@@ -333,7 +332,7 @@ describe("GET /v1/ws/commands", () => {
       const second = connectWs(wsUrl(batchId), [WS_PROTOCOL, accessToken]);
       // the upgrade passes beforeHandle; subscribe() then refuses the
       // socket, so the client observes open followed by an immediate
-      // close (Bun's CloseEvent does not expose the code, so "closed"
+      // close (the client observes the code; "closed" is asserted
       // right after open is the observable evidence)
       expect(await waitForSettle(second)).not.toBe("timeout");
       await second.closed;
@@ -501,5 +500,43 @@ describe("GET /v1/ws/commands", () => {
     await Bun.sleep(200);
     expect(client.messages.filter(isBatchFrame).length).toBe(before);
     client.ws.close();
+  });
+
+  test("removed project membership closes the connection (re-check)", async () => {
+    const app6 = createApp(prisma, TEST_JWT, undefined, {
+      debounceMs: 25,
+      expCheckIntervalMs: 100,
+    });
+    const server6 = app6.listen({ port: 0, hostname: "127.0.0.1" });
+    const base6 = `ws://127.0.0.1:${server6.server!.port}`;
+    try {
+      const client = connectWs(`${base6}/v1/ws/commands?batch_id=${batchId}`, [
+        WS_PROTOCOL,
+        accessToken,
+      ]);
+      expect(await waitForSettle(client)).toBe("open");
+      await waitForMessage(client, (m) => m.type === "ready");
+
+      // revoke the membership; the 100ms re-check must close the socket
+      await prisma.userProject.delete({
+        where: { userId_projectId: { userId, projectId } },
+      });
+      const closed = await Promise.race([
+        client.closed.then(() => true),
+        Bun.sleep(2000).then(() => false),
+      ]);
+      expect(closed).toBe(true);
+      expect(client.closeCode).toBe(4403);
+      client.ws.close();
+      await Bun.sleep(100);
+    } finally {
+      // restore the membership for the rest of the suite; skip
+      // server.stop() (Bun server-initiated-close quirk)
+      await prisma.userProject.upsert({
+        where: { userId_projectId: { userId, projectId } },
+        update: {},
+        create: { userId, projectId },
+      });
+    }
   });
 });

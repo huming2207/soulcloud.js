@@ -1,6 +1,6 @@
 # Web Console — Current Status
 
-**Date**: 2026-08-06 · **Baseline**: 115 unit tests / 27 files green,
+**Date**: 2026-08-09 · **Baseline**: 201 unit tests / 33 files green,
 `tsc --noEmit` clean, web <-> API browser E2E passes, CI runs three
 parallel jobs (backend / web / web-e2e).
 
@@ -78,7 +78,9 @@ Key interactions:
   exponential backoff (1 s → 30 s cap). The Logs page switches between
   the REST table (5 s auto-refresh, paging, raw view) and the live
   terminal (xterm.js: REST history replay oldest-first, then live
-  streamed lines with level colors, follow/clear, dark-mode aware).
+  streamed lines with level colors, follow/clear, dark-mode aware;
+  device-controlled text is sanitized — C0/C1 control characters are
+  stripped before writeln).
 - **Rollout creation**: auto strategy (editable cumulative ratios with
   client-side ascending/last=1 validation) or grouped strategy
   (device-set groups), rollback baseline picker, gating parameters.
@@ -98,16 +100,18 @@ language menu in the app bar persists the choice.
 
 ## Testing
 
-- **115 unit tests / 27 files** (`bun run --cwd packages/web test`):
+- **201 unit tests / 33 files** (`bun run --cwd packages/web test`):
   i18n dictionary invariants, axios auth flow (mock axios: Bearer
   injection, single-flight 401 refresh, exemption list, logout bounce),
   auth/project contexts, every page and dialog (rendering, validation,
   flows), API-layer URL/body construction, theme LinkBehavior.
-- **Coverage**: 76% lines / 91% statements.
-- **Browser E2E** (`scripts/web-e2e-ci.sh`): starts API + Vite, seeds a
-  user, creates a device through the API, then verifies in a real
-  browser that the frontend renders real backend data (login page,
-  authenticated dashboard, device row, firmware/rollouts empty states).
+- **Coverage**: 94% lines / 85% funcs (33 files).
+- **Browser E2E** (`scripts/web-e2e-ci.sh`): starts API + a production
+  bundle (vite build + preview), seeds a user, creates a device through
+  the API, then verifies in a real browser that the frontend renders
+  real backend data (login page, authenticated dashboard, device row,
+  firmware/rollouts empty states, and the logs page: device picker →
+  table → xterm terminal with a live WS "Connected" state).
   All browser calls share one agent-browser session; interactions are
   deterministic (business operations via the API layer, page state via
   `wait --text` conditions).

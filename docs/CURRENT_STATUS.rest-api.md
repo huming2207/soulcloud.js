@@ -70,6 +70,18 @@ many, cap 1000), `404 target_devices_not_found`, `422 invalid_device_uid`,
 | --- | --- | --- |
 | `GET /v1/ws/logs?device_id=<uuid>` | `Sec-WebSocket-Protocol: ["soulcloud", "<access token>"]` | `{type:"ready"}` on open · `{type:"log", device_id, event}` per event · `{type:"pong"}` heartbeat reply |
 
+| `GET /v1/ws/commands?batch_id=<uuid>` | same | `{type:"ready"}` on open · `{type:"batch", batch_id, device_count, summary, commands}` per state change · `{type:"pong"}` |
+| `GET /v1/ws/ota?job_id=<uuid>` | same | `{type:"ready"}` on open · `{type:"ota", job_id, release_id, created_at, state, targets, summary}` per target transition · `{type:"pong"}` |
+
+Command stream: `recordDeviceResult` `pg_notify`s `soulcloud_command_results`
+(payload = batch id, inside the recording transaction, delivered
+post-commit; QoS1 replays and mismatches never notify). The pushed
+`{type:"batch"}` frame is identical to `GET /v1/command-batches/:id`.
+
+OTA stream: LISTENs `soulcloud_ota` (payload = job id) and pushes the
+same shape as `GET /v1/ota-jobs/:id` plus a derived job-level
+`state` (`running` / `completed` / `failed`).
+
 WebSocket upgrade that streams decoded log events for one device. Because
 browsers cannot set headers on a WebSocket, the access token rides the
 subprotocol list; the upgrade is rejected with `401` unless the token is
@@ -79,11 +91,26 @@ is reused by projecting the subprotocol token onto an Authorization
 header).
 
 Data path: `ingestLogPacket` `pg_notify`s the `soulcloud_log_events`
-channel (payload = `raw_log_events` row id, lossy by design — consumers
+channel (payload = `<deviceId>:<eventId>`, lossy by design — consumers
 fall back to REST paging); the API process runs a process-wide lazy
-LISTEN hub (reconnects on failure) that decodes server-side via
-`decodeEventsBatch` and fans each event out to every subscriber of the
-device.
+LISTEN hub (reconnects on failure) that looks up subscribers **before**
+touching the database (a notify with no subscribers never runs a query)
+and decodes server-side via `decodeEventsBatch` (dictionary cached per
+artifact, 60 s TTL, bounded eviction), then fans each event out to
+every subscriber of the device.
+
+Stream hardening (shared with the command/OTA streams):
+
+- **Debounce**: burst notifies for the same device are merged into one
+  re-query + one push (250 ms window, plus a max-wait bound so a
+  sustained burst cannot starve the push).
+- **Token expiry**: the handshake token's `exp` is enforced on the live
+  connection — the server closes with `4401 token expired` once it
+  passes; the frontend hook reconnects with a fresh token.
+- **Connection cap**: per-process limit (default 500) refuses extra
+  sockets with `4401 too many connections`.
+- Subscriber keys are normalized (lower-case UUIDs) so a mixed-case
+  `device_id` query still receives pushes.
 
 `event` has the same shape as `GET /v1/devices/:id/logs` items (`id`,
 `received_at`, `device_time_ms`, `sequence`, `packet_type`, `level`,

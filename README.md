@@ -98,8 +98,8 @@ Error mapping: `400 invalid_targets`, `404 target_devices_not_found`,
 ## Quality checks
 
 ```sh
-bash scripts/test.sh              # backend: 398 tests on the isolated test DB
-bun run --cwd packages/web test   # frontend: 115 unit tests (happy-dom)
+bash scripts/test.sh              # backend: 524 tests on the isolated test DB
+bun run --cwd packages/web test   # frontend: 201 unit tests (happy-dom)
 bun run typecheck                 # tsc --noEmit (backend + frontend)
 bun run --cwd packages/web build  # production build of the web UI
 bash scripts/web-e2e-ci.sh        # browser <-> API E2E (needs agent-browser)
@@ -111,8 +111,9 @@ migrated automatically by `scripts/prepare-test-db.ts`), so the dev MQTT
 broker — whose poller leases the global command queue every ~500ms — and
 QEMU firmware E2E runs can keep going while tests execute.
 
-Frontend coverage: 76% lines / 91% statements across 31 test files
-(`bun run --cwd packages/web test --coverage`).
+Frontend coverage: 94% lines (85% funcs) across 33 test files
+(`bun run --cwd packages/web test --coverage`). Backend: 524 tests /
+42 files against the isolated test database.
 
 ## MQTT v1 topics
 
@@ -187,7 +188,14 @@ The web console (`packages/web`) covers the human-facing workflows:
   (1 s → 30 s cap). The Logs page has a Table/Terminal view switch: the
   terminal (xterm.js) replays recent history via REST then streams live
   lines with level-colored output, follow/clear controls and dark-mode
-  theming.
+  theming. Stream hardening: burst notifies are debounced server-side
+  (250 ms merge + max-wait), the access token's expiry is enforced on
+  live connections (server closes with `4401 token expired`, the hook
+  reconnects with a fresh token), per-process connection caps refuse
+  excess sockets (`4401 too many connections`), project membership is
+  re-checked for the connection's lifetime (a removed member is closed
+  with `4403 access revoked`), and device-controlled terminal text is
+  sanitized (C0/C1 stripped) before `writeln`.
 - **Firmware**: ELF artifact upload (dictionary import), release upload
   (bin + optional ELF), deploy dialog (multi-select devices -> OTA job),
   authenticated bin download.
