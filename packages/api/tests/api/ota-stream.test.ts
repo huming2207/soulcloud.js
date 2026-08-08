@@ -80,6 +80,8 @@ interface WsClient {
   open: Promise<void>;
   /** Resolves when the socket closes (handshake rejected or closed). */
   closed: Promise<void>;
+  /** The close code observed by the client (0 until closed). */
+  closeCode: number;
 }
 
 function connectWs(url: string, protocols?: string[]): WsClient {
@@ -88,12 +90,16 @@ function connectWs(url: string, protocols?: string[]): WsClient {
   let resolveClosed!: () => void;
   const open = new Promise<void>((r) => (resolveOpen = r));
   const closed = new Promise<void>((r) => (resolveClosed = r));
+  let closeCode = 0;
   const ws = new WebSocket(url, protocols);
   ws.onopen = () => resolveOpen();
   ws.onmessage = (ev) => messages.push(String(ev.data));
   ws.onerror = () => {};
-  ws.onclose = () => resolveClosed();
-  return { ws, messages, open, closed };
+  ws.onclose = (ev) => {
+    closeCode = ev.code;
+    resolveClosed();
+  };
+  return { ws, messages, open, closed, closeCode };
 }
 
 /** Waits until the connection either opened or closed (or timed out). */
