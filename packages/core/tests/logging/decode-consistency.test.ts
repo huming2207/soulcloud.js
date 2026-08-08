@@ -12,10 +12,11 @@
  * behaviour on both paths.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
   On9logPacketType,
+  clearDictionaryCache,
   decodeRawEvent,
   decodeEventsBatch,
   prisma,
@@ -129,5 +130,77 @@ describe("decode render-failure behaviour (tag preserved on both paths)", () => 
     expect(await decodeEventsBatch(prisma, [junk])).toEqual([
       { message: null, tag: "demo" },
     ]);
+  });
+});
+
+describe("artifact dictionary cache (decodeEventsBatch)", () => {
+  test("caches the dictionary: a second batch does not re-query it", async () => {
+    clearDictionaryCache();
+    const original = prisma.firmwareLogString.findMany;
+    const calls: unknown[] = [];
+    prisma.firmwareLogString.findMany = ((...args: unknown[]) => {
+      calls.push(args);
+      return original(...(args as Parameters<typeof original>));
+    }) as typeof prisma.firmwareLogString.findMany;
+    try {
+      const ok = event(logPacket(TAG_ADDR, FMT_ADDR, [1], le32(7))); // "value=7"
+      expect(await decodeEventsBatch(prisma, [ok, ok])).toEqual([
+        { message: "value=7", tag: "demo" },
+        { message: "value=7", tag: "demo" },
+      ]);
+      expect(calls.length).toBe(1); // one query for both events (same artifact)
+      // second batch: cache hit, no new query
+      expect(await decodeEventsBatch(prisma, [ok])).toEqual([
+        { message: "value=7", tag: "demo" },
+      ]);
+      expect(calls.length).toBe(1);
+    } finally {
+      prisma.firmwareLogString.findMany = original;
+    }
+  });
+
+  test("the cache expires after the TTL and re-queries", async () => {
+    clearDictionaryCache();
+    const original = prisma.firmwareLogString.findMany;
+    const calls: unknown[] = [];
+    prisma.firmwareLogString.findMany = ((...args: unknown[]) => {
+      calls.push(args);
+      return original(...(args as Parameters<typeof original>));
+    }) as typeof prisma.firmwareLogString.findMany;
+    try {
+      const ok = event(logPacket(TAG_ADDR, FMT_ADDR, [1], le32(7)));
+      await decodeEventsBatch(prisma, [ok]);
+      expect(calls.length).toBe(1);
+      // advance the clock past the 60s TTL
+      setSystemTime(new Date(Date.now() + 61_000));
+      try {
+        await decodeEventsBatch(prisma, [ok]);
+        expect(calls.length).toBe(2);
+      } finally {
+        setSystemTime();
+      }
+    } finally {
+      prisma.firmwareLogString.findMany = original;
+    }
+  });
+
+  test("dictionaries are isolated per artifact", async () => {
+    clearDictionaryCache();
+    const original = prisma.firmwareLogString.findMany;
+    const calls: unknown[] = [];
+    prisma.firmwareLogString.findMany = ((...args: unknown[]) => {
+      calls.push(args);
+      return original(...(args as Parameters<typeof original>));
+    }) as typeof prisma.firmwareLogString.findMany;
+    try {
+      const e1 = event(logPacket(TAG_ADDR, FMT_ADDR, [1], le32(7)));
+      const e2 = { ...e1, artifactId: null };
+      // second artifact (null) is not a dictionary artifact at all
+      await decodeEventsBatch(prisma, [e1, e1]);
+      await decodeEventsBatch(prisma, [e2]);
+      expect(calls.length).toBe(1); // only the real artifact queried once
+    } finally {
+      prisma.firmwareLogString.findMany = original;
+    }
   });
 });

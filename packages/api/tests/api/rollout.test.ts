@@ -192,7 +192,8 @@ describe("POST /v1/firmware-releases/:id/rollouts", () => {
         body: JSON.stringify({ strategy: "auto", device_ids: deviceIds }),
       }),
     );
-    expect(denied.status).toBe(403);
+    // non-member is indistinguishable from not-found (no existence oracle)
+    expect(denied.status).toBe(404);
     // device from another project -> 404 (no existence oracle)
     const otherProject = randomUUID();
     await prisma.project.create({ data: { id: otherProject, name: "rollout-other" } });
@@ -315,7 +316,8 @@ describe("rollout lifecycle endpoints", () => {
         headers: auth(outsiderToken),
       }),
     );
-    expect(detail.status).toBe(403);
+    // non-member is indistinguishable from not-found (no existence oracle)
+    expect(detail.status).toBe(404);
   });
 
   test("rollback without from_release_id -> 409 rollback_unavailable", async () => {
@@ -393,4 +395,31 @@ describe("GET /v1/ota-rollouts (list)", () => {
     );
     expect(noAuth.status).toBe(401);
   });
+});
+
+describe("rollout endpoints require authentication (401, one per endpoint)", () => {
+  // authentication runs before any id validation, so a random id is fine
+  const rid = randomUUID();
+  const cases: Array<{ method: string; path: string; body?: unknown }> = [
+    { method: "POST", path: `/v1/firmware-releases/${randomUUID()}/rollouts`, body: { strategy: "auto" } },
+    { method: "GET", path: `/v1/ota-rollouts/${rid}` },
+    { method: "POST", path: `/v1/ota-rollouts/${rid}/pause` },
+    { method: "POST", path: `/v1/ota-rollouts/${rid}/resume` },
+    { method: "POST", path: `/v1/ota-rollouts/${rid}/abort` },
+    { method: "POST", path: `/v1/ota-rollouts/${rid}/rollback` },
+  ];
+
+  for (const c of cases) {
+    test(`${c.method} ${c.path.split("?")[0]} -> 401 without a token`, async () => {
+      const res = await app.handle(
+        new Request(`http://localhost${c.path}`, {
+          method: c.method,
+          ...(c.body !== undefined
+            ? { headers: { "content-type": "application/json" }, body: JSON.stringify(c.body) }
+            : {}),
+        }),
+      );
+      expect(res.status).toBe(401);
+    });
+  }
 });

@@ -6,8 +6,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { enqueueBatch, prisma } from "@soulcloud/core";
+import { acquireLeaseLock } from "../../../core/tests/helpers/lease-lock";
 import { startBroker, type BrokerHandle } from "../../src/mqtt/broker";
 import { startCommandPoller } from "../../src/mqtt/publish";
+
+// pollOnce leases ANY queued command (global scan), so this file must be
+// serialized against the other lease-touching files (queue/broker/ota)
+// or parallel tests can steal the commands under test
+await acquireLeaseLock(prisma);
 
 const silentLog = { info: () => {}, warn: () => {}, debug: () => {} };
 const POLLER_PORT = 18884;
@@ -64,7 +70,7 @@ describe("startCommandPoller", () => {
     const poller = startCommandPoller(
       broker.aedes,
       prisma,
-      { pollIntervalMs: 60_000, leaseDurationMs: 60_000, retain: false },
+      { pollIntervalMs: 100, leaseDurationMs: 60_000, retain: false },
       silentLog,
     );
     try {

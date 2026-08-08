@@ -98,8 +98,9 @@ export function createRolloutRoutes(
           return { error: "not_found", message: "release does not exist" };
         }
         if (!(await userCanAccessProject(prisma, authUser.user.id, release.projectId))) {
-          set.status = 403;
-          return { error: "forbidden", message: "not a member of this project" };
+          // same as not-found: non-members must not learn the release exists
+          set.status = 404;
+          return { error: "not_found", message: "release does not exist" };
         }
         try {
           const created = await createOtaRollout(prisma, {
@@ -210,8 +211,9 @@ export function createRolloutRoutes(
           return { error: "not_found", message: "rollout does not exist" };
         }
         if (!(await userCanAccessProject(prisma, authUser.user.id, rollout.projectId))) {
-          set.status = 403;
-          return { error: "forbidden", message: "not a member of this project" };
+          // same as not-found: non-members must not learn the rollout exists
+          set.status = 404;
+          return { error: "not_found", message: "rollout does not exist" };
         }
         const summarize = (targets: Array<{ state: string }>) => {
           const summary: Record<string, number> = {};

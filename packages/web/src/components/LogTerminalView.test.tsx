@@ -162,6 +162,45 @@ beforeEach(() => {
 });
 
 describe("LogTerminalView", () => {
+  test("sanitizeTerminalText strips C0/C1 control characters but keeps \\n and \\t", () => {
+    const { sanitizeTerminalText } = require("./LogTerminalView") as typeof import("./LogTerminalView");
+    expect(sanitizeTerminalText("plain text")).toBe("plain text");
+    // CSI color sequences lose the ESC byte; the leftover "[31m" is
+    // inert printable text that xterm will not interpret
+    expect(sanitizeTerminalText("boot\u001b[31mred\u001b[0m")).toBe("boot[31mred[0m");
+    // OSC-8 hyperlink payloads lose both ESC and BEL (\x07)
+    expect(sanitizeTerminalText("a\u001b]8;;http://x\u0007b")).toBe("a]8;;http://xb");
+    // C1 range 0x7F-0x9F (e.g. 0x9B CSI single-byte) is dropped
+    expect(sanitizeTerminalText("x\u009by")).toBe("xy");
+    // DEL 0x7F dropped; line structure kept
+    expect(sanitizeTerminalText("line1\n\tline2\u007f")).toBe("line1\n\tline2");
+  });
+
+  test("device-controlled escape sequences never reach the terminal", async () => {
+    renderTerminal();
+    await waitFor(() => expect(terminalInstances.length).toBe(1));
+    const terminal = terminalInstances[0]!;
+    await waitFor(() => expect(terminal.writelnCalls.length).toBe(2));
+
+    expect(capturedOnEvent).not.toBeNull();
+    // a hostile message with a CSI erase-line + fake WARN line
+    const evil = liveEvent({
+      message: "\u001b[2K\u001b[31mFAKE ERROR\u001b[0m",
+      tag: "\u001b]8;;https://evil.example\u0007demo\u001b]8;;\u0007",
+    });
+    await act(async () => {
+      capturedOnEvent!(evil);
+    });
+    const line = lastLine();
+    // level coloring is the ONLY ANSI in the line; no CSI/OSC from the
+    // device survives (the leftover text is inert and safe to display)
+    expect(line).not.toContain("\u001b[2K");
+    expect(line).not.toContain("\u001b]8;");
+    expect(line).not.toContain("\u001b[31m");
+    expect(line).toContain("WARN"); // real level label survives
+    expect(line).toContain("demo"); // sanitized tag keeps its text
+  });
+
   test("mounts an xterm terminal, fits it and writes REST history oldest-first", async () => {
     renderTerminal();
     await waitFor(() => expect(terminalInstances.length).toBe(1));

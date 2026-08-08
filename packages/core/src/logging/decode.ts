@@ -131,6 +131,36 @@ export function summarizeArgs(packetBytes: Uint8Array): DecodedArgsSummary | nul
  * N+1 query storm of per-event lookups): dictionaries are loaded once per
  * artifact, then events are matched in memory.
  */
+/**
+ * Decodes a page of events with bounded dictionary queries (avoids the
+ * N+1 query storm of per-event lookups): dictionaries are loaded once per
+ * artifact, then events are matched in memory.
+ */
+
+/** TTL for the decoded-dictionary cache (ms). */
+const DICTIONARY_TTL_MS = 60_000;
+/** Above this many cached artifacts, expired entries are evicted lazily. */
+const DICTIONARY_CACHE_MAX = 200;
+
+interface DictionaryCacheEntry {
+  map: Map<string, string>;
+  expiresAt: number;
+}
+
+/**
+ * Artifact dictionary cache, shared by every batch decode call in this
+ * process (REST pages AND the WS log stream). Artifact re-imports are
+ * picked up after the TTL expires; callers always see at most 60s of
+ * staleness. Bun is single-threaded, so the Map needs no locking; a
+ * concurrent cache miss just runs the query twice (harmless).
+ */
+const dictionaryCache = new Map<string, DictionaryCacheEntry>();
+
+/** Clears the dictionary cache (tests / artifact re-import admin hook). */
+export function clearDictionaryCache(): void {
+  dictionaryCache.clear();
+}
+
 export async function decodeEventsBatch(
   prisma: PrismaClient,
   events: RawEventForDecode[],
@@ -141,15 +171,29 @@ export async function decodeEventsBatch(
   );
   const dictionaries = new Map<string, Map<string, string>>();
   for (const artifactId of artifactIds) {
-    const rows = await prisma.firmwareLogString.findMany({
-      where: { artifactId },
-      select: { kind: true, address: true, value: true },
-    });
-    const map = new Map<string, string>();
-    for (const row of rows) {
-      map.set(`${row.kind}:${row.address.toString()}`, row.value);
+    let entry = dictionaryCache.get(artifactId);
+    if (!entry || entry.expiresAt < Date.now()) {
+      const rows = await prisma.firmwareLogString.findMany({
+        where: { artifactId },
+        select: { kind: true, address: true, value: true },
+      });
+      const map = new Map<string, string>();
+      for (const row of rows) {
+        map.set(`${row.kind}:${row.address.toString()}`, row.value);
+      }
+      entry = { map, expiresAt: Date.now() + DICTIONARY_TTL_MS };
+      dictionaryCache.set(artifactId, entry);
+      // bounded memory: lazily evict expired entries (artifacts can
+      // accumulate over the process lifetime; a stale entry is only
+      // ever re-fetched, but the Map must not grow unbounded)
+      if (dictionaryCache.size > DICTIONARY_CACHE_MAX) {
+        const now = Date.now();
+        for (const [id, e] of dictionaryCache) {
+          if (e.expiresAt < now) dictionaryCache.delete(id);
+        }
+      }
     }
-    dictionaries.set(artifactId, map);
+    dictionaries.set(artifactId, entry.map);
   }
 
   for (const event of events) {

@@ -123,9 +123,12 @@ export async function ingestLogPacket(
       },
     });
     // wake the web console's realtime log stream (lossy: a missed
-    // notification only costs latency - consumers fall back to REST)
+    // notification only costs latency - consumers fall back to REST).
+    // Payload = "<deviceId>:<eventId>" so the WS hub can look up its
+    // subscribers BEFORE hitting the database.
     try {
-      await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${String(event.id)})`;
+      const payload = `${deviceId}:${event.id.toString()}`;
+      await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${payload})`;
     } catch {
       // notification failure must not drop the stored event
     }

@@ -111,6 +111,36 @@ describe("CommandHistory", () => {
     expect(screen.getByText(/batch-87/)).not.toBeNull();
   });
 
+  test("an unknown command state renders the state.unknown fallback", async () => {
+    devicesApi.fetchDeviceCommands.mockResolvedValue({
+      commands: [
+        {
+          command_id: "cX",
+          batch_id: "batch-00000000-0000-0000-0000-000000000000",
+          sequence: "9",
+          command: { cmd: "future_cmd", args: null },
+          // a state the frontend has never seen (backend added it later);
+          // cast through never to model the runtime out-of-enum value
+          state: "super_state" as never,
+          result_code: null,
+          result: null,
+          created_at: "2026-08-06T00:00:00Z",
+          delivery_expires_at: null,
+          device_completed_at: null,
+        },
+      ],
+      next_cursor: null,
+    });
+    renderPanel();
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Unknown|未知|Неизвестно|Невідомо|Sconosciuto/i),
+      ).not.toBeNull(),
+    );
+    // the command itself still renders
+    expect(screen.getByText("future_cmd")).not.toBeNull();
+  });
+
   test("shows the empty hint when there are no commands", async () => {
     renderPanel();
     await waitFor(() =>

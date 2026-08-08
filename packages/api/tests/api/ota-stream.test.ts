@@ -19,9 +19,16 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { createApp } from "../../src/api/app";
 import { getOtaStreamHub } from "../../src/api/ota-stream";
-import { createOtaJob, OTA_NOTIFY_CHANNEL, prisma } from "@soulcloud/core";
+import { createOtaJob, OTA_NOTIFY_CHANNEL, prisma, signAccessToken } from "@soulcloud/core";
 
 const WS_PROTOCOL = "soulcloud";
+
+// M2/M3 test knobs: short expiry-check interval and a tight connection
+// cap. Set before createApp so the hub picks them up; the main app still
+// runs every other test with these values (a 200ms check interval is
+// harmless for the 3600s tokens, and each test holds at most one socket).
+process.env.SOULCLOUD_WS_EXP_CHECK_MS = "200";
+process.env.SOULCLOUD_WS_MAX_CONNECTIONS = "1";
 
 // G group: these endpoints require a logged-in user.
 const TEST_JWT = {
@@ -42,6 +49,7 @@ let targetId = "";
 let releaseId = "";
 let deviceId = "";
 let accessToken = "";
+let userId = "";
 
 async function registerUser(): Promise<{ userId: string; accessToken: string }> {
   const username = `otastream-user-${randomUUID().slice(0, 8)}`;
@@ -183,7 +191,8 @@ async function waitForFrameCount(
 beforeAll(async () => {
   projectId = randomUUID();
   await prisma.project.create({ data: { id: projectId, name: "api-ota-stream-test" } });
-  const { userId, accessToken: token } = await registerUser();
+  const { userId: registeredUserId, accessToken: token } = await registerUser();
+  userId = registeredUserId;
   accessToken = token;
   await prisma.userProject.create({ data: { userId, projectId } });
 
@@ -255,14 +264,18 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // stop(true): Bun's server.stop() defaults to waiting for active
-  // connections, which would hang on lingering WebSockets
-  await server.stop(true);
-  // close the process-wide LISTEN session (the singleton is reset to null,
-  // so a fresh hub is created if anything else subscribes later)
+  // close the process-wide LISTEN session first (the singleton is reset
+  // to null, so a fresh hub is created if anything else subscribes later)
   await (
     await getOtaStreamHub(prisma, process.env.DATABASE_URL ?? "", { warn: () => {} })
   ).close();
+  // force-stop the underlying Bun server with a bounded race: a lingering
+  // WebSocket teardown must not hang the whole suite
+  await Bun.sleep(500);
+  await Promise.race([
+    (server.server as unknown as { stop: (force?: boolean) => Promise<void> }).stop(true),
+    Bun.sleep(2000).then(() => console.warn("[afterAll] server stop timed out")),
+  ]);
   await prisma.otaTarget.deleteMany({
     where: { job: { projectId: { in: [projectId, otherProjectId] } } },
   });
@@ -282,6 +295,75 @@ afterAll(async () => {
 });
 
 describe("GET /v1/ws/ota", () => {
+  test("mixed-case job UUID in the query connects to the same hub key", async () => {
+    // notify payloads carry the DB-stored (lowercase) id; a mixed-case
+    // query value must be canonicalized so the push still arrives
+    const client = connectWs(wsUrl(jobId.toUpperCase()), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    await waitForMessage(client, (m) => m.type === "ready");
+    await notifyUntil(client, jobId, (m) => m.type === "ota");
+    client.ws.close();
+  });
+
+  test("a sustained notify burst is bounded by max-wait (push during the burst)", async () => {
+    // debounceMs=25 (app options), so maxWaitMs=100: a continuous burst
+    // must still push ~every 100ms instead of deferring forever
+    const client = connectWs(wsUrl(jobId), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    await waitForMessage(client, (m) => m.type === "ready");
+    await notifyUntil(client, jobId, (m) => m.type === "ota");
+    await Bun.sleep(80); // let probe pushes settle
+
+    const before = client.messages.filter(isOtaFrame).length;
+    const deadline = Date.now() + 250;
+    let sawPushDuringBurst = false;
+    while (Date.now() < deadline) {
+      await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+      await Bun.sleep(15);
+      if (client.messages.filter(isOtaFrame).length > before) {
+        sawPushDuringBurst = true;
+        break;
+      }
+    }
+    expect(sawPushDuringBurst).toBe(true);
+    client.ws.close();
+  });
+
+  test("connection cap: the second socket is refused (M3)", async () => {
+    // SOULCLOUD_WS_MAX_CONNECTIONS=1 is set for this file
+    const first = connectWs(wsUrl(jobId), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(first)).toBe("open");
+    try {
+      const second = connectWs(wsUrl(jobId), [WS_PROTOCOL, accessToken]);
+      // the upgrade passes beforeHandle; subscribe() then refuses the
+      // socket, so the client observes open followed by a close
+      expect(await waitForSettle(second)).not.toBe("timeout");
+      await second.closed;
+      second.ws.close();
+    } finally {
+      first.ws.close();
+      await first.closed.catch(() => {});
+    }
+  });
+
+  test("expired access token: the connection is closed (M2)", async () => {
+    // a short-lived (1s) access token for the existing test user; the
+    // expiry check must close the connection once it expires
+    const shortToken = await signAccessToken(
+      { ...TEST_JWT, accessTtlSeconds: 1 },
+      { sub: userId, username: "otastream-user" },
+    );
+    const client = connectWs(wsUrl(jobId), [WS_PROTOCOL, shortToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    const closed = await Promise.race([
+      client.closed,
+      Bun.sleep(4000).then(() => "timeout" as const),
+    ]);
+    expect(closed).toBeUndefined(); // closed promise resolved
+    client.ws.close();
+    await client.closed.catch(() => {});
+  });
+
   test("valid token + project member: connects and receives ready", async () => {
     const client = connectWs(wsUrl(jobId), [WS_PROTOCOL, accessToken]);
     expect(await waitForSettle(client)).toBe("open");

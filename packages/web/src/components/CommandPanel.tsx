@@ -264,7 +264,7 @@ function CommandHistory({ deviceId }: { deviceId: string }) {
                 <TableCell>
                   <Chip
                     size="small"
-                    label={t(STATE_LABEL[c.state])}
+                    label={t(STATE_LABEL[c.state] ?? "state.unknown")}
                     color={STATE_COLOR[c.state]}
                     variant="outlined"
                   />
@@ -351,7 +351,7 @@ function BatchDialog({ batchId, onClose }: { batchId: string; onClose: () => voi
             <Chip
               key={state}
               size="small"
-              label={`${t(STATE_LABEL[state as CommandState])} ${count}`}
+              label={`${t(STATE_LABEL[state as CommandState] ?? "state.unknown")} ${count}`}
               color={STATE_COLOR[state as CommandState]}
               variant="outlined"
             />
@@ -379,7 +379,7 @@ function BatchDialog({ batchId, onClose }: { batchId: string; onClose: () => voi
                   <TableCell>
                     <Chip
                       size="small"
-                      label={t(STATE_LABEL[c.state])}
+                      label={t(STATE_LABEL[c.state] ?? "state.unknown")}
                       color={STATE_COLOR[c.state]}
                       variant="outlined"
                     />

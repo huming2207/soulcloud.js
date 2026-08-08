@@ -41,6 +41,30 @@ const LEVEL_STYLES: Record<number, { label: string; color: string }> = {
 const RESET = "\x1b[0m";
 const GRAY = "\x1b[90m";
 
+/**
+ * Strips C0/C1 control characters from device-controlled text before it
+ * reaches the terminal (Kimi round-8 M1). xterm interprets CSI/OSC
+ * sequences, so an unescaped \x1b[...] in a log message could overwrite
+ * or fake history lines, clear the screen or embed OSC-8 phishing links.
+ * \n and \t are kept (legitimate line structure); everything else below
+ * 0x20 and the 0x7F-0x9F range is dropped. Our own ANSI level colors are
+ * applied by formatLogLine AFTER sanitizing the device-controlled parts.
+ */
+export function sanitizeTerminalText(text: string): string {
+  let out = "";
+  for (const ch of text) {
+    const code = ch.codePointAt(0)!;
+    if (code === 0x0a || code === 0x09) {
+      out += ch;
+    } else if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+      // drop C0 (except \n \t) and C1 control characters
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
 const STATUS_LABELS: Record<LogStreamStatus, string> = {
   idle: "Idle",
   connecting: "Connecting…",
@@ -69,12 +93,14 @@ function formatLogLine(
   if (style) {
     parts.push(style.color ? `${style.color}${style.label}${RESET}` : style.label);
   }
-  if (event.tag) parts.push(`[${event.tag}]`);
+  if (event.tag) parts.push(`[${sanitizeTerminalText(event.tag)}]`);
   if (event.decode_state !== "decodable" || event.message === null) {
     // undecodable packet or missing message: dim placeholder instead of a line
     parts.push(`${GRAY}${t("logs.undecodable")}${RESET}`);
   } else {
-    parts.push(event.message);
+    // the message is device-controlled bytes rendered by the on9log
+    // dictionary: never let raw control sequences reach xterm
+    parts.push(sanitizeTerminalText(event.message));
   }
   return parts.join(" ");
 }

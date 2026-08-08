@@ -27,9 +27,17 @@ import {
   enqueueBatch,
   prisma,
   recordDeviceResult,
+  signAccessToken,
 } from "@soulcloud/core";
 
 const WS_PROTOCOL = "soulcloud";
+
+// M2/M3 test knobs: short expiry-check interval and a tight connection
+// cap. Set before createApp so the hub picks them up; the main app still
+// runs every other test with these values (a 200ms check interval is
+// harmless for the 3600s tokens, and each test holds at most one socket).
+process.env.SOULCLOUD_WS_EXP_CHECK_MS = "200";
+process.env.SOULCLOUD_WS_MAX_CONNECTIONS = "1";
 
 // G group: these endpoints require a logged-in user.
 const TEST_JWT = {
@@ -79,6 +87,8 @@ interface WsClient {
   open: Promise<void>;
   /** Resolves when the socket closes (handshake rejected or closed). */
   closed: Promise<void>;
+  /** Close code observed by onclose (0 when never closed). */
+  closeCode: number;
 }
 
 function connectWs(url: string, protocols?: string[]): WsClient {
@@ -87,12 +97,17 @@ function connectWs(url: string, protocols?: string[]): WsClient {
   let resolveClosed!: () => void;
   const open = new Promise<void>((r) => (resolveOpen = r));
   const closed = new Promise<void>((r) => (resolveClosed = r));
+  let closeCode = 0;
   const ws = new WebSocket(url, protocols);
   ws.onopen = () => resolveOpen();
   ws.onmessage = (ev) => messages.push(String(ev.data));
   ws.onerror = () => {};
-  ws.onclose = () => resolveClosed();
-  return { ws, messages, open, closed };
+  ws.onclose = (ev: CloseEvent) => {
+    closeCode = ev.code;
+    resolveClosed();
+  };
+  ws.onerror = () => {};
+  return { ws, messages, open, closed, closeCode };
 }
 
 /** Waits until the connection either opened or closed (or timed out). */
@@ -180,10 +195,13 @@ function resultPacketFor(row: { payload: Uint8Array }) {
   return { packet: encodeDeviceCommandResult(result), result };
 }
 
+let userId = "";
+
 beforeAll(async () => {
   projectId = randomUUID();
   await prisma.project.create({ data: { id: projectId, name: "api-command-stream-test" } });
-  const { userId, accessToken: token } = await registerUser();
+  const { userId: uid, accessToken: token } = await registerUser();
+  userId = uid;
   accessToken = token;
   await prisma.userProject.create({ data: { userId, projectId } });
 
@@ -224,15 +242,21 @@ beforeAll(async () => {
 afterAll(async () => {
   // stop(true): Bun's server.stop() defaults to waiting for active
   // connections, which would hang on lingering WebSockets
-  await server.stop(true);
-  // close the process-wide LISTEN session (the singleton is reset to null,
-  // so a fresh hub is created if anything else subscribes later)
+  // close the process-wide LISTEN session first (the singleton is reset
+  // to null, so a fresh hub is created if anything else subscribes later)
   await (
     await getCommandStreamHub(prisma, process.env.DATABASE_URL ?? "", { warn: () => {} })
   ).close();
   await prisma.deviceCommand.deleteMany({
     where: { batchId: { in: [batchId, otherBatchId] } },
   });
+  // let client-side close() frames propagate, then force-stop with a
+  // bounded race: a lingering socket must not hang the whole suite
+  await Bun.sleep(500);
+  await Promise.race([
+    (server.server as unknown as { stop: (force?: boolean) => Promise<void> }).stop(true),
+    Bun.sleep(2000).then(() => console.warn("[afterAll] server stop timed out")),
+  ]);
   await prisma.commandBatch.deleteMany({
     where: { id: { in: [batchId, otherBatchId] } },
   });
@@ -246,6 +270,80 @@ afterAll(async () => {
 });
 
 describe("GET /v1/ws/commands", () => {
+  test("mixed-case batch UUID in the query connects to the same hub key", async () => {
+    // notify payloads carry the DB-stored (lowercase) id; a mixed-case
+    // query value must be canonicalized so the push still arrives
+    const client = connectWs(wsUrl(batchId.toUpperCase()), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    await waitForMessage(client, (m) => m.type === "ready");
+    await probeListenerUp(client);
+    client.ws.close();
+  });
+
+  test("a sustained notify burst is bounded by max-wait (push during the burst)", async () => {
+    // debounceMs=25 (app options), so maxWaitMs=100: a continuous burst
+    // must still push ~every 100ms instead of deferring forever
+    const client = connectWs(wsUrl(batchId), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    await waitForMessage(client, (m) => m.type === "ready");
+    await probeListenerUp(client);
+    await Bun.sleep(80); // let probe pushes settle
+
+    const before = client.messages.filter(isBatchFrame).length;
+    const deadline = Date.now() + 250;
+    let sawPushDuringBurst = false;
+    while (Date.now() < deadline) {
+      await prisma.$executeRaw`SELECT pg_notify(${COMMAND_RESULT_CHANNEL}, ${batchId})`;
+      await Bun.sleep(15);
+      if (client.messages.filter(isBatchFrame).length > before) {
+        sawPushDuringBurst = true;
+        break;
+      }
+    }
+    // the burst is still running when the max-wait deadline fires
+    expect(sawPushDuringBurst).toBe(true);
+    client.ws.close();
+  });
+
+  test("expired access token: the connection is closed (M2)", async () => {
+    // sign a short-lived (1s) access token for the existing test user
+    // with the same secret the app verifies with; the expiry check must
+    // close the connection once the token expires (Bun's CloseEvent does
+    // not expose the code, so "closed" is the observable evidence)
+    const shortToken = await signAccessToken(
+      { ...TEST_JWT, accessTtlSeconds: 1 },
+      { sub: userId, username: "cmdstream-user" },
+    );
+    const client = connectWs(wsUrl(batchId), [WS_PROTOCOL, shortToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    const closed = await Promise.race([
+      client.closed,
+      Bun.sleep(4000).then(() => "timeout" as const),
+    ]);
+    expect(closed).toBeUndefined(); // closed promise resolved
+    client.ws.close();
+    await client.closed.catch(() => {});
+  });
+
+  test("connection cap: the second socket is refused with 4401 (M3)", async () => {
+    // SOULCLOUD_WS_MAX_CONNECTIONS=1 is set for this file
+    const first = connectWs(wsUrl(batchId), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(first)).toBe("open");
+    try {
+      const second = connectWs(wsUrl(batchId), [WS_PROTOCOL, accessToken]);
+      // the upgrade passes beforeHandle; subscribe() then refuses the
+      // socket, so the client observes open followed by an immediate
+      // close (Bun's CloseEvent does not expose the code, so "closed"
+      // right after open is the observable evidence)
+      expect(await waitForSettle(second)).not.toBe("timeout");
+      await second.closed;
+      second.ws.close();
+    } finally {
+      first.ws.close();
+      await first.closed.catch(() => {});
+    }
+  });
+
   test("valid token + project member: connects and receives ready", async () => {
     const client = connectWs(wsUrl(batchId), [WS_PROTOCOL, accessToken]);
     expect(await waitForSettle(client)).toBe("open");

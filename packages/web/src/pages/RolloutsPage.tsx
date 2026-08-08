@@ -106,7 +106,7 @@ export function RolloutsPage() {
                     <Chip
                       size="small"
                       variant="outlined"
-                      label={t(STATE_LABEL[r.state])}
+                      label={t(STATE_LABEL[r.state] ?? "state.unknown")}
                       color={STATE_COLOR[r.state]}
                     />
                   </TableCell>

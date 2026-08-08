@@ -33,6 +33,7 @@
 
 import { Elysia } from "elysia";
 import type { ServerWebSocket } from "bun";
+import { decodeJwt } from "jose";
 import { OTA_NOTIFY_CHANNEL, type JwtConfig, type PrismaClient } from "@soulcloud/core";
 import { createPgChannelListener } from "../pg-listen";
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
@@ -42,9 +43,19 @@ const WS_PROTOCOL = "soulcloud";
 /** Default per-job notification debounce window (ms). */
 const DEBOUNCE_MS = 250;
 
+/** Maximum time a burst of notifies for one job may defer its push. */
+const MAX_WAIT_FACTOR = 4;
+
+/** Default interval for checking access-token expiry (M2). */
+const EXP_CHECK_INTERVAL_MS_DEFAULT = 30_000;
+
+/** Default per-process WebSocket connection cap (M3). */
+const MAX_CONNECTIONS_DEFAULT = 500;
+
 /** Hub options; `debounceMs` lets tests inject a short window. */
 interface OtaStreamHubOptions {
   debounceMs?: number;
+  maxConnections?: number;
 }
 
 interface OtaStreamHub {
@@ -74,27 +85,41 @@ export function getOtaStreamHub(
   if (hubSingleton) return hubSingleton;
 
   const debounceMs = options.debounceMs ?? DEBOUNCE_MS;
+  const maxWaitMs = debounceMs * MAX_WAIT_FACTOR;
+  const maxConnections =
+    options.maxConnections ??
+    (Number(process.env.SOULCLOUD_WS_MAX_CONNECTIONS) || MAX_CONNECTIONS_DEFAULT);
   const subscribers = new Map<string, Set<ServerWebSocket>>();
   const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const firstNotifyAt = new Map<string, number>();
+  let connectionCount = 0;
   let closed = false;
 
   /**
    * Debounced push scheduling: notifies within the window for the same
    * job reset the timer, so a burst of target updates merges into one
-   * re-read + one push. Without subscribers the notify is ignored
-   * (lossy by design; clients fall back to REST).
+   * re-read + one push. A sustained burst is bounded by maxWaitMs (the
+   * push fires no later than that from the first notify of the burst).
+   * Without subscribers the notify is ignored (lossy by design; clients
+   * fall back to REST).
    */
   function schedulePush(jobId: string) {
     const sockets = subscribers.get(jobId);
     if (!sockets || sockets.size === 0) return;
+    const now = Date.now();
+    const first = firstNotifyAt.get(jobId) ?? now;
+    firstNotifyAt.set(jobId, first);
     const existing = pendingTimers.get(jobId);
     if (existing) clearTimeout(existing);
+    const elapsed = now - first;
+    const delay = Math.max(0, Math.min(debounceMs, maxWaitMs - elapsed));
     pendingTimers.set(
       jobId,
       setTimeout(() => {
         pendingTimers.delete(jobId);
+        firstNotifyAt.delete(jobId);
         void pushJobUpdate(prisma, subscribers, jobId, log);
-      }, debounceMs),
+      }, delay),
     );
   }
 
@@ -104,13 +129,23 @@ export function getOtaStreamHub(
     OTA_NOTIFY_CHANNEL,
     (payload) => {
       if (!payload) return;
-      schedulePush(payload);
+      schedulePush(payload.toLowerCase());
     },
     log,
   );
 
   hubSingleton = {
     subscribe(jobId: string, ws: ServerWebSocket) {
+      // M3: per-process connection cap
+      if (connectionCount >= maxConnections) {
+        try {
+          ws.close(4401, "too many connections");
+        } catch {
+          // socket is already closing; nothing to do
+        }
+        return;
+      }
+      connectionCount += 1;
       let set = subscribers.get(jobId);
       if (!set) {
         set = new Set();
@@ -123,6 +158,7 @@ export function getOtaStreamHub(
       const set = subscribers.get(jobId);
       if (!set) return;
       set.delete(ws);
+      connectionCount = Math.max(0, connectionCount - 1);
       if (set.size === 0) subscribers.delete(jobId);
     },
     async close() {
@@ -130,6 +166,8 @@ export function getOtaStreamHub(
       // cancel pending debounce pushes so the process exits cleanly
       for (const timer of pendingTimers.values()) clearTimeout(timer);
       pendingTimers.clear();
+      firstNotifyAt.clear();
+      connectionCount = 0;
       await listener.close();
       subscribers.clear();
       hubSingleton = null;
@@ -244,13 +282,75 @@ async function pushJobUpdate(
 export function createOtaStreamRoutes(
   prisma: PrismaClient,
   jwt: JwtConfig,
-  options: { databaseUrl?: string; log?: HubLog; debounceMs?: number } = {},
+  options: {
+    databaseUrl?: string;
+    log?: HubLog;
+    debounceMs?: number;
+    maxConnections?: number;
+    /** Access-token expiry check interval; tests inject a short value via env. */
+    expCheckIntervalMs?: number;
+  } = {},
 ) {
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL ?? "";
   const log: HubLog = options.log ?? { warn: (m, f) => console.warn(`[soulcloud-api] ${m}`, f ?? "") };
+  const expCheckIntervalMs =
+    options.expCheckIntervalMs ??
+    (Number(process.env.SOULCLOUD_WS_EXP_CHECK_MS) || EXP_CHECK_INTERVAL_MS_DEFAULT);
   const hub = getOtaStreamHub(prisma, databaseUrl, log, {
     debounceMs: options.debounceMs,
+    maxConnections: options.maxConnections,
   });
+
+  // per-connection expiry state (M2): close 4401 when the access token
+  // expires so the client hook reconnects with a fresh token
+  const expiryByWs = new Map<ServerWebSocket, number>();
+  const expiryTimers = new Map<ServerWebSocket, ReturnType<typeof setInterval>>();
+
+  function canonicalId(raw: string | undefined): string | null {
+    if (!raw) return null;
+    const parsed = UuidParam.safeParse(raw);
+    // canonical lowercase key: notify payloads carry the DB-stored form
+    return parsed.success ? parsed.data.toLowerCase() : null;
+  }
+
+  function armExpiryCheck(ws: ServerWebSocket) {
+    const protocol = (ws.data as unknown as { headers?: Record<string, unknown> }).headers?.[
+      "sec-websocket-protocol"
+    ];
+    const token = String(protocol ?? "")
+      .split(",")
+      .map((s) => s.trim())[1];
+    let expMs = 0;
+    if (token) {
+      try {
+        const { exp } = decodeJwt(token);
+        if (typeof exp === "number") expMs = exp * 1000;
+      } catch {
+        // handshake already rejected invalid tokens
+      }
+    }
+    if (expMs === 0) return;
+    expiryByWs.set(ws, expMs);
+    const timer = setInterval(() => {
+      const deadline = expiryByWs.get(ws);
+      if (deadline !== undefined && Date.now() >= deadline) {
+        expiryByWs.delete(ws);
+        clearInterval(timer);
+        expiryTimers.delete(ws);
+        ws.close(4401, "token expired");
+      }
+    }, expCheckIntervalMs);
+    expiryTimers.set(ws, timer);
+  }
+
+  function clearExpiry(ws: ServerWebSocket) {
+    const timer = expiryTimers.get(ws);
+    if (timer) {
+      clearInterval(timer);
+      expiryTimers.delete(ws);
+    }
+    expiryByWs.delete(ws);
+  }
 
   return new Elysia().ws("/v1/ws/ota", {
     async beforeHandle({ request, query, set }) {
@@ -297,12 +397,13 @@ export function createOtaStreamRoutes(
     open(ws) {
       // the upgrade was already authenticated in beforeHandle; the job id
       // rides the query string (visible in ws.data.query)
-      const jobId = (ws.data as { query?: { job_id?: string } }).query?.job_id;
+      const jobId = canonicalId((ws.data as { query?: { job_id?: string } }).query?.job_id);
       if (!jobId) {
         ws.close(4401, "unauthorized");
         return;
       }
       hub.subscribe(jobId, ws as unknown as ServerWebSocket);
+      armExpiryCheck(ws as unknown as ServerWebSocket);
       ws.send(JSON.stringify({ type: "ready", job_id: jobId }));
     },
     message(ws, message) {
@@ -317,8 +418,9 @@ export function createOtaStreamRoutes(
       }
     },
     close(ws) {
-      const jobId = (ws.data as { query?: { job_id?: string } }).query?.job_id;
+      const jobId = canonicalId((ws.data as { query?: { job_id?: string } }).query?.job_id);
       if (jobId) hub.unsubscribe(jobId, ws as unknown as ServerWebSocket);
+      clearExpiry(ws as unknown as ServerWebSocket);
     },
   });
 }

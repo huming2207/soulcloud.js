@@ -55,6 +55,10 @@ export interface StreamOptions {
    * OTA job. Tests inject a short value; defaults to 250ms per stream.
    */
   debounceMs?: number;
+  /** WS token-expiry re-check interval (ms); tests inject a short value. */
+  expCheckIntervalMs?: number;
+  /** Per-process WS connection cap; tests inject a small value. */
+  maxConnections?: number;
 }
 
 export function createApp(
@@ -128,9 +132,9 @@ export function createApp(
     })
     .use(createAuthRoutes(prisma, auth))
     .use(createLoggingRoutes(prisma, auth))
-    .use(createLogStreamRoutes(prisma, auth))
-    .use(createCommandStreamRoutes(prisma, auth, { debounceMs: streamOptions.debounceMs }))
-    .use(createOtaStreamRoutes(prisma, auth, { debounceMs: streamOptions.debounceMs }))
+    .use(createLogStreamRoutes(prisma, auth, { databaseUrl: process.env.DATABASE_URL ?? "", debounceMs: streamOptions.debounceMs, expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))
+    .use(createCommandStreamRoutes(prisma, auth, { debounceMs: streamOptions.debounceMs, expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))
+    .use(createOtaStreamRoutes(prisma, auth, { debounceMs: streamOptions.debounceMs, expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))
     .use(createFirmwareRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createRolloutRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createMeRoutes(prisma, auth))

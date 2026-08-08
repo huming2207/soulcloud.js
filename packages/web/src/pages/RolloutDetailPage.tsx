@@ -113,7 +113,7 @@ export function RolloutDetailPage() {
               {t("job.title", { id: r.rollout_id.slice(0, 8) })}
             </Typography>
             <Chip
-              label={t(ROLLOUT_STATE_LABEL[r.state])}
+              label={t(ROLLOUT_STATE_LABEL[r.state] ?? "state.unknown")}
               color={ROLLOUT_STATE_COLOR[r.state]}
               variant="outlined"
             />
@@ -176,7 +176,7 @@ export function RolloutDetailPage() {
                               key={state}
                               size="small"
                               variant="outlined"
-                              label={`${t(TARGET_LABEL[state as OtaTargetState])} ${count}`}
+                              label={`${t(TARGET_LABEL[state as OtaTargetState] ?? "state.unknown")} ${count}`}
                             />
                           ))}
                         </Stack>
