@@ -44,6 +44,13 @@ export function LogsPage() {
         disabled={devices.isLoading || list.length === 0}
         sx={{ maxWidth: 420 }}
         helperText={!devices.error && list.length === 0 ? t("logs.noDevices") : undefined}
+        slotProps={{
+          select: {
+            // stable hook for the browser E2E (MUI's aria association
+            // differs between versions; testid is unambiguous)
+            inputProps: { "data-testid": "device-select" },
+          },
+        }}
       >
         {list.map((d) => (
           <MenuItem key={d.device_id} value={d.device_id}>

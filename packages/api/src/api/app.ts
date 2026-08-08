@@ -49,10 +49,19 @@ const CreateCommandBatchBody = z
   })
   .strict();
 
+export interface StreamOptions {
+  /**
+   * Debounce window (ms) for merging burst WS pushes per command batch /
+   * OTA job. Tests inject a short value; defaults to 250ms per stream.
+   */
+  debounceMs?: number;
+}
+
 export function createApp(
   prisma: PrismaClient,
   jwt: JwtConfig,
   otaTargetTtlSeconds = 15 * 60,
+  streamOptions: StreamOptions = {},
 ) {
   // C1 (round-5): never fall back to a hardcoded secret. The caller MUST
   // pass the configured JwtConfig (index.ts wires .env; tests inject
@@ -120,8 +129,8 @@ export function createApp(
     .use(createAuthRoutes(prisma, auth))
     .use(createLoggingRoutes(prisma, auth))
     .use(createLogStreamRoutes(prisma, auth))
-    .use(createCommandStreamRoutes(prisma, auth))
-    .use(createOtaStreamRoutes(prisma, auth))
+    .use(createCommandStreamRoutes(prisma, auth, { debounceMs: streamOptions.debounceMs }))
+    .use(createOtaStreamRoutes(prisma, auth, { debounceMs: streamOptions.debounceMs }))
     .use(createFirmwareRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createRolloutRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createMeRoutes(prisma, auth))

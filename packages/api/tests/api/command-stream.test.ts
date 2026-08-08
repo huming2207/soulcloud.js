@@ -38,7 +38,7 @@ const TEST_JWT = {
   refreshTtlSeconds: 3600,
 };
 
-const app = createApp(prisma, TEST_JWT);
+const app = createApp(prisma, TEST_JWT, undefined, { debounceMs: 25 });
 const server = app.listen({ port: 0, hostname: "127.0.0.1" });
 const wsBase = `ws://127.0.0.1:${server.server!.port}`;
 
@@ -128,6 +128,48 @@ async function waitForMessage<T extends Record<string, unknown>>(
       throw new Error("timed out waiting for WS message");
     }
     await Bun.sleep(25);
+  }
+}
+
+/** True if the raw frame is a batch push ({ type: "batch" }). */
+function isBatchFrame(raw: string): boolean {
+  try {
+    return (JSON.parse(raw) as { type?: string }).type === "batch";
+  } catch {
+    return false;
+  }
+}
+
+/** Polls until at least `count` batch frames have been received. */
+async function waitForFrameCount(
+  client: WsClient,
+  count: number,
+  timeoutMs = 3000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (client.messages.filter(isBatchFrame).length >= count) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${count} batch frames`);
+    }
+    await Bun.sleep(25);
+  }
+}
+
+/**
+ * NOTIFY is lossy and the hub's LISTEN session starts lazily on the first
+ * subscription: re-notify on a short loop until a batch frame arrives
+ * (3s deadline) instead of assuming the listener is already up.
+ */
+async function probeListenerUp(client: WsClient, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await prisma.$executeRaw`SELECT pg_notify(${COMMAND_RESULT_CHANNEL}, ${batchId})`;
+    await Bun.sleep(50);
+    if (client.messages.some(isBatchFrame)) return;
+    if (Date.now() >= deadline) {
+      throw new Error("listener never came up (no batch frame received)");
+    }
   }
 }
 
@@ -224,23 +266,7 @@ describe("GET /v1/ws/commands", () => {
     // subscription, so re-notify manually until the listener is confirmed
     // up (a batch frame arrives). From then on the transaction-internal
     // notify of recordDeviceResult must reach the subscriber by itself.
-    const probeDeadline = Date.now() + 3000;
-    for (;;) {
-      await prisma.$executeRaw`SELECT pg_notify(${COMMAND_RESULT_CHANNEL}, ${batchId})`;
-      const seen = client.messages.some((raw) => {
-        try {
-          const m = JSON.parse(raw) as { type?: string };
-          return m.type === "batch";
-        } catch {
-          return false;
-        }
-      });
-      if (seen) break;
-      if (Date.now() >= probeDeadline) {
-        throw new Error("listener never came up (no batch frame received)");
-      }
-      await Bun.sleep(50);
-    }
+    await probeListenerUp(client);
 
     // record a real terminal result through the queue code path; its
     // transaction-internal pg_notify must now drive the push on its own
@@ -301,6 +327,32 @@ describe("GET /v1/ws/commands", () => {
     client.ws.close();
   });
 
+  test("notifies inside the debounce window merge into one push; a post-window notify pushes again", async () => {
+    const client = connectWs(wsUrl(batchId), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    await waitForMessage(client, (m) => m.type === "ready");
+    await probeListenerUp(client);
+    // let any in-flight debounce from the probe settle before counting
+    await Bun.sleep(100);
+
+    const frameCount = () => client.messages.filter(isBatchFrame).length;
+    const before = frameCount();
+
+    // a) two notifies inside the debounce window (25ms) -> one merged frame
+    await prisma.$executeRaw`SELECT pg_notify(${COMMAND_RESULT_CHANNEL}, ${batchId})`;
+    await Bun.sleep(10);
+    await prisma.$executeRaw`SELECT pg_notify(${COMMAND_RESULT_CHANNEL}, ${batchId})`;
+    await waitForFrameCount(client, before + 1);
+    // ...and no second frame for the burst
+    await Bun.sleep(150);
+    expect(frameCount()).toBe(before + 1);
+
+    // b) a notify after the window -> a fresh frame
+    await prisma.$executeRaw`SELECT pg_notify(${COMMAND_RESULT_CHANNEL}, ${batchId})`;
+    await waitForFrameCount(client, before + 2);
+    client.ws.close();
+  });
+
   test("no subprotocol: handshake rejected", async () => {
     const client = connectWs(wsUrl(batchId));
     expect(await waitForSettle(client)).toBe("closed");
@@ -328,6 +380,28 @@ describe("GET /v1/ws/commands", () => {
     client.ws.send("ping");
     const pong = await waitForMessage<{ type: string }>(client, (m) => m.type === "pong");
     expect(pong).toEqual({ type: "pong" });
+    client.ws.close();
+  });
+
+  test("hub close() cancels pending debounce timers (no push after close)", async () => {
+    const client = connectWs(wsUrl(batchId), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    await waitForMessage(client, (m) => m.type === "ready");
+    await probeListenerUp(client);
+    await Bun.sleep(100); // let in-flight debounce pushes settle
+
+    const before = client.messages.filter(isBatchFrame).length;
+    // arm a debounce push, then close the hub before the timer fires
+    await prisma.$executeRaw`SELECT pg_notify(${COMMAND_RESULT_CHANNEL}, ${batchId})`;
+    await Bun.sleep(10);
+    const hub = await getCommandStreamHub(prisma, process.env.DATABASE_URL ?? "", {
+      warn: () => {},
+    });
+    await hub.close();
+
+    // well past the debounce window: no batch frame may arrive after close
+    await Bun.sleep(200);
+    expect(client.messages.filter(isBatchFrame).length).toBe(before);
     client.ws.close();
   });
 });

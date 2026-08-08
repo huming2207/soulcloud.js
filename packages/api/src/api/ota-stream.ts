@@ -17,6 +17,13 @@
  * lossy: a missed notification costs latency only — clients fall back to
  * the REST polling endpoint.
  *
+ * Burst notifications for the same job are debounced: a notify arms a
+ * per-job timer (DEBOUNCE_MS, default 250ms, configurable via hub
+ * options) and further notifies within the window reset it, so N target
+ * updates that land together cost one re-read + one full push instead of
+ * N (the O(N²) amplification). Notifies with no current subscribers are
+ * ignored without arming a timer.
+ *
  * The hub is a process-wide singleton: the LISTEN connection starts
  * lazily on the first subscription and reconnects on failure. This is an
  * independent implementation of the same pattern as log-stream.ts (the
@@ -31,6 +38,14 @@ import { createPgChannelListener } from "../pg-listen";
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
 
 const WS_PROTOCOL = "soulcloud";
+
+/** Default per-job notification debounce window (ms). */
+const DEBOUNCE_MS = 250;
+
+/** Hub options; `debounceMs` lets tests inject a short window. */
+interface OtaStreamHubOptions {
+  debounceMs?: number;
+}
 
 interface OtaStreamHub {
   /** Registers a socket for a job; starts the listener on first use. */
@@ -54,11 +69,34 @@ export function getOtaStreamHub(
   prisma: PrismaClient,
   databaseUrl: string,
   log: HubLog,
+  options: OtaStreamHubOptions = {},
 ): OtaStreamHub {
   if (hubSingleton) return hubSingleton;
 
+  const debounceMs = options.debounceMs ?? DEBOUNCE_MS;
   const subscribers = new Map<string, Set<ServerWebSocket>>();
+  const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let closed = false;
+
+  /**
+   * Debounced push scheduling: notifies within the window for the same
+   * job reset the timer, so a burst of target updates merges into one
+   * re-read + one push. Without subscribers the notify is ignored
+   * (lossy by design; clients fall back to REST).
+   */
+  function schedulePush(jobId: string) {
+    const sockets = subscribers.get(jobId);
+    if (!sockets || sockets.size === 0) return;
+    const existing = pendingTimers.get(jobId);
+    if (existing) clearTimeout(existing);
+    pendingTimers.set(
+      jobId,
+      setTimeout(() => {
+        pendingTimers.delete(jobId);
+        void pushJobUpdate(prisma, subscribers, jobId, log);
+      }, debounceMs),
+    );
+  }
 
   // LISTEN plumbing is shared with the log/command streams
   const listener = createPgChannelListener(
@@ -66,7 +104,7 @@ export function getOtaStreamHub(
     OTA_NOTIFY_CHANNEL,
     (payload) => {
       if (!payload) return;
-      void pushJobUpdate(prisma, subscribers, payload, log);
+      schedulePush(payload);
     },
     log,
   );
@@ -89,6 +127,9 @@ export function getOtaStreamHub(
     },
     async close() {
       closed = true;
+      // cancel pending debounce pushes so the process exits cleanly
+      for (const timer of pendingTimers.values()) clearTimeout(timer);
+      pendingTimers.clear();
       await listener.close();
       subscribers.clear();
       hubSingleton = null;
@@ -203,12 +244,13 @@ async function pushJobUpdate(
 export function createOtaStreamRoutes(
   prisma: PrismaClient,
   jwt: JwtConfig,
-  options: { databaseUrl: string; log?: HubLog } = {
-    databaseUrl: process.env.DATABASE_URL ?? "",
-  },
+  options: { databaseUrl?: string; log?: HubLog; debounceMs?: number } = {},
 ) {
+  const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL ?? "";
   const log: HubLog = options.log ?? { warn: (m, f) => console.warn(`[soulcloud-api] ${m}`, f ?? "") };
-  const hub = getOtaStreamHub(prisma, options.databaseUrl, log);
+  const hub = getOtaStreamHub(prisma, databaseUrl, log, {
+    debounceMs: options.debounceMs,
+  });
 
   return new Elysia().ws("/v1/ws/ota", {
     async beforeHandle({ request, query, set }) {

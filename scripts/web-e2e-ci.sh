@@ -131,11 +131,16 @@ except Exception:
 
 agent-browser --session "$SESSION" open "$WEB/logs"
 agent-browser --session "$SESSION" wait --text "Select a device to view the decoded log stream" --timeout 20000
-# the device select stays disabled until its list has loaded; wait for it
-agent-browser --session "$SESSION" wait --fn "document.querySelectorAll('div[role=combobox][aria-disabled]').length === 0" --timeout 20000
-# MUI Select: click the device combobox (the layout header has its own
-# project combobox, so match by accessible name), then pick the E2E device
-agent-browser --session "$SESSION" find role combobox click --name Device
+# the device select stays disabled until its list has loaded; wait for
+# the DEVICE combobox specifically: the testid rides MUI's native input
+# and the [role=combobox] display div is its sibling under the same
+# MuiInputBase root (the layout header has its own project combobox, so
+# match via the testid)
+agent-browser --session "$SESSION" wait --fn "(() => { const input = document.querySelector('[data-testid=device-select]'); const base = input && input.closest('.MuiInputBase-root'); const root = base && base.querySelector('[role=combobox]'); return !!root && !root.hasAttribute('aria-disabled') && root.offsetParent !== null; })()" --timeout 20000
+# MUI Select opens on mousedown at the combobox root (the visible
+# MuiSelect-select div covers the native input, so clicking the input is
+# intercepted); dispatch mousedown on the root directly
+agent-browser --session "$SESSION" eval "(() => { const input = document.querySelector('[data-testid=device-select]'); const base = input && input.closest('.MuiInputBase-root'); const root = base && base.querySelector('[role=combobox]'); if (!root) return false; root.scrollIntoView({ block: 'center' }); root.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return true; })()"
 agent-browser --session "$SESSION" wait '[role="option"]' --timeout 10000
 agent-browser --session "$SESSION" click "[role=\"option\"][data-value=\"$DEV_ID\"]"
 # wait out the menu close transition before interacting again

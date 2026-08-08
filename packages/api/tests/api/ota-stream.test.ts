@@ -30,7 +30,7 @@ const TEST_JWT = {
   refreshTtlSeconds: 3600,
 };
 
-const app = createApp(prisma, TEST_JWT);
+const app = createApp(prisma, TEST_JWT, undefined, { debounceMs: 25 });
 const server = app.listen({ port: 0, hostname: "127.0.0.1" });
 const wsBase = `ws://127.0.0.1:${server.server!.port}`;
 
@@ -152,6 +152,31 @@ async function notifyUntil(
     if (Date.now() >= deadline) {
       throw new Error("timed out waiting for WS ota update");
     }
+  }
+}
+
+/** True if the raw frame is an ota push ({ type: "ota" }). */
+function isOtaFrame(raw: string): boolean {
+  try {
+    return (JSON.parse(raw) as { type?: string }).type === "ota";
+  } catch {
+    return false;
+  }
+}
+
+/** Polls until at least `count` ota frames have been received. */
+async function waitForFrameCount(
+  client: WsClient,
+  count: number,
+  timeoutMs = 3000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (client.messages.filter(isOtaFrame).length >= count) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${count} ota frames`);
+    }
+    await Bun.sleep(25);
   }
 }
 
@@ -320,6 +345,33 @@ describe("GET /v1/ws/ota", () => {
     client.ws.close();
   });
 
+  test("notifies inside the debounce window merge into one push; a post-window notify pushes again", async () => {
+    const client = connectWs(wsUrl(jobId), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    await waitForMessage(client, (m) => m.type === "ready");
+    // probe until the lazy LISTEN session is confirmed up
+    await notifyUntil(client, jobId, (m) => m?.type === "ota" && m?.job_id === jobId);
+    // let any in-flight debounce from the probe settle before counting
+    await Bun.sleep(100);
+
+    const frameCount = () => client.messages.filter(isOtaFrame).length;
+    const before = frameCount();
+
+    // a) two notifies inside the debounce window (25ms) -> one merged frame
+    await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+    await Bun.sleep(10);
+    await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+    await waitForFrameCount(client, before + 1);
+    // ...and no second frame for the burst
+    await Bun.sleep(150);
+    expect(frameCount()).toBe(before + 1);
+
+    // b) a notify after the window -> a fresh frame
+    await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+    await waitForFrameCount(client, before + 2);
+    client.ws.close();
+  });
+
   test("no subprotocol: handshake rejected", async () => {
     const client = connectWs(wsUrl(jobId));
     expect(await waitForSettle(client)).toBe("closed");
@@ -347,6 +399,29 @@ describe("GET /v1/ws/ota", () => {
     client.ws.send("ping");
     const pong = await waitForMessage<{ type: string }>(client, (m) => m.type === "pong");
     expect(pong).toEqual({ type: "pong" });
+    client.ws.close();
+  });
+
+  test("hub close() cancels pending debounce timers (no push after close)", async () => {
+    const client = connectWs(wsUrl(jobId), [WS_PROTOCOL, accessToken]);
+    expect(await waitForSettle(client)).toBe("open");
+    await waitForMessage(client, (m) => m.type === "ready");
+    // probe until the lazy LISTEN session is confirmed up
+    await notifyUntil(client, jobId, (m) => m?.type === "ota" && m?.job_id === jobId);
+    await Bun.sleep(100); // let in-flight debounce pushes settle
+
+    const before = client.messages.filter(isOtaFrame).length;
+    // arm a debounce push, then close the hub before the timer fires
+    await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+    await Bun.sleep(10);
+    const hub = await getOtaStreamHub(prisma, process.env.DATABASE_URL ?? "", {
+      warn: () => {},
+    });
+    await hub.close();
+
+    // well past the debounce window: no ota frame may arrive after close
+    await Bun.sleep(200);
+    expect(client.messages.filter(isOtaFrame).length).toBe(before);
     client.ws.close();
   });
 });

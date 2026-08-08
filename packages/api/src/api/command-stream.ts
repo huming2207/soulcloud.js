@@ -16,6 +16,13 @@
  * `{ type: "batch", ...detail }`. NOTIFY is lossy: a missed notification
  * costs latency only — clients fall back to the REST batch endpoint.
  *
+ * Burst notifications for the same batch are debounced: a notify arms a
+ * per-batch timer (DEBOUNCE_MS, default 250ms, configurable via hub
+ * options) and further notifies within the window reset it, so N results
+ * that land together cost one re-query + one full-batch push instead of
+ * N (the O(N²) amplification). Notifies with no current subscribers are
+ * ignored without arming a timer.
+ *
  * The hub is a process-wide singleton sharing the LISTEN plumbing with
  * the log stream (see pg-listen.ts): the connection starts lazily on the
  * first subscription and reconnects on failure.
@@ -33,6 +40,14 @@ import { loadCommandBatchDetail } from "./devices";
 import { createPgChannelListener, type PgListenLog } from "../pg-listen";
 
 const WS_PROTOCOL = "soulcloud";
+
+/** Default per-batch notification debounce window (ms). */
+const DEBOUNCE_MS = 250;
+
+/** Hub options; `debounceMs` lets tests inject a short window. */
+interface CommandStreamHubOptions {
+  debounceMs?: number;
+}
 
 interface CommandStreamHub {
   /** Registers a socket for a batch; starts the listener on first use. */
@@ -52,16 +67,40 @@ export function getCommandStreamHub(
   prisma: PrismaClient,
   databaseUrl: string,
   log: PgListenLog,
+  options: CommandStreamHubOptions = {},
 ): CommandStreamHub {
   if (hubSingleton) return hubSingleton;
 
+  const debounceMs = options.debounceMs ?? DEBOUNCE_MS;
   const subscribers = new Map<string, Set<ServerWebSocket>>();
+  const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /**
+   * Debounced push scheduling: notifies within the window for the same
+   * batch reset the timer, so a burst of results merges into one
+   * re-query + one push. Without subscribers the notify is ignored
+   * (lossy by design; clients fall back to REST).
+   */
+  function schedulePush(batchId: string) {
+    const sockets = subscribers.get(batchId);
+    if (!sockets || sockets.size === 0) return;
+    const existing = pendingTimers.get(batchId);
+    if (existing) clearTimeout(existing);
+    pendingTimers.set(
+      batchId,
+      setTimeout(() => {
+        pendingTimers.delete(batchId);
+        void pushBatch(prisma, subscribers, batchId, log);
+      }, debounceMs),
+    );
+  }
+
   const listener = createPgChannelListener(
     databaseUrl,
     COMMAND_RESULT_CHANNEL,
     (payload) => {
       if (!payload) return;
-      void pushBatch(prisma, subscribers, payload, log);
+      schedulePush(payload);
     },
     log,
   );
@@ -83,6 +122,9 @@ export function getCommandStreamHub(
       if (set.size === 0) subscribers.delete(batchId);
     },
     async close() {
+      // cancel pending debounce pushes so the process exits cleanly
+      for (const timer of pendingTimers.values()) clearTimeout(timer);
+      pendingTimers.clear();
       await listener.close();
       subscribers.clear();
       hubSingleton = null;
@@ -132,12 +174,13 @@ async function pushBatch(
 export function createCommandStreamRoutes(
   prisma: PrismaClient,
   jwt: JwtConfig,
-  options: { databaseUrl: string; log?: PgListenLog } = {
-    databaseUrl: process.env.DATABASE_URL ?? "",
-  },
+  options: { databaseUrl?: string; log?: PgListenLog; debounceMs?: number } = {},
 ) {
+  const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL ?? "";
   const log: PgListenLog = options.log ?? { warn: (m, f) => console.warn(`[soulcloud-api] ${m}`, f ?? "") };
-  const hub = getCommandStreamHub(prisma, options.databaseUrl, log);
+  const hub = getCommandStreamHub(prisma, databaseUrl, log, {
+    debounceMs: options.debounceMs,
+  });
 
   return new Elysia().ws("/v1/ws/commands", {
     async beforeHandle({ request, query, set }) {
