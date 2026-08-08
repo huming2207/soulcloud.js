@@ -8,7 +8,7 @@
  * expose a human-facing HTTP API (that is @soulcloud/api).
  */
 
-import { prisma } from "@soulcloud/core";
+import { DEVICE_STATUS_CHANNEL, prisma } from "@soulcloud/core";
 import { kickDeviceSession, startBroker } from "./mqtt/broker";
 import { attachDispatch } from "./mqtt/dispatch";
 import { startCommandPoller } from "./mqtt/publish";
@@ -47,12 +47,30 @@ aedes.on("clientError", (client, err) => {
 aedes.on("connectionError", (client, err) => {
   logger.warn("connection error", { clientId: client?.id, error: err.message });
 });
+/**
+ * Notifies the web console's device-status channel (lossy: a missed
+ * notification only costs immediacy; the UI falls back to stat
+ * freshness). Never throws into the aedes event handler.
+ */
+function notifyDeviceStatus(uid: string, online: boolean): void {
+  void prisma.$executeRaw`SELECT pg_notify(${DEVICE_STATUS_CHANNEL}, ${JSON.stringify({ online, uid })})`.catch(
+    (error) => {
+      logger.warn("device status notify failed", {
+        deviceUid: uid,
+        error: (error as Error).message,
+      });
+    },
+  );
+}
+
 aedes.on("client", (client) => {
   // NOTE: aedes Client has no "close" event (the type definition is
   // right) - disconnects surface on the broker as "clientDisconnect"
+  notifyDeviceStatus(client.id, true);
 });
 aedes.on("clientDisconnect", (client) => {
   logger.info("client disconnected", { clientId: client.id });
+  notifyDeviceStatus(client.id, false);
 });
 attachDispatch(aedes, prisma, logger, {
   maxPacketBytes: config.UPLINK_MAX_PACKET_BYTES,

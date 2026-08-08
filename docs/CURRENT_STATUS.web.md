@@ -126,7 +126,8 @@ language menu in the app bar persists the choice.
   minimal nginx — SPA fallback + immutable asset caching, no proxying
   inside the container). Compose exposes the API/web/MQTT ports directly;
   TLS termination and `/v1` routing to the API are expected at the
-  reverse proxy (traefik in the reference deployment), outside the base
+  reverse proxy (traefik in the reference deployment, config in
+  `deploy/traefik/`), outside the base
   compose file.
 - **Bundle size**: the main chunk is ~636 KB minified (MUI); route-level
   splitting is in place, a manualChunks split is a future optimisation.

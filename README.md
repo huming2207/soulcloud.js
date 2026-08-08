@@ -263,6 +263,36 @@ docker compose up -d --build
 - MQTT-over-WebSocket TLS is likewise expected at the proxy (stream
   passthrough to `:1883`).
 
+### Reverse-proxy mode (traefik)
+
+A reference traefik v3 stack lives in `deploy/traefik/` (file provider,
+no docker-provider magic):
+
+```sh
+# 1. start the soulcloud services as usual (network <project>_default)
+docker compose up -d --build
+# 2. start traefik on the same host, joined to that network
+#    (edit deploy/traefik/compose.traefik.yaml if the project name differs)
+docker compose -f deploy/traefik/compose.traefik.yaml up -d
+# 3. set your domain + ACME email in deploy/traefik/*.yaml (example.com)
+```
+
+What the proxy does (and what the app deliberately does not):
+
+- **TLS termination** (ACME TLS-ALPN; self-signed example commented in
+  `traefik.yaml`) with an HTTP→HTTPS redirect
+- **Routing**: `host/` → web (`:8081`), `host/v1` + `host/health` → api
+  (`:8080`), `host/mqtt` → broker (`:1883`, WebSocket Upgrade forwarded
+  natively; raise `respondingTimeouts` for long-idle devices — commented
+  in the config)
+- **Rate limiting** on the API routes (register brute-force and OTA
+  download bandwidth; see the deployment notes above) and basic security
+  headers
+- After the proxy is up, the base compose ports (8080/8081/1883) may be
+  dropped from `compose.yaml` (or left published for direct access); the
+  public entry points become `https://<domain>/`, `https://<domain>/v1`
+  and `wss://<domain>/mqtt`.
+
 ## Log ingestion quick tour
 
 ```sh

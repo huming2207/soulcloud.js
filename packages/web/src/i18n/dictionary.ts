@@ -34,6 +34,16 @@ export const zh = {
   "layout.langUk": "Українська",
   "layout.langIt": "Italiano",
 
+  // notifications (rollout lifecycle)
+  "notify.title": "通知",
+    "notify.empty": "暂无通知",
+  "notify.unknown": "未知通知类型",
+"notify.manualApproval": "升级 {{id}} 等待手动批准",
+  "notify.completed": "升级 {{id}} 已完成",
+  "notify.paused": "升级 {{id}} 已暂停（超时）",
+  "notify.aborted": "升级 {{id}} 已中止",
+  "notify.resumed": "升级 {{id}} 已恢复",
+
   // auth
   "auth.login": "登录",
   "auth.loggingIn": "登录中…",
@@ -69,6 +79,11 @@ export const zh = {
   "devices.colUid": "device_uid",
   "devices.colFirmware": "固件",
   "devices.colCredential": "凭据",
+  "devices.colStatus": "在线",
+  "devices.statusOnline": "在线（实时）",
+  "devices.statusOffline": "离线（实时）",
+  "devices.statusRecent": "在线（近期上报）",
+  "devices.statusUnknown": "状态未知",
   "devices.details": "详情",
   "devices.credActive": "正常",
   "devices.credRevoked": "已吊销",
@@ -379,6 +394,16 @@ export const en: Record<DictKey, string> = {
   "layout.langUk": "Українська",
   "layout.langIt": "Italiano",
 
+  // notifications (rollout lifecycle)
+  "notify.title": "Notifications",
+    "notify.empty": "No notifications",
+  "notify.unknown": "Unknown notification type",
+"notify.manualApproval": "Rollout {{id}} awaits manual approval",
+  "notify.completed": "Rollout {{id}} completed",
+  "notify.paused": "Rollout {{id}} paused (timeout)",
+  "notify.aborted": "Rollout {{id}} aborted",
+  "notify.resumed": "Rollout {{id}} resumed",
+
   "auth.login": "Log in",
   "auth.loggingIn": "Logging in…",
   "auth.username": "Username",
@@ -411,6 +436,11 @@ export const en: Record<DictKey, string> = {
   "devices.colUid": "device_uid",
   "devices.colFirmware": "Firmware",
   "devices.colCredential": "Credential",
+  "devices.colStatus": "Status",
+  "devices.statusOnline": "Online (live)",
+  "devices.statusOffline": "Offline (live)",
+  "devices.statusRecent": "Online (recent report)",
+  "devices.statusUnknown": "Status unknown",
   "devices.details": "Details",
   "devices.credActive": "Active",
   "devices.credRevoked": "Revoked",

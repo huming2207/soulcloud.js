@@ -41,6 +41,11 @@ import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate
 
 const WS_PROTOCOL = "soulcloud";
 
+/** jobId -> project id, resolved during the handshake (a job's project
+ *  never changes). Avoids a re-query per WS connection for the
+ *  membership re-check. */
+const jobProjectCache = new Map<string, string>();
+
 /** Default per-job notification debounce window (ms). */
 const DEBOUNCE_MS = 250;
 
@@ -387,6 +392,7 @@ export function createOtaStreamRoutes(
         where: { id: jobId.data },
         select: { projectId: true },
       });
+      if (job) jobProjectCache.set(jobId.data, job.projectId);
       if (!job) {
         set.status = 404;
         return { error: "not_found", message: "job does not exist" };
@@ -416,21 +422,13 @@ export function createOtaStreamRoutes(
         .map((s) => s.trim())[1];
       const userId = jwtSubject(token);
       if (userId) {
-        void prisma.otaJob
-          .findUnique({ where: { id: jobId }, select: { projectId: true } })
-          .then((job) => {
-            // the socket may have closed while the job loaded; a
-            // WeakMap entry would still leak via the closure otherwise
-            if (!job || socket.readyState !== 1) return;
-            accessCleanups.set(
-              socket,
-              scheduleMembershipCheck(socket, prisma, userId, [job.projectId], expCheckIntervalMs),
-            );
-          })
-          .catch(() => {
-            // DB hiccup during scheduling: the M2 expiry check still
-            // bounds the connection; membership re-check is best-effort
-          });
+        const projectId = jobProjectCache.get(jobId);
+        if (projectId) {
+          accessCleanups.set(
+            socket,
+            scheduleMembershipCheck(socket, prisma, userId, [projectId], expCheckIntervalMs),
+          );
+        }
       }
       armExpiryCheck(socket);
       ws.send(JSON.stringify({ type: "ready", job_id: jobId }));

@@ -29,6 +29,8 @@ import { createLoggingRoutes } from "./logging";
 import { createLogStreamRoutes } from "./log-stream";
 import { createCommandStreamRoutes } from "./command-stream";
 import { createOtaStreamRoutes } from "./ota-stream";
+import { createStatusStreamRoutes } from "./status-stream";
+import { createNotificationsStreamRoutes } from "./notifications-stream";
 import { createFirmwareRoutes } from "./firmware";
 import { createRolloutRoutes } from "./rollout";
 import { createMeRoutes } from "./me";
@@ -135,6 +137,8 @@ export function createApp(
     .use(createLogStreamRoutes(prisma, auth, { databaseUrl: process.env.DATABASE_URL ?? "", debounceMs: streamOptions.debounceMs, expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))
     .use(createCommandStreamRoutes(prisma, auth, { debounceMs: streamOptions.debounceMs, expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))
     .use(createOtaStreamRoutes(prisma, auth, { debounceMs: streamOptions.debounceMs, expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))
+    .use(createStatusStreamRoutes(prisma, auth, { databaseUrl: process.env.DATABASE_URL ?? "", debounceMs: streamOptions.debounceMs, expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))
+    .use(createNotificationsStreamRoutes(prisma, auth, { databaseUrl: process.env.DATABASE_URL ?? "", expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))
     .use(createFirmwareRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createRolloutRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createMeRoutes(prisma, auth))

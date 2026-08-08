@@ -28,6 +28,16 @@ export const ru: Record<DictKey, string> = {
   "layout.langUk": "Українська",
   "layout.langIt": "Italiano",
 
+  // notifications (rollout lifecycle)
+  "notify.title": "Уведомления",
+  "notify.empty": "Нет уведомлений",
+  "notify.unknown": "Неизвестный тип уведомления",
+  "notify.manualApproval": "Обновление {{id}} ожидает ручного одобрения",
+  "notify.completed": "Обновление {{id}} завершено",
+  "notify.paused": "Обновление {{id}} приостановлено (таймаут)",
+  "notify.aborted": "Обновление {{id}} прервано",
+  "notify.resumed": "Обновление {{id}} возобновлено",
+
   "auth.login": "Войти",
   "auth.loggingIn": "Вход…",
   "auth.username": "Имя пользователя",
@@ -60,6 +70,11 @@ export const ru: Record<DictKey, string> = {
   "devices.colUid": "device_uid",
   "devices.colFirmware": "Прошивка",
   "devices.colCredential": "Учётные данные",
+  "devices.colStatus": "В сети",
+  "devices.statusOnline": "В сети (в реальном времени)",
+  "devices.statusOffline": "Не в сети (в реальном времени)",
+  "devices.statusRecent": "В сети (недавний отчёт)",
+  "devices.statusUnknown": "Статус неизвестен",
   "devices.details": "Подробнее",
   "devices.credActive": "Активно",
   "devices.credRevoked": "Отозвано",

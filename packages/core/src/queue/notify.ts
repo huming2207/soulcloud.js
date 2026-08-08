@@ -37,3 +37,20 @@ export const LOG_EVENTS_CHANNEL = "soulcloud_log_events";
  * batch rows on every notification and the client falls back to REST.
  */
 export const COMMAND_RESULT_CHANNEL = "soulcloud_command_results";
+
+/**
+ * Rollout lifecycle notifications for the web console (payload = JSON
+ * { type, rollout_id, project_id, ts }). Fired after the state
+ * transition commits; lossy by design - the UI falls back to the REST
+ * rollout detail on reload.
+ */
+export const NOTIFICATIONS_CHANNEL = "soulcloud_notifications";
+
+/**
+ * Device online/offline channel (broker -> web console). Payload is a
+ * JSON object `{"online": boolean, "uid": string}` (JSON because
+ * device UIDs may contain colons). The broker emits it on aedes
+ * client / clientDisconnect; lossy by design — a missed notification
+ * costs immediacy only (the UI falls back to stat freshness).
+ */
+export const DEVICE_STATUS_CHANNEL = "soulcloud_device_status";

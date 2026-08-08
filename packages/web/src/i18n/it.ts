@@ -28,6 +28,16 @@ export const it: Record<DictKey, string> = {
   "layout.langUk": "Українська",
   "layout.langIt": "Italiano",
 
+  // notifications (rollout lifecycle)
+  "notify.title": "Notifiche",
+  "notify.empty": "Nessuna notifica",
+  "notify.unknown": "Tipo di notifica sconosciuto",
+  "notify.manualApproval": "L'aggiornamento {{id}} attende approvazione manuale",
+  "notify.completed": "Aggiornamento {{id}} completato",
+  "notify.paused": "Aggiornamento {{id}} in pausa (timeout)",
+  "notify.aborted": "Aggiornamento {{id}} interrotto",
+  "notify.resumed": "Aggiornamento {{id}} ripreso",
+
   "auth.login": "Accedi",
   "auth.loggingIn": "Accesso…",
   "auth.username": "Nome utente",
@@ -60,6 +70,11 @@ export const it: Record<DictKey, string> = {
   "devices.colUid": "device_uid",
   "devices.colFirmware": "Firmware",
   "devices.colCredential": "Credenziali",
+  "devices.colStatus": "Stato",
+  "devices.statusOnline": "Online (live)",
+  "devices.statusOffline": "Offline (live)",
+  "devices.statusRecent": "Online (report recente)",
+  "devices.statusUnknown": "Stato sconosciuto",
   "devices.details": "Dettagli",
   "devices.credActive": "Attivo",
   "devices.credRevoked": "Revocate",

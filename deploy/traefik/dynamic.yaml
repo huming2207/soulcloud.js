@@ -1,0 +1,98 @@
+# Traefik dynamic configuration (file provider): routes + middlewares
+# for the SoulcloudJS services.
+#
+# The upstreams are the compose service names on the shared network
+# (api/broker/web from compose.yaml); the traefik container must join
+# that network (see compose.traefik.yaml).
+#
+# Host matching: replace example.com with your real domain everywhere.
+
+# --- middlewares ----------------------------------------------------------
+
+http:
+  middlewares:
+
+    # Register/OTA-download rate limiting the application defers to the
+    # proxy (see README). 20 req/s burst 40 is a starting point; tune to
+    # your fleet size. Limit the auth endpoints separately if you want
+    # tighter control on login.
+    ratelimit-web:
+      rateLimit:
+        average: 20
+        burst: 40
+
+    # Basic security headers on everything. TLS + HSTS come from traefik
+    # itself; the origin nginx also sends its own headers (they pass
+    # through unchanged).
+    security-headers:
+      headers:
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "same-origin"
+        # HSTS is served here (the web container's nginx intentionally
+        # does not send it); one year, include subdomains, preload-ready
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+
+    # Compress text payloads (JSON API responses, SPA assets already
+    # gzip'd by nginx will be skipped by the encoder).
+    compress:
+      compress: {}
+
+# --- routers + services ---------------------------------------------------
+
+  routers:
+
+    # Web console (SPA): host root, everything not matched below.
+    web:
+      rule: "Host(`example.com`)"
+      entryPoints: [websecure]
+      service: web
+      middlewares: [compress, security-headers]
+      tls:
+        certResolver: letsencrypt
+
+    # REST API: /v1 + /health must reach the api process (same-origin
+    # prefixes the frontend already uses).
+    api:
+      rule: "Host(`example.com`) && (PathPrefix(`/v1`) || PathPrefix(`/health`))"
+      entryPoints: [websecure]
+      service: api
+      middlewares: [ratelimit-web, security-headers]
+      tls:
+        certResolver: letsencrypt
+
+    # MQTT over WebSocket: traefik forwards the Upgrade handshake
+    # natively (no special middleware). Long-lived connections need the
+    # responding timeouts raised above their defaults; see the
+    # [entryPoints.websecure.transport] comment in the static config
+    # (uncomment `respondingTimeouts` there if devices idle >60s).
+    mqtt:
+      rule: "Host(`example.com`) && PathPrefix(`/mqtt`)"
+      entryPoints: [websecure]
+      service: broker
+      tls:
+        certResolver: letsencrypt
+
+  services:
+
+    web:
+      loadBalancer:
+        servers:
+          - url: "http://web:80"
+
+    api:
+      loadBalancer:
+        servers:
+          - url: "http://api:8080"
+
+    broker:
+      loadBalancer:
+        servers:
+          - url: "http://broker:1883"
+        # No health check on the broker: it has no HTTP endpoint (WS
+        # listener only) and traefik's pass-through forwards the Upgrade
+        # regardless. A down broker shows as a connection error to the
+        # device, which is the intended failure mode.

@@ -35,6 +35,20 @@ mock.module("./ProjectContext", () => ({
   useProject: () => projectCtx,
 }));
 
+const notificationsApi: {
+  useNotificationsStream: ReturnType<typeof mock>;
+  lastOnNotification: ((n: { type: string; rollout_id: string; project_id: string }) => void) | null;
+} = {
+  useNotificationsStream: mock(
+    (_projectId?: string, opts?: { onNotification?: (n: { type: string; rollout_id: string; project_id: string }) => void }) => {
+      notificationsApi.lastOnNotification = opts?.onNotification ?? null;
+      return "open" as const;
+    },
+  ),
+  lastOnNotification: null,
+};
+mock.module("../api/notifications", () => notificationsApi);
+
 const { AppLayout } = await import("./AppLayout");
 
 function renderLayout() {
@@ -45,6 +59,7 @@ function renderLayout() {
         <Routes>
           <Route element={<AppLayout />}>
             <Route path="/devices" element={<div>DEVICES-PAGE</div>} />
+            <Route path="/rollouts/:rolloutId" element={<div>ROLLOUT-DETAIL-PAGE</div>} />
             <Route path="/" element={<div>HOME-PAGE</div>} />
           </Route>
           <Route path="/login" element={<div>LOGIN-PAGE</div>} />
@@ -58,6 +73,8 @@ function renderLayout() {
 beforeEach(() => {
   authCtx.logout.mockClear();
   projectCtx.setProjectId.mockClear();
+  notificationsApi.useNotificationsStream.mockClear();
+  notificationsApi.lastOnNotification = null;
   localStorage.clear();
 });
 
@@ -141,5 +158,35 @@ describe("AppLayout page titles and project switching", () => {
     await userEvent.click(screen.getByRole("combobox", { name: /选择项目|Select project/i }));
     await userEvent.click(await screen.findByRole("option", { name: /Beta/ }));
     expect(projectCtx.setProjectId).toHaveBeenCalledWith("p2");
+  });
+
+  test("a pushed notification shows in the bell and navigates to the rollout", async () => {
+    renderLayout();
+    await waitFor(() => expect(notificationsApi.lastOnNotification).not.toBeNull());
+    // the bell badge stays hidden with no notifications
+    expect(screen.queryByText("1")).toBeNull();
+    // deliver a notification through the captured callback
+    notificationsApi.lastOnNotification!({
+      type: "completed",
+      rollout_id: "r1",
+      project_id: "p1",
+    });
+    await userEvent.click(screen.getByRole("button", { name: /通知|Notifications|Уведомления|Сповіщення|Notifiche/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/已完成|completed|завершен|завершено|completato/i),
+      ).not.toBeNull(),
+    );
+    // clicking the entry navigates to the rollout detail
+    await userEvent.click(screen.getByText(/已完成|completed|завершен|завершено|completato/i));
+    await waitFor(() => expect(screen.getByText("ROLLOUT-DETAIL-PAGE")).not.toBeNull());
+  });
+
+  test("bell shows the empty state without notifications", async () => {
+    renderLayout();
+    await userEvent.click(screen.getByRole("button", { name: /通知|Notifications|Уведомления|Сповіщення|Notifiche/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/暂无通知|No notifications|Нет уведомлений|Немає сповіщень|Nessuna notifica/i)).not.toBeNull(),
+    );
   });
 });

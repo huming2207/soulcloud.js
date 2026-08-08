@@ -12,6 +12,10 @@ import AddIcon from "@mui/icons-material/Add";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef, GridPaginationModel } from "@mui/x-data-grid";
 import { fetchDevices } from "../api/devices";
+import { useDeviceStatusStream } from "../api/deviceStatus";
+
+/** stat-freshness fallback window: a report within this means "recently seen". */
+const STATUS_FALLBACK_MS = 5 * 60_000;
 import { useProject } from "../layout/ProjectContext";
 import { NewDeviceDialog } from "../components/NewDeviceDialog";
 import { QueryError } from "../components/QueryState";
@@ -28,10 +32,24 @@ export function DevicesPage() {
     pageSize: 25,
   });
   const [newDeviceOpen, setNewDeviceOpen] = useState(false);
+  // deviceUid -> online (live WS status; falls back to stat freshness)
+  const [onlineMap, setOnlineMap] = useState<Map<string, boolean>>(new Map());
+  const statusStreamStatus = useDeviceStatusStream(projectId ?? undefined, {
+    enabled: Boolean(projectId),
+    onStatus: (event) => {
+      setOnlineMap((prev) => {
+        const next = new Map(prev);
+        next.set(event.device_uid, event.online);
+        return next;
+      });
+    },
+  });
 
-  // switching projects must not leave the page index out of range
+  // switching projects must not leave the page index out of range, and
+  // the live status map must not leak devices from the previous project
   useEffect(() => {
     setPagination((p) => ({ ...p, page: 0 }));
+    setOnlineMap(new Map());
   }, [projectId]);
 
   const devices = useQuery({
@@ -68,6 +86,54 @@ export function DevicesPage() {
         renderCell: (params) => (
           <Box sx={{ fontFamily: "monospace", fontSize: 13 }}>{params.value}</Box>
         ),
+      },
+      {
+        field: "status",
+        headerName: t("devices.colStatus"),
+        width: 90,
+        sortable: false,
+        filterable: false,
+        renderCell: (params) => {
+          // live WS status wins; otherwise infer from stat freshness
+          // (a report within 5 minutes means the device talked to the
+          // broker recently); unknown stays grey
+          const uid = params.row.device_uid as string;
+          const live = onlineMap.get(uid);
+          const reportedAt = params.row.fw_reported_at as string | null;
+          const recent =
+            live === undefined &&
+            reportedAt !== null &&
+            Date.now() - new Date(reportedAt).getTime() < STATUS_FALLBACK_MS;
+          const online = live ?? (recent ? true : undefined);
+          const label =
+            live === true
+              ? t("devices.statusOnline")
+              : live === false
+                ? t("devices.statusOffline")
+                : recent
+                  ? t("devices.statusRecent")
+                  : t("devices.statusUnknown");
+          return (
+            <Tooltip title={label}>
+              <Box
+                role="img"
+                aria-label={label}
+                sx={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  bgcolor:
+                    online === true
+                      ? "success.main"
+                      : online === false
+                        ? "error.main"
+                        : "text.disabled",
+                  display: "inline-block",
+                }}
+              />
+            </Tooltip>
+          );
+        },
       },
       {
         field: "fw_hash",
@@ -117,7 +183,7 @@ export function DevicesPage() {
         ),
       },
     ],
-    [navigate, t],
+    [navigate, t, onlineMap],
   );
 
   return (
@@ -127,6 +193,14 @@ export function DevicesPage() {
           {t("devices.title")}
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
+        {statusStreamStatus === "open" && (
+          <Chip
+            size="small"
+            variant="outlined"
+            color="success"
+            label={t("devices.statusOnline")}
+          />
+        )}
         <Button
           variant="contained"
           startIcon={<AddIcon />}

@@ -2,11 +2,21 @@
  * DevicesPage tests: empty-state guidance and data-grid rows.
  */
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "../i18n/I18nContext";
 import type { DeviceListResponse } from "../api/types";
+
+let statusHookStatus: "idle" | "connecting" | "open" | "error" = "idle";
+let statusOnStatus: ((e: { device_uid: string; online: boolean; ts: number }) => void) | null = null;
+const statusApi = {
+  useDeviceStatusStream: mock((_projectId: string | undefined, opts: { onStatus?: (e: { device_uid: string; online: boolean; ts: number }) => void } = {}) => {
+    statusOnStatus = opts.onStatus ?? null;
+    return statusHookStatus;
+  }),
+};
+mock.module("../api/deviceStatus", () => statusApi);
 
 const devicesApi = {
   fetchDevices: mock(
@@ -55,6 +65,9 @@ function renderPage() {
 beforeEach(() => {
   devicesApi.fetchDevices.mockClear();
   devicesApi.fetchDevices.mockResolvedValue({ total: 0, devices: [] });
+  statusHookStatus = "idle";
+  statusOnStatus = null;
+  statusApi.useDeviceStatusStream.mockClear();
 });
 
 describe("DevicesPage", () => {
@@ -87,6 +100,60 @@ describe("DevicesPage", () => {
     await waitFor(() => expect(screen.getByText("sensor-a")).not.toBeNull());
     expect(screen.getByText("uid-1")).not.toBeNull();
     expect(screen.getByText(/已吊销|Revoked|Отозвано|Відкликано|Revocate/i)).not.toBeNull();
+  });
+
+  test("live WS status drives the online dot", async () => {
+    devicesApi.fetchDevices.mockResolvedValue({
+      total: 1,
+      devices: [
+        {
+          device_id: "d1",
+          device_uid: "uid-1",
+          assigned_id: "sensor-a",
+          auth_revoked: false,
+          firmware: null,
+        },
+      ],
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("sensor-a")).not.toBeNull());
+    // offline from the stream: the dot turns red, tooltip "Offline"
+    expect(statusOnStatus).not.toBeNull();
+    act(() => statusOnStatus!({ device_uid: "uid-1", online: false, ts: Date.now() }));
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(/离线（实时）|Offline \(live\)|Не в сети \(в реальном времени\)/i),
+      ).not.toBeNull(),
+    );
+    // online transition flips it green
+    act(() => statusOnStatus!({ device_uid: "uid-1", online: true, ts: Date.now() }));
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(/在线（实时）|Online \(live\)|В сети \(в реальном времени\)/i),
+      ).not.toBeNull(),
+    );
+  });
+
+  test("stat freshness falls back for devices without a live status", async () => {
+    const fresh = new Date(Date.now() - 60_000).toISOString(); // 1 min ago
+    devicesApi.fetchDevices.mockResolvedValue({
+      total: 1,
+      devices: [
+        {
+          device_id: "d1",
+          device_uid: "uid-1",
+          assigned_id: "sensor-a",
+          auth_revoked: false,
+          firmware: { fw_hash: "abc", reported_at: fresh },
+        },
+      ],
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(/在线（近期上报）|Online \(recent report\)|В сети \(недавний отчёт\)/i),
+      ).not.toBeNull(),
+    );
   });
 
   test("a failed load shows the error with a retry action, not an empty table", async () => {

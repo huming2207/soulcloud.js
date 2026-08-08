@@ -1,0 +1,50 @@
+# Reference reverse-proxy stack for SoulcloudJS (traefik v3, file
+# provider). Run it alongside the main compose stack:
+#
+#   docker compose up -d                       # soulcloud services
+#   docker compose -f deploy/traefik/compose.traefik.yaml up -d
+#
+# Requirements:
+#   - both stacks share a docker network so traefik can reach the
+#     api/broker/web services by their compose service names
+#   - the main compose project's default network is
+#     <project>_default (e.g. soulcloudjs_default); join it explicitly
+#     below instead of relying on project name guessing
+#   - replace example.com in dynamic.yaml with your real domain and set
+#     the ACME email in traefik.yaml
+#   - ports 80/443 must be free on the host; the base compose ports
+#     (8080/8081/1883) can stay published for direct access or be
+#     removed once the proxy is the only entry point
+#
+# Once the proxy is up, the public entry points are:
+#   https://example.com/          web console
+#   https://example.com/v1, /health   REST API (same-origin)
+#   wss://example.com/mqtt        MQTT over WebSocket (TLS)
+
+services:
+  traefik:
+    image: traefik:v3.4
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # static + dynamic config (file provider; watch for edits)
+      - ./traefik.yaml:/etc/traefik/traefik.yaml:ro
+      - ./dynamic.yaml:/etc/traefik/dynamic/dynamic.yaml:ro
+      # ACME account + certificates (persist across restarts)
+      - traefik-acme:/etc/traefik/acme
+    networks:
+      - default
+      # join the main stack's network to resolve api/broker/web:
+      - soulcloudjs_default
+
+networks:
+  # the main compose project (soulcloudjs) creates this network; it must
+  # already exist (run the base `docker compose up -d` first). If your
+  # compose project has a different name, adjust here.
+  soulcloudjs_default:
+    external: true
+
+volumes:
+  traefik-acme:

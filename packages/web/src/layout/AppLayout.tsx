@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import AppBar from "@mui/material/AppBar";
 import Avatar from "@mui/material/Avatar";
@@ -27,10 +27,17 @@ import MemoryIcon from "@mui/icons-material/Memory";
 import UpdateIcon from "@mui/icons-material/Update";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
+import Badge from "@mui/material/Badge";
+import NotificationsIcon from "@mui/icons-material/Notifications";
 import LogoutIcon from "@mui/icons-material/Logout";
 import MenuIcon from "@mui/icons-material/Menu";
 import { useAuth } from "../auth/AuthContext";
 import { useProject } from "./ProjectContext";
+import {
+  useNotificationsStream,
+  type RolloutNotification,
+  type RolloutNotificationType,
+} from "../api/notifications";
 import { useI18n } from "../i18n/I18nContext";
 import type { DictKey } from "../i18n/dictionary";
 import TranslateIcon from "@mui/icons-material/Translate";
@@ -44,6 +51,15 @@ const LANG_OPTIONS = [
   { locale: "uk", labelKey: "layout.langUk" as DictKey },
   { locale: "it", labelKey: "layout.langIt" as DictKey },
 ] as const;
+
+/** Notification type -> i18n key for the bell list. */
+const NOTIFY_LABEL: Record<RolloutNotificationType, DictKey> = {
+  manual_approval: "notify.manualApproval",
+  completed: "notify.completed",
+  paused: "notify.paused",
+  aborted: "notify.aborted",
+  resumed: "notify.resumed",
+};
 
 const NAV_ITEMS = [
   { path: "/", labelKey: "nav.dashboard" as DictKey, icon: <DashboardIcon /> },
@@ -75,6 +91,16 @@ export function AppLayout() {
   const { mode, setMode, systemMode } = useColorScheme();
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
   const [langAnchor, setLangAnchor] = useState<null | HTMLElement>(null);
+  const [notifAnchor, setNotifAnchor] = useState<null | HTMLElement>(null);
+  const [notifications, setNotifications] = useState<RolloutNotification[]>([]);
+  useNotificationsStream(projectId ?? undefined, {
+    onNotification: (n) =>
+      setNotifications((prev) => [n, ...prev].slice(0, 20)),
+  });
+  // notifications are per-project; drop the previous project's bell items
+  useEffect(() => {
+    setNotifications([]);
+  }, [projectId]);
 
   // mode is undefined on first render; fall back to the resolved system mode
   const isDark = mode === "dark" || (mode === undefined && systemMode === "dark");
@@ -170,6 +196,52 @@ export function AppLayout() {
               ))}
             </Select>
           )}
+
+          {/* notifications bell */}
+          <Tooltip title={t("notify.title")}>
+            <IconButton
+              color="inherit"
+              onClick={(e) => setNotifAnchor(e.currentTarget)}
+              aria-label={t("notify.title")}
+              aria-haspopup="true"
+            >
+              <Badge badgeContent={notifications.length} color="error">
+                <NotificationsIcon />
+              </Badge>
+            </IconButton>
+          </Tooltip>
+          <Menu
+            anchorEl={notifAnchor}
+            open={Boolean(notifAnchor)}
+            onClose={() => setNotifAnchor(null)}
+            slotProps={{ paper: { sx: { maxHeight: 360, width: 320 } } }}
+          >
+            {notifications.length === 0 ? (
+              <MenuItem disabled sx={{ opacity: 1 }}>
+                <Typography variant="body2" color="text.secondary">
+                  {t("notify.empty")}
+                </Typography>
+              </MenuItem>
+            ) : (
+              notifications.map((n, i) => (
+                <MenuItem
+                  key={`${n.rollout_id}-${i}`}
+                  onClick={() => {
+                    setNotifAnchor(null);
+                    navigate(`/rollouts/${n.rollout_id}`);
+                  }}
+                  sx={{ whiteSpace: "normal" }}
+                >
+                  <Typography variant="body2">
+                    {t(NOTIFY_LABEL[n.type] ?? "notify.unknown")}{" "}
+                    <Box component="span" sx={{ fontFamily: "monospace", fontSize: 12 }}>
+                      {n.rollout_id.slice(0, 8)}…
+                    </Box>
+                  </Typography>
+                </MenuItem>
+              ))
+            )}
+          </Menu>
 
           {/* language toggle */}
           <Tooltip title={t("layout.lang")}>

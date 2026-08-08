@@ -24,7 +24,7 @@
 import { randomUUID, randomInt } from "node:crypto";
 import type { PrismaClient } from "../db";
 import { MAX_OTA_TARGETS, OtaError } from "./deploy";
-import { OTA_NOTIFY_CHANNEL } from "../queue/notify";
+import { NOTIFICATIONS_CHANNEL, OTA_NOTIFY_CHANNEL } from "../queue/notify";
 
 /** Default auto-strategy ratios (cumulative; last must be 1.0). */
 export const DEFAULT_AUTO_RATIOS = [0.05, 0.25, 1.0] as const;
@@ -376,6 +376,22 @@ export async function advanceRollouts(
   return summary;
 }
 
+async function notifyRolloutEvent(
+  prisma: PrismaClient,
+  type: "manual_approval" | "completed" | "paused" | "aborted" | "resumed",
+  rolloutId: string,
+  projectId: string,
+): Promise<void> {
+  try {
+    await prisma.$executeRaw`SELECT pg_notify(
+      ${NOTIFICATIONS_CHANNEL},
+      ${JSON.stringify({ type, rollout_id: rolloutId, project_id: projectId })}
+    )`;
+  } catch {
+    // notification failure must never affect the rollout state machine
+  }
+}
+
 /** One pass for a single running rollout (extracted for error isolation). */
 async function advanceOneRollout(
   prisma: PrismaClient,
@@ -386,6 +402,7 @@ async function advanceOneRollout(
       where: { id },
       select: {
         id: true,
+        projectId: true,
         successRatio: true,
         minSample: true,
         phaseTimeoutHours: true,
@@ -423,7 +440,10 @@ async function advanceOneRollout(
           where: { id: rollout.id, state: "running" },
           data: { state: "completed" },
         });
-        if (done.count > 0) summary.rolloutsCompleted += 1;
+        if (done.count > 0) {
+          summary.rolloutsCompleted += 1;
+          await notifyRolloutEvent(prisma, "completed", rollout.id, rollout.projectId);
+        }
       }
       return;
     }
@@ -464,10 +484,15 @@ async function advanceOneRollout(
           where: { id: rollout.id, state: "running" },
           data: { state: "completed" },
         });
-        if (done.count > 0) summary.rolloutsCompleted += 1;
+        if (done.count > 0) {
+          summary.rolloutsCompleted += 1;
+          await notifyRolloutEvent(prisma, "completed", rollout.id, rollout.projectId);
+        }
+      } else {
+        // manual_approval with a next phase: it waits; the rollout stays
+        // running with no active phase until resume is called
+        await notifyRolloutEvent(prisma, "manual_approval", rollout.id, rollout.projectId);
       }
-      // manual_approval with a next phase: it waits; the rollout stays
-      // running with no active phase until resume is called
     } else if (timedOut) {
       const paused = await prisma.$transaction([
         prisma.otaRollout.updateMany({
@@ -479,7 +504,10 @@ async function advanceOneRollout(
           data: { state: "paused" },
         }),
       ]);
-      if (paused[0]!.count > 0) summary.rolloutsPaused += 1;
+      if (paused[0]!.count > 0) {
+        summary.rolloutsPaused += 1;
+        await notifyRolloutEvent(prisma, "paused", rollout.id, rollout.projectId);
+      }
     } else {
       // ---- stall judgement for installed targets -------------------------
       summary.targetsStalled += await judgeInstalledTargets(
@@ -622,7 +650,7 @@ export async function resumeRollout(
   const ttlMs = (targetTtlSeconds ?? DEFAULT_ROLLOUT_TARGET_TTL_SECONDS) * 1000;
   const rollout = await prisma.otaRollout.findUnique({
     where: { id: rolloutId },
-    select: { state: true },
+    select: { state: true, projectId: true },
   });
   if (!rollout || rollout.state === "aborted" || rollout.state === "completed") return false;
   if (rollout.state === "paused") {
@@ -634,6 +662,7 @@ export async function resumeRollout(
       where: { rolloutId, state: "paused" },
       data: { state: "active", activatedAt: new Date() },
     });
+    await notifyRolloutEvent(prisma, "resumed", rolloutId, rollout.projectId);
     return true;
   }
   // manual-approval wait (rollout running, nothing active): activate the
@@ -651,6 +680,7 @@ export async function resumeRollout(
   });
   if (next) {
     await activatePendingPhase(prisma, rolloutId, next.index, ttlMs);
+    await notifyRolloutEvent(prisma, "resumed", rolloutId, rollout.projectId);
   }
   return true;
 }
@@ -662,6 +692,14 @@ export async function abortRollout(prisma: PrismaClient, rolloutId: string): Pro
     data: { state: "aborted" },
   });
   if (result.count === 0) return false;
+  // project id for the notification (best-effort; the update above
+  // already committed)
+  const notify = await prisma.otaRollout
+    .findUnique({ where: { id: rolloutId }, select: { projectId: true } })
+    .catch(() => null);
+  if (notify) {
+    await notifyRolloutEvent(prisma, "aborted", rolloutId, notify.projectId);
+  }
   await prisma.otaRolloutPhase.updateMany({
     where: { rolloutId, state: "active" },
     data: { state: "paused" },

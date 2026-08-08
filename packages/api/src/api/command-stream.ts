@@ -43,6 +43,11 @@ import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
 
 const WS_PROTOCOL = "soulcloud";
 
+/** batchId -> target device project ids, resolved during the handshake
+ *  (batches are immutable after creation). Avoids a full batch re-query
+ *  per WS connection for the membership re-check. */
+const batchProjectsCache = new Map<string, string[]>();
+
 /** Default per-batch notification debounce window (ms). */
 const DEBOUNCE_MS = 250;
 
@@ -337,6 +342,10 @@ export function createCommandStreamRoutes(
           return { error: "not_found", message: "command batch does not exist" };
         }
       }
+      // cache the resolved projects: the membership re-check in open()
+      // must not re-query the whole batch per connection (the batch's
+      // device set is immutable after creation)
+      batchProjectsCache.set(batchId.data, [...loaded.projects]);
     },
     open(ws) {
       // the upgrade was already authenticated in beforeHandle; the batch
@@ -360,20 +369,11 @@ export function createCommandStreamRoutes(
         .map((s) => s.trim())[1];
       const userId = jwtSubject(token);
       if (userId) {
-        void loadCommandBatchDetail(prisma, batchId)
-          .then((loaded) => {
-            // the socket may have closed while the detail loaded; a
-            // WeakMap entry would still leak via the closure otherwise
-            if (!loaded || socket.readyState !== 1) return;
-            accessCleanups.set(
-              socket,
-              scheduleMembershipCheck(socket, prisma, userId, [...loaded.projects], expCheckIntervalMs),
-            );
-          })
-          .catch(() => {
-            // DB hiccup during scheduling: the M2 expiry check still
-            // bounds the connection; membership re-check is best-effort
-          });
+        const projects = batchProjectsCache.get(batchId) ?? [];
+        accessCleanups.set(
+          socket,
+          scheduleMembershipCheck(socket, prisma, userId, projects, expCheckIntervalMs),
+        );
       }
       armExpiryCheck(socket);
       ws.send(JSON.stringify({ type: "ready", batch_id: batchId }));

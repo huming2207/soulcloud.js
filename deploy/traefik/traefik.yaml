@@ -1,0 +1,69 @@
+# Traefik static configuration (reference reverse proxy for SoulcloudJS).
+#
+# Serves as the single TLS-terminating entry point in front of the
+# compose services: the web console (nginx, :8081), the REST API (:8080)
+# and the MQTT-over-WebSocket broker (:1883). It also applies the rate
+# limiting that the application deliberately leaves to the proxy
+# (register brute-force, OTA download bandwidth) and forwards WebSocket
+# upgrades (traefik handles the Upgrade handshake natively).
+#
+# Usage: see deploy/traefik/compose.traefik.yaml and the README
+# "Reverse-proxy mode" section. Replace example.com with your domain.
+#
+# The file provider (this directory) is used instead of the Docker
+# provider so the routing is explicit and version-controllable.
+
+# --- entry points --------------------------------------------------------
+entryPoints:
+  web:
+    address: ":80"
+    # redirect everything to TLS in production:
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+    # Long-lived MQTT-over-WS connections idle past traefik's default
+    # 60s read timeout get cut; uncomment and raise for devices that
+    # stay silent longer:
+    # http:
+    #   transport:
+    #     respondingTimeouts:
+    #       readTimeout: 600s
+    #       writeTimeout: 600s
+    #       idleTimeout: 600s
+
+# --- certificates ---------------------------------------------------------
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      # TLS-ALPN-01 challenge: port 443 must be reachable from the
+      # internet. Swap for the HTTP-01 resolver if you cannot open 443
+      # directly (HTTP-01 needs the http entry point to stay open).
+      #
+      # For a self-signed evaluation setup instead:
+      #   - remove this resolver and mount a certificate/key pair, e.g.
+      #     tls:
+      #       stores:
+      #         default:
+      #           defaultCertificate:
+      #             certFile: /certs/tls.crt
+      #             keyFile: /certs/tls.key
+      email: admin@example.com
+      storage: /etc/traefik/acme.json
+      tlsChallenge: true
+
+# --- observability --------------------------------------------------------
+accessLog: {}
+
+# Dashboard is disabled by default; enable only with auth in front:
+# api:
+#   dashboard: true
+#   insecure: false
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true

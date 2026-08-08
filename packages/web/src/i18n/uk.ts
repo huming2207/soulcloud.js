@@ -28,6 +28,16 @@ export const uk: Record<DictKey, string> = {
   "layout.langUk": "Українська",
   "layout.langIt": "Italiano",
 
+  // notifications (rollout lifecycle)
+  "notify.title": "Сповіщення",
+  "notify.empty": "Немає сповіщень",
+  "notify.unknown": "Невідомий тип сповіщення",
+  "notify.manualApproval": "Оновлення {{id}} очікує ручного схвалення",
+  "notify.completed": "Оновлення {{id}} завершено",
+  "notify.paused": "Оновлення {{id}} призупинено (таймаут)",
+  "notify.aborted": "Оновлення {{id}} перервано",
+  "notify.resumed": "Оновлення {{id}} відновлено",
+
   "auth.login": "Увійти",
   "auth.loggingIn": "Вхід…",
   "auth.username": "Ім'я користувача",
@@ -60,6 +70,11 @@ export const uk: Record<DictKey, string> = {
   "devices.colUid": "device_uid",
   "devices.colFirmware": "Прошивка",
   "devices.colCredential": "Облікові дані",
+  "devices.colStatus": "У мережі",
+  "devices.statusOnline": "У мережі (в реальному часі)",
+  "devices.statusOffline": "Не в мережі (в реальному часі)",
+  "devices.statusRecent": "У мережі (нещодавній звіт)",
+  "devices.statusUnknown": "Статус невідомий",
   "devices.details": "Докладніше",
   "devices.credActive": "Активно",
   "devices.credRevoked": "Відкликано",
