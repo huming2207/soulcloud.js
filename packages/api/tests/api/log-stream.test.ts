@@ -317,6 +317,45 @@ describe("GET /v1/ws/logs", () => {
       expect(await waitForSettle(client)).toBe("open");
       await waitForMessage(client, (m) => m.type === "ready");
 
+      // the hub's LISTEN session starts lazily on the first subscribe and
+      // pg_notify is lossy: on a slow runner the listener may not be up
+      // yet when the first real notify fires, dropping it. Probe with a
+      // throwaway event until its frame comes back.
+      const probe = await prisma.rawLogEvent.create({
+        data: {
+          deviceId,
+          deviceTimeMs: 0n,
+          sequence: -1,
+          packetType: 0,
+          level: 0,
+          rawPacket: new Uint8Array([0x9a, 0x03]),
+          decodeState: "unknown_fw",
+        },
+      });
+      const probeDeadline = Date.now() + 3000;
+      for (;;) {
+        await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${deviceId}:${probe.id.toString()}`})`;
+        const probed = client.messages.some((raw) => {
+          try {
+            const m = JSON.parse(raw) as { type?: string; event?: { id?: unknown } };
+            return m.type === "log" && String(m.event?.id) === probe.id.toString();
+          } catch {
+            return false;
+          }
+        });
+        if (probed) break;
+        if (Date.now() >= probeDeadline) {
+          throw new Error("listener never came up (no log frame received)");
+        }
+        await Bun.sleep(50);
+      }
+      // clear the probe frame so the burst assertion counts only the
+      // two real events; also wait out the probe's debounce timer (its
+      // notify armed a 60ms window that would otherwise push a late
+      // duplicate of the probe event)
+      await Bun.sleep(160);
+      client.messages.length = 0;
+
       // two events, notified within the 60ms window
       const rows: string[] = [];
       for (let i = 0; i < 2; i++) {
