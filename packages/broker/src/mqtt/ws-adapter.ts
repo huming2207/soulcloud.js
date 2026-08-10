@@ -78,7 +78,12 @@ export function startWsBroker(
             // readable side is saturated; aedes backpressure will drain it
           }
         },
-        close(ws: ServerWebSocket) {
+        close(ws: ServerWebSocket, code: number, reason: string) {
+          // code 0 = the peer went away without a close frame (TCP
+          // FIN/RST); code 1000 = we called ws.close() ourselves via the
+          // duplex teardown. Distinguishing the direction is essential
+          // for attributing reconnect storms.
+          console.log(`[soulcloud-broker] ws closed code=${code} reason=${reason}`);
           const duplex = ws.data.duplex;
           ws.data.duplex = null;
           if (duplex) {
@@ -171,15 +176,17 @@ function createWsDuplex(ws: ServerWebSocket): Duplex {
 
   // aedes destroys the stream on protocol errors and disconnects; that
   // fires the 'close' event, not 'final', so the WS must be closed here
-  const closeWs = () => {
+  const closeWs = (why: string) => {
+    console.log(`[soulcloud-broker] duplex closed (${why}); closing ws`);
     try {
       ws.close();
     } catch {
       // already closed
     }
   };
-  duplex.on("close", closeWs);
-  duplex.on("error", closeWs);
+  duplex.on("end", () => closeWs("peer FIN"));
+  duplex.on("close", () => closeWs("duplex close"));
+  duplex.on("error", (e) => closeWs(`error: ${(e as Error).message}`));
 
   return duplex;
 }
