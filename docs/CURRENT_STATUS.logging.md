@@ -22,6 +22,29 @@ MQTT carries the raw packet bytes directly (no SLIP — MQTT already has
 message boundaries; SLIP exists only for UART transports and lives in test
 helpers).
 
+## Log container protocol (uplink)
+
+The MQTT `log` topic payload is a **dispatch container**: the first byte
+selects the format, leaving room for future types (raw text, JSON, …).
+
+| First byte | Format |
+| --- | --- |
+| `0x9a` | Raw on9log packet — unchanged, the on9log magic itself |
+| `0x01` | MessagePack aggregated array: `array of bin` (`bin8`/`bin16`), one complete on9log packet per element |
+| other | Reserved — the packet is rejected |
+
+Aggregated arrays let the firmware batch many log packets into one MQTT
+publish (typically when its outbound queue backs up). The broker splits the
+container and ingests each element through the normal single-packet path
+(`ingestLogPacket`), so `raw_log_events`, decoding and the realtime log
+stream are unchanged. A malformed element is dropped and counted; it never
+invalidates the rest of the container. Elements must be `bin8`/`bin16`
+(self-delimiting) and the element count is capped at 4096 per container.
+
+See [PROTOCOL.log-packaging.md](PROTOCOL.log-packaging.md) for the
+firmware-facing wire specification (byte-level examples, encoder choices,
+merge guidance).
+
 ## Pipeline
 
 ```
@@ -81,6 +104,9 @@ Benchmarked: parsing a 1 MB real ELF ≈ 36 µs; full decode ≈ 40 µs/event.
 
 ## Known limitations / open items
 
+- The container dispatch reserves all first-byte values other than `0x9a`
+  and `0x01`; new types (e.g. raw text, JSON) can be added without another
+  breaking change
 - Full-text search (tsvector) is not implemented; the raw archive is the
   source of truth and a decode projection can be added later
 - Object storage archival and retention policies are deferred until volume

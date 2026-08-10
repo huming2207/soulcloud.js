@@ -63,7 +63,10 @@ contains no `/`, `+`, `#` or whitespace.
 `packages/broker/src/mqtt/dispatch.ts` routes device messages:
 
 - `cmd/result` → strict MessagePack decode → `recordDeviceResult` (idempotent)
-- `log` → strict on9log validation → store raw event (hot path, no ELF work)
+- `log` → container dispatch (`packages/core/src/logging/container.ts`: first
+  byte 0x9a = raw on9log packet, 0x01 = MsgPack bundle of on9log packets) →
+  each element validated and stored as its own raw event (hot path, no ELF
+  work; one bad element is dropped, the rest of the bundle survives)
 - `stat` → strict decode → upsert `device_firmware_state` (fw hash)
 
 Per-device guards (DDoS): `UPLINK_MAX_PACKET_BYTES` (64 KB default) and a

@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Aedes } from "aedes";
 import { randomUUID } from "node:crypto";
 import { encodeDeviceStat, prisma } from "@soulcloud/core";
+import { msgpackLogBundle, validLogPacket } from "../helpers/mqtt-client";
 import { attachDispatch, type DispatchLog } from "../../src/mqtt/dispatch";
 
 let projectId: string;
@@ -215,5 +216,86 @@ describe("other uplink kinds", () => {
       async () => log.entries.some((e) => e.msg === "ignored log from unknown device"),
       "ignored log from unknown device",
     );
+  });
+});
+
+describe("handleLog log container", () => {
+  test("a MsgPack bundle stores every valid element", async () => {
+    const log = makeLog();
+    const aedes = new Aedes();
+    attachDispatch(aedes, prisma, log);
+    const bundle = msgpackLogBundle(validLogPacket(), validLogPacket(), validLogPacket());
+    emitUplink(
+      aedes,
+      deviceUid,
+      `soulcloud/v1/devices/${deviceUid}/log`,
+      new Uint8Array([0x01, ...bundle]),
+    );
+    await waitFor(
+      async () => (await prisma.rawLogEvent.count({ where: { deviceId } })) >= 3,
+      "three bundle elements stored",
+    );
+    const events = await prisma.rawLogEvent.findMany({ where: { deviceId } });
+    expect(events.length).toBe(3);
+    for (const e of events) expect(e.packetType).toBe(0);
+    await prisma.rawLogEvent.deleteMany({ where: { deviceId } });
+  });
+
+  test("one bad element drops only itself", async () => {
+    const log = makeLog();
+    const aedes = new Aedes();
+    attachDispatch(aedes, prisma, log);
+    const bundle = msgpackLogBundle(
+      validLogPacket(),
+      new Uint8Array([0x00, 0x01]),
+      validLogPacket(),
+    );
+    emitUplink(
+      aedes,
+      deviceUid,
+      `soulcloud/v1/devices/${deviceUid}/log`,
+      new Uint8Array([0x01, ...bundle]),
+    );
+    await waitFor(
+      async () => (await prisma.rawLogEvent.count({ where: { deviceId } })) >= 2,
+      "two valid elements stored",
+    );
+    const events = await prisma.rawLogEvent.findMany({ where: { deviceId } });
+    expect(events.length).toBe(2);
+    await prisma.rawLogEvent.deleteMany({ where: { deviceId } });
+  });
+
+  test("an unknown container magic is dropped with a warning", async () => {
+    const log = makeLog();
+    const aedes = new Aedes();
+    attachDispatch(aedes, prisma, log);
+    emitUplink(
+      aedes,
+      deviceUid,
+      `soulcloud/v1/devices/${deviceUid}/log`,
+      new Uint8Array([0x02, ...validLogPacket()]),
+    );
+    await waitFor(
+      async () => log.entries.some((e) => e.msg === "ignored device log packet"),
+      "unknown container magic warned",
+    );
+    const count = await prisma.rawLogEvent.count({ where: { deviceId } });
+    expect(count).toBe(0);
+  });
+
+  test("raw single packets still store one event each", async () => {
+    const log = makeLog();
+    const aedes = new Aedes();
+    attachDispatch(aedes, prisma, log);
+    emitUplink(aedes, deviceUid, `soulcloud/v1/devices/${deviceUid}/log`, validLogPacket());
+    await waitFor(
+      async () => (await prisma.rawLogEvent.count({ where: { deviceId } })) >= 1,
+      "raw packet stored",
+    );
+    const events = await prisma.rawLogEvent.findMany({ where: { deviceId } });
+    expect(events.length).toBe(1);
+    expect(events[0]!.packetType).toBe(0);
+    expect(events[0]!.rawPacket).toEqual(Buffer.from(validLogPacket()));
+    await prisma.rawLogEvent.deleteMany({ where: { deviceId } });
   });
 });

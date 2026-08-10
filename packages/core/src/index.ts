@@ -22,6 +22,7 @@ export * from "./on9log/render";
 export * from "./elf/parser";
 export * from "./logging/artifact";
 export * from "./logging/ingest";
+export * from "./logging/container";
 export * from "./logging/decode";
 export * from "./ota/release";
 export * from "./ota/deploy";

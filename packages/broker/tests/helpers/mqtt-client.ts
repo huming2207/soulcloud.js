@@ -206,3 +206,29 @@ export class MqttTestClient extends EventEmitter {
     this.connected = false;
   }
 }
+
+/**
+ * Log container test helpers (protocol: first byte 0x9a = single raw
+ * on9log packet, 0x01 = MsgPack array of on9log packets).
+ */
+
+/** A minimal valid on9log LOG packet (streaming header, no args). */
+export function validLogPacket(): Uint8Array {
+  return new Uint8Array([
+    0x9a, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00,
+  ]);
+}
+
+/** Encodes on9log packets as a MsgPack array of bin elements. */
+export function msgpackLogBundle(...packets: Uint8Array[]): Uint8Array {
+  const out: number[] = [];
+  if (packets.length <= 15) out.push(0x90 + packets.length);
+  else out.push(0xdc, (packets.length >> 8) & 0xff, packets.length & 0xff);
+  for (const p of packets) {
+    if (p.length <= 255) out.push(0xc4, p.length);
+    else out.push(0xc5, (p.length >> 8) & 0xff, p.length & 0xff);
+    out.push(...p);
+  }
+  return Uint8Array.from(out);
+}

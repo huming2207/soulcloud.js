@@ -6,7 +6,7 @@ import {
   hashDevicePassword,
   prisma,
 } from "@soulcloud/core";
-import { MqttTestClient, type MqttTestClientOptions } from "../helpers/mqtt-client";
+import { MqttTestClient, msgpackLogBundle, validLogPacket, type MqttTestClientOptions } from "../helpers/mqtt-client";
 // Serialises this file against the other global-lease test files (queue,
 // ota/deploy): pollOnce leases over a global FIFO shared across files on
 // one dev database. Held for the whole process; the advisory lock dies
@@ -422,6 +422,95 @@ describe("log/stat uplink ingestion", () => {
     await prisma.rawLogEvent.deleteMany({
       where: { device: { deviceUid: DEVICE_UID } },
     });
+    device.end();
+  });
+
+  test("a MsgPack log bundle is stored as one raw event per element", async () => {
+    const bundle = msgpackLogBundle(validLogPacket(), validLogPacket(), validLogPacket());
+    const device = connectDevice();
+    await waitForConnect(device);
+    await device.publish(
+      `soulcloud/v1/devices/${DEVICE_UID}/log`,
+      Buffer.from(new Uint8Array([0x01, ...bundle])),
+      1,
+    );
+    await waitFor(
+      async () =>
+        (await prisma.rawLogEvent.count({ where: { device: { deviceUid: DEVICE_UID } } })) >= 3,
+      "bundle elements persisted",
+    );
+    const events = await prisma.rawLogEvent.findMany({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    expect(events.length).toBeGreaterThanOrEqual(3);
+    for (const e of events) expect(e.packetType).toBe(0);
+    await prisma.rawLogEvent.deleteMany({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    device.end();
+  });
+
+  test("a log bundle with a bad element stores only the valid ones", async () => {
+    const bundle = msgpackLogBundle(validLogPacket(), new Uint8Array([0x00, 0x01]), validLogPacket());
+    const device = connectDevice();
+    await waitForConnect(device);
+    await device.publish(
+      `soulcloud/v1/devices/${DEVICE_UID}/log`,
+      Buffer.from(new Uint8Array([0x01, ...bundle])),
+      1,
+    );
+    await waitFor(
+      async () => {
+        const n = await prisma.rawLogEvent.count({
+          where: { device: { deviceUid: DEVICE_UID } },
+        });
+        // give dispatch a moment to settle, then confirm the count is final
+        await new Promise((r) => setTimeout(r, 300));
+        return (
+          (await prisma.rawLogEvent.count({
+            where: { device: { deviceUid: DEVICE_UID } },
+          })) === n && n >= 2
+        );
+      },
+      "valid elements persisted, bad element dropped",
+    );
+    const events = await prisma.rawLogEvent.findMany({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    expect(events.length).toBe(2);
+    await prisma.rawLogEvent.deleteMany({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    device.end();
+  });
+
+  test("an unknown log container magic is dropped", async () => {
+    const device = connectDevice();
+    await waitForConnect(device);
+    await device.publish(
+      `soulcloud/v1/devices/${DEVICE_UID}/log`,
+      Buffer.from(new Uint8Array([0x02, ...validLogPacket()])),
+      1,
+    );
+    // give dispatch a couple of poll cycles, then confirm nothing was stored
+    await waitFor(
+      async () => {
+        const pending = await prisma.rawLogEvent.count({
+          where: { device: { deviceUid: DEVICE_UID } },
+        });
+        await new Promise((r) => setTimeout(r, 400));
+        return (
+          (await prisma.rawLogEvent.count({
+            where: { device: { deviceUid: DEVICE_UID } },
+          })) === pending
+        );
+      },
+      "unknown magic not stored",
+    );
+    const after = await prisma.rawLogEvent.count({
+      where: { device: { deviceUid: DEVICE_UID } },
+    });
+    expect(after).toBe(0);
     device.end();
   });
 

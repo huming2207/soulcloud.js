@@ -300,7 +300,8 @@ What the proxy does (and what the app deliberately does not):
 curl -F "project_id=<uuid>" -F "file=@firmware.elf" \
      http://localhost:8080/v1/firmware-artifacts
 
-# devices publish raw on9log packets to soulcloud/v1/devices/{uid}/log;
+# devices publish on9log packets (raw, or MsgPack bundles of packets — see
+# docs/PROTOCOL.log-packaging.md) to soulcloud/v1/devices/{uid}/log;
 # a stat message with fw=<firmware hash> links logs to the artifact
 
 # query logs (decoded on demand)

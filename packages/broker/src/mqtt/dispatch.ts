@@ -21,8 +21,10 @@ import {
   decodeDeviceStat,
   decodeOtaResult,
   ingestLogPacket,
+  LogContainerError,
   LogIngestError,
   parseDeviceTopic,
+  parseLogContainer,
   PerDeviceLimiter,
   recordDeviceResult,
   recordOtaResult,
@@ -220,10 +222,16 @@ async function handleOtaResult(
 }
 
 /**
- * Ingests a raw on9log packet from the device `log` topic.
+ * Ingests on9log packets from the device `log` topic.
  *
- * The packet is validated strictly and stored in `raw_log_events` with its
- * envelope metadata; decoding happens at query time, never here.
+ * The payload is a log container: first byte 0x9a = a single raw on9log
+ * packet (the original wire format), 0x01 = a MsgPack array of on9log
+ * packets (one MQTT publish carries a bundle; a device bursts its logs
+ * into a bundle to amortise the per-packet MQTT/WS/TCP overhead).
+ * Unknown first bytes are rejected. Elements are validated strictly and
+ * stored individually in `raw_log_events` (one row per packet, so
+ * decoding and the realtime WS stream are unchanged); decoding happens
+ * at query time, never here.
  */
 async function handleLog(
   prisma: PrismaClient,
@@ -237,14 +245,40 @@ async function handleLog(
       log.warn("ignored log from unknown device", { deviceUid });
       return;
     }
-    const outcome = await ingestLogPacket(prisma, deviceId, payload);
-    log.debug("stored device log packet", {
-      deviceUid,
-      eventId: outcome.eventId?.toString(),
-      packetType: outcome.packetType,
-    });
+    const parsed = parseLogContainer(payload);
+    let stored = 0;
+    let dropped = parsed.dropped;
+    if (dropped > 0) {
+      log.warn("ignored invalid log element(s)", {
+        deviceUid,
+        dropped,
+        reason: "invalid_packet",
+      });
+    }
+    for (const element of parsed.elements) {
+      try {
+        await ingestLogPacket(prisma, deviceId, element);
+        stored++;
+      } catch (error) {
+        const kind = (error as LogIngestError).kind as string | undefined;
+        if (kind === "invalid_packet") {
+          // one bad element must not kill the rest of the bundle
+          dropped++;
+          continue;
+        }
+        // database failure: the remaining elements would fail identically
+        log.warn("failed to store device log packet", {
+          deviceUid,
+          reason: kind ?? "database",
+          error: (error as Error).message,
+        });
+        break;
+      }
+    }
+    log.debug("ingested device log bundle", { deviceUid, stored, dropped });
   } catch (error) {
-    const kind = (error as LogIngestError).kind as string | undefined;
+    const kind =
+      (error as LogContainerError).kind ?? (error as LogIngestError).kind;
     log.warn("ignored device log packet", {
       deviceUid,
       payloadBytes: payload.length,

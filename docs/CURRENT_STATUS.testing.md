@@ -48,6 +48,8 @@ packages/core/tests/
   elf/parser|elf64.test.ts        synthetic ELF suites
   queue/queue|rate-limit.test.ts  queue state machine, limiter
   logging/logging.test.ts         ingestion/decoding/backfill (synthetic)
+  logging/container.test.ts      log container protocol (raw/msgpack bundle,
+                                 caps, malformed elements)
   security/password.test.ts       argon2id only
 packages/api/tests/api/
   auth.test.ts                    JWT flow, rotation, revocation
