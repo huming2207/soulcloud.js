@@ -54,4 +54,32 @@ describe("loadBrokerConfig", () => {
       error.mockRestore();
     }
   });
+
+  test("defaults BROKER_AUTH_CONCURRENCY to 8", () => {
+    process.env.JWT_SECRET = "z".repeat(32);
+    const config = loadBrokerConfig();
+    expect(config.BROKER_AUTH_CONCURRENCY).toBe(8);
+  });
+
+  test("honours an explicit BROKER_AUTH_CONCURRENCY", () => {
+    process.env.JWT_SECRET = "z".repeat(32);
+    process.env.BROKER_AUTH_CONCURRENCY = "2";
+    const config = loadBrokerConfig();
+    expect(config.BROKER_AUTH_CONCURRENCY).toBe(2);
+  });
+
+  test("refuses MQTT_COMMAND_RETAIN in production (WEB-12)", () => {
+    process.env.JWT_SECRET = "z".repeat(32);
+    process.env.MQTT_COMMAND_RETAIN = "true";
+    process.env.NODE_ENV = "production";
+    expect(() => loadBrokerConfig()).toThrow(/MQTT_COMMAND_RETAIN/);
+    delete process.env.NODE_ENV;
+  });
+
+  test("allows MQTT_COMMAND_RETAIN outside production", () => {
+    process.env.JWT_SECRET = "z".repeat(32);
+    process.env.MQTT_COMMAND_RETAIN = "true";
+    const config = loadBrokerConfig();
+    expect(config.MQTT_COMMAND_RETAIN).toBe(true);
+  });
 });

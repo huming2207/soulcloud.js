@@ -1,6 +1,6 @@
 # SoulcloudJS — Current Status
 
-**Date**: 2026-08-10 · **Baseline**: 524 backend tests + 201 web unit tests
+**Date**: 2026-08-10 · **Baseline**: 596 backend tests + 221 web unit tests
 green, `tsc --noEmit` clean, backend + browser E2E suites pass, CI runs
 three parallel jobs (backend / web / web-e2e).
 
@@ -39,7 +39,7 @@ and what is deliberately left open.
 - **Auth**: humans use JWT dual-token (access + server-side refresh); devices
   use per-session MQTT authentication (never JWT).
 - **Web UI**: React 19 + Material UI 9, five locales (zh/en/ru/uk/it),
-  201 unit tests + browser E2E.
+  221 unit tests + browser E2E.
 - **OTA**: releases → deploy (per-device JWT over MQTT, HTTP pull) →
   three-layer target state machine → phased rollouts with gating/stall
   judgement/rollback.

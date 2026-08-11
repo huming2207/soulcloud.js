@@ -20,7 +20,7 @@ import {
   decodeDeviceCommandResult,
   decodeDeviceStat,
   decodeOtaResult,
-  ingestLogPacket,
+  ingestLogBundle,
   LogContainerError,
   LogIngestError,
   parseDeviceTopic,
@@ -83,7 +83,7 @@ export function attachDispatch(
       });
       return;
     }
-    if (limiter && !limiter.tryConsume(client.id)) {
+    if (limiter && !limiter.tryConsume(client.id, uplinkCost(packet.topic, payload))) {
       log.warn("dropped uplink packet over rate limit", {
         deviceUid: client.id,
       });
@@ -92,6 +92,22 @@ export function attachDispatch(
 
     void handleUplink(prisma, client.id, packet.topic, payload, log);
   });
+}
+
+/**
+ * Rate-limit cost per publish: a log container costs one token per
+ * contained packet (so a device cannot multiply its effective rate by
+ * stuffing a bundle — WEB-03), every other uplink costs one. The
+ * container is parsed twice (here and in handleLog); parsing is pure
+ * CPU over a payload already bounded by maxPacketBytes.
+ */
+function uplinkCost(topic: string, payload: Uint8Array): number {
+  if (!topic.endsWith("/log")) return 1;
+  try {
+    return Math.max(1, parseLogContainer(payload).elements.length);
+  } catch {
+    return 1; // malformed container: handleLog rejects it anyway
+  }
 }
 
 async function handleUplink(
@@ -246,8 +262,12 @@ async function handleLog(
       return;
     }
     const parsed = parseLogContainer(payload);
-    let stored = 0;
-    let dropped = parsed.dropped;
+    // bulk path: validate once, resolve the artifact once, insert all
+    // elements in a single createMany, one notification for the bundle
+    // (a per-element ingest would cost up to ~5 DB round trips per
+    // element — the WEB-03 amplification fix)
+    const outcome = await ingestLogBundle(prisma, deviceId, parsed.elements);
+    const dropped = parsed.dropped + outcome.dropped;
     if (dropped > 0) {
       log.warn("ignored invalid log element(s)", {
         deviceUid,
@@ -255,27 +275,11 @@ async function handleLog(
         reason: "invalid_packet",
       });
     }
-    for (const element of parsed.elements) {
-      try {
-        await ingestLogPacket(prisma, deviceId, element);
-        stored++;
-      } catch (error) {
-        const kind = (error as LogIngestError).kind as string | undefined;
-        if (kind === "invalid_packet") {
-          // one bad element must not kill the rest of the bundle
-          dropped++;
-          continue;
-        }
-        // database failure: the remaining elements would fail identically
-        log.warn("failed to store device log packet", {
-          deviceUid,
-          reason: kind ?? "database",
-          error: (error as Error).message,
-        });
-        break;
-      }
-    }
-    log.debug("ingested device log bundle", { deviceUid, stored, dropped });
+    log.debug("ingested device log bundle", {
+      deviceUid,
+      stored: outcome.stored,
+      dropped,
+    });
   } catch (error) {
     const kind =
       (error as LogContainerError).kind ?? (error as LogIngestError).kind;
@@ -318,10 +322,6 @@ async function handleStat(
       log.warn("ignored stat from unknown device", { deviceUid });
       return;
     }
-    const previous = await prisma.deviceFirmwareState.findUnique({
-      where: { deviceId },
-      select: { fwHash: true },
-    });
     await prisma.deviceFirmwareState.upsert({
       where: { deviceId },
       update: { fwHash, reportedAt: new Date() },
@@ -331,18 +331,19 @@ async function handleStat(
       deviceUid,
       fwHash,
     });
-    // OTA fact layer (proposal 18): a firmware CHANGE that matches a
-    // release's ELF build id confirms the device actually runs the new
-    // firmware — the only driver of the completed terminal state.
-    if (previous?.fwHash !== fwHash) {
-      const confirmed = await confirmOtaTargetByFirmware(prisma, deviceId, fwHash);
-      if (confirmed > 0) {
-        log.info("ota target confirmed by firmware state", {
-          deviceUid,
-          fwHash,
-          confirmed,
-        });
-      }
+    // OTA fact layer (proposal 18): confirm unconditionally, not only on
+    // firmware CHANGE. The redeploy path — a device that already runs the
+    // target build ignores the notice and keeps reporting the same hash —
+    // would never be confirmed by a change-only guard. confirmOtaTargetByFirmware
+    // is idempotent (terminal targets are untouched), so the extra UPDATE
+    // per stat is safe and cheap.
+    const confirmed = await confirmOtaTargetByFirmware(prisma, deviceId, fwHash);
+    if (confirmed > 0) {
+      log.info("ota target confirmed by firmware state", {
+        deviceUid,
+        fwHash,
+        confirmed,
+      });
     }
   } catch (error) {
     log.warn("failed to record device firmware state", {

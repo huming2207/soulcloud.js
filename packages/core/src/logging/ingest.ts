@@ -55,6 +55,48 @@ export interface IngestOutcome {
   packetType: number;
 }
 
+export interface LogBundleOutcome {
+  /** Rows inserted. */
+  stored: number;
+  /** Elements skipped because they were not well-formed on9log packets. */
+  dropped: number;
+}
+
+/**
+ * Resolves the decoding artifact for a device's latest reported firmware
+ * (project-scoped: buildId is unique per project, not global).
+ *
+ * Never throws: an association failure must not drop raw events — the
+ * raw packet stays queryable and `decodeState` just stays "unknown_fw"
+ * (it can be backfilled once the firmware is imported).
+ */
+async function resolveArtifactId(
+  prisma: PrismaClient,
+  deviceId: string,
+): Promise<string | null> {
+  try {
+    const state = await prisma.deviceFirmwareState.findUnique({
+      where: { deviceId },
+      select: { fwHash: true },
+    });
+    if (!state) return null;
+    const device = await prisma.device.findUnique({
+      where: { id: deviceId },
+      select: { projectId: true },
+    });
+    if (!device) return null;
+    const artifact = await prisma.firmwareArtifact.findUnique({
+      where: {
+        projectId_buildId: { projectId: device.projectId, buildId: state.fwHash },
+      },
+      select: { id: true },
+    });
+    return artifact?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Validates an on9log packet and stores it in `raw_log_events`.
  *
@@ -76,33 +118,7 @@ export async function ingestLogPacket(
     );
   }
 
-  // resolve the decoding artifact from the device's latest reported firmware
-  // (project-scoped: buildId is unique per project, not global)
-  let artifactId: string | null = null;
-  try {
-    const state = await prisma.deviceFirmwareState.findUnique({
-      where: { deviceId },
-      select: { fwHash: true },
-    });
-    if (state) {
-      const device = await prisma.device.findUnique({
-        where: { id: deviceId },
-        select: { projectId: true },
-      });
-      if (device) {
-        const artifact = await prisma.firmwareArtifact.findUnique({
-          where: {
-            projectId_buildId: { projectId: device.projectId, buildId: state.fwHash },
-          },
-          select: { id: true },
-        });
-        artifactId = artifact?.id ?? null;
-      }
-    }
-  } catch (error) {
-    // association failure must not drop the raw event
-    artifactId = null;
-  }
+  const artifactId = await resolveArtifactId(prisma, deviceId);
 
   try {
     const event = await prisma.rawLogEvent.create({
@@ -124,11 +140,11 @@ export async function ingestLogPacket(
     });
     // wake the web console's realtime log stream (lossy: a missed
     // notification only costs latency - consumers fall back to REST).
-    // Payload = "<deviceId>:<eventId>" so the WS hub can look up its
-    // subscribers BEFORE hitting the database.
+    // Payload = the device id only: the WS hub tracks its own per-device
+    // high-water mark and queries everything above it, so it does not
+    // need (and must not trust) event ids in the notification.
     try {
-      const payload = `${deviceId}:${event.id.toString()}`;
-      await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${payload})`;
+      await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${deviceId})`;
     } catch {
       // notification failure must not drop the stored event
     }
@@ -137,6 +153,82 @@ export async function ingestLogPacket(
     throw new LogIngestError(
       "database",
       `failed to store log event: ${(error as Error).message}`,
+    );
+  }
+}
+
+/**
+ * Validates and stores a whole log bundle in one pass.
+ *
+ * Bulk path for the container protocol: each element is validated strictly
+ * (a bad element drops only itself), the decoding artifact is resolved
+ * once, all valid elements are inserted in a single `createMany`, and one
+ * pg_notify wakes the realtime stream. This replaces N serial
+ * ingestLogPacket calls (each of which did its own fw-state/project/
+ * artifact lookups, insert and notify) — the WEB-03 amplification fix.
+ *
+ * @throws {LogIngestError} with kind `database` when the insert fails (the
+ * whole bundle is then rejected; per-element on9log errors are counted in
+ * `dropped` instead).
+ */
+export async function ingestLogBundle(
+  prisma: PrismaClient,
+  deviceId: string,
+  elements: Uint8Array[],
+): Promise<LogBundleOutcome> {
+  const rows: Array<{
+    deviceTimeMs: bigint;
+    sequence: number;
+    packetType: number;
+    level: number | null;
+    tagId: bigint | null;
+    fmtId: bigint | null;
+    rawPacket: Buffer<ArrayBuffer>;
+  }> = [];
+  let dropped = 0;
+  for (const element of elements) {
+    let packet: On9logPacket;
+    try {
+      packet = parseOn9logPacket(element);
+    } catch {
+      dropped++; // one bad element must not kill the rest of the bundle
+      continue;
+    }
+    const isLog = packet.header.type === On9logPacketType.Log;
+    rows.push({
+      deviceTimeMs: BigInt(packet.header.timeMs),
+      sequence: packet.header.seq,
+      packetType: packet.header.type,
+      level: isLog ? packet.header.level : null,
+      tagId: isLog ? BigInt(packet.header.tagId) : null,
+      fmtId: isLog ? BigInt(packet.header.fmtId) : null,
+      rawPacket: Buffer.from(element),
+    });
+  }
+  if (rows.length === 0) return { stored: 0, dropped };
+
+  const artifactId = await resolveArtifactId(prisma, deviceId);
+  try {
+    await prisma.rawLogEvent.createMany({
+      data: rows.map((row) => ({
+        deviceId,
+        artifactId,
+        decodeState: artifactId ? "decodable" : "unknown_fw",
+        ...row,
+      })),
+    });
+    // one notification for the whole bundle; the hub re-queries from its
+    // own high-water mark, so a single payload is enough
+    try {
+      await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${deviceId})`;
+    } catch {
+      // notification failure must not drop the stored events
+    }
+    return { stored: rows.length, dropped };
+  } catch (error) {
+    throw new LogIngestError(
+      "database",
+      `failed to store log bundle: ${(error as Error).message}`,
     );
   }
 }

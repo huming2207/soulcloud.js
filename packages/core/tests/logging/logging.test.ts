@@ -5,6 +5,7 @@ import {
   computeBuildId,
   extractArtifactStrings,
   importArtifact,
+  ingestLogBundle,
   ingestLogPacket,
   backfillDecodeState,
   decodeRawEvent,
@@ -219,6 +220,40 @@ describe("log ingestion", () => {
       where: { deviceId },
     });
     expect(count).toBeGreaterThan(0); // unchanged by the failed ingest
+  });
+
+  test("ingestLogBundle stores a whole bundle in one pass", async () => {
+    const before = await prisma.rawLogEvent.count({ where: { deviceId } });
+    const outcome = await ingestLogBundle(prisma, deviceId, demoLogPackets());
+    expect(outcome.stored).toBe(4);
+    expect(outcome.dropped).toBe(0);
+    const after = await prisma.rawLogEvent.findMany({
+      where: { deviceId },
+      orderBy: { id: "desc" },
+      take: 4,
+    });
+    // exactly four new rows, artifact-associated like the single path
+    expect(after.length).toBe(4);
+    expect(after[3]!.id).toBeGreaterThan(BigInt(before));
+    expect(after.every((e) => e.artifactId === artifactId)).toBe(true);
+    expect(after.every((e) => e.decodeState === "decodable")).toBe(true);
+    // envelope fields match the packet contents (LOG packets)
+    const logRows = after.filter((e) => e.packetType === 0);
+    expect(logRows.length).toBe(3);
+    expect(logRows.every((e) => e.level !== null && e.tagId !== null && e.fmtId !== null)).toBe(
+      true,
+    );
+  });
+
+  test("ingestLogBundle drops bad elements but keeps the rest", async () => {
+    const bad = new Uint8Array([0x00, 0x01, 0x02]);
+    const outcome = await ingestLogBundle(prisma, deviceId, [
+      ...demoLogPackets(),
+      bad,
+      ...demoLogPackets(),
+    ]);
+    expect(outcome.stored).toBe(8);
+    expect(outcome.dropped).toBe(1);
   });
 });
 

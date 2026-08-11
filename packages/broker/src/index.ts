@@ -11,6 +11,7 @@
 import { DEVICE_STATUS_CHANNEL, prisma } from "@soulcloud/core";
 import { kickDeviceSession, startBroker } from "./mqtt/broker";
 import { attachDispatch } from "./mqtt/dispatch";
+import { attachDeviceStatusNotifications } from "./mqtt/status";
 import { startCommandPoller } from "./mqtt/publish";
 import { startOtaPoller } from "./mqtt/ota-publish";
 import { startNotifier } from "./mqtt/notify";
@@ -33,6 +34,7 @@ const logger = {
 const { aedes, close: closeBroker } = await startBroker(prisma, {
   port: config.MQTT_BROKER_PORT,
   path: config.MQTT_BROKER_PATH,
+  authConcurrency: config.BROKER_AUTH_CONCURRENCY,
 });
 
 // Diagnostics: log why live sessions go away (keepalive timeout, stream
@@ -64,18 +66,18 @@ function notifyDeviceStatus(uid: string, online: boolean): void {
 }
 
 aedes.on("client", (client) => {
-  // NOTE: aedes Client has no "close" event (the type definition is
-  // right) - disconnects surface on the broker as "clientDisconnect"
   logger.info("client connected", { clientId: client.id, clean: client.clean });
-  notifyDeviceStatus(client.id, true);
 });
 aedes.on("clientDisconnect", (client) => {
-  // replaced: a newer connection with the same clientId took over (the
-  // device reconnected while this session was still registered)
-  const clients = (aedes as unknown as { clients?: Record<string, unknown> }).clients ?? {};
-  logger.info("client disconnected", { clientId: client.id, replaced: clients[client.id] !== client });
-  notifyDeviceStatus(client.id, false);
+  // NOTE: aedes unregisters the client (and removes it from aedes.clients)
+  // before emitting clientDisconnect, so a same-clientId replacement is
+  // indistinguishable from a real disconnect here; offline notification
+  // suppression lives in attachDeviceStatusNotifications (deferred window)
+  logger.info("client disconnected", { clientId: client.id });
 });
+// online/offline notifications with replacement suppression (WEB-11: a
+// same-clientId reconnect must not publish a false offline event)
+attachDeviceStatusNotifications(aedes, notifyDeviceStatus);
 attachDispatch(aedes, prisma, logger, {
   maxPacketBytes: config.UPLINK_MAX_PACKET_BYTES,
   ratePerSecond: config.UPLINK_RATE_PER_SECOND,

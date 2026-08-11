@@ -30,6 +30,55 @@ import { startWsBroker, type WsBrokerHandle } from "./ws-adapter";
 const AUTH_FAIL_DELAY_MS = 100;
 
 /**
+ * Bounded semaphore for CPU-bound device authentication (Argon2id).
+ *
+ * Argon2id is deliberately expensive; a reconnect burst or a hostile device
+ * farm could otherwise pin every core on password hashing before any rate
+ * limiter gets a chance to act. `acquire` resolves with a release function
+ * ONLY when a slot is granted — queued callers must not start hashing
+ * before that — and refuses (null) instead of growing unbounded when the
+ * queue saturates.
+ */
+export class AuthSemaphore {
+  private active = 0;
+  private waiters: Array<() => void> = [];
+
+  constructor(
+    private readonly limit: number,
+    private readonly queueLimit: number,
+  ) {}
+
+  /**
+   * Resolves to a release function once a slot is granted (immediately for
+   * the first `limit` callers, later for queued ones), or null when the
+   * queue is saturated. The release function must be called exactly once
+   * when the critical section finishes.
+   */
+  acquire(): Promise<(() => void) | null> {
+    if (this.active < this.limit) {
+      this.active++;
+      return Promise.resolve(() => this.release());
+    }
+    if (this.waiters.length >= this.queueLimit) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      // grant hands the slot to this waiter when a slot frees up
+      this.waiters.push(() => resolve(() => this.release()));
+    });
+  }
+
+  private release(): void {
+    this.active--;
+    const grant = this.waiters.shift();
+    if (grant) {
+      // hand the freed slot to the next waiter; its release() decrements
+      // again when that attempt finishes
+      this.active++;
+      grant();
+    }
+  }
+}
+
+/**
  * Kills a device's live MQTT session (credential revocation).
  *
  * aedes exposes `clients` as a plain object keyed by clientId; with the
@@ -63,6 +112,8 @@ export interface StartBrokerOptions {
   port: number;
   /** WS path, e.g. "/mqtt". */
   path?: string;
+  /** Max concurrent Argon2id auth verifications (default 8). */
+  authConcurrency?: number;
 }
 
 /**
@@ -76,6 +127,13 @@ export async function startBroker(
   // Aedes 1.x: createBroker() initialises the broker (including its internal
   // persistence) and starts it; the constructor alone does not fully start.
   const aedes = await Aedes.createBroker();
+  // CPU-bound auth guard (WEB-09): bounded concurrency so a reconnect burst
+  // cannot pin every core on Argon2id. Default 8; configured via
+  // BROKER_AUTH_CONCURRENCY. Queue cap = 4x limit, then refuse immediately.
+  const authGate = new AuthSemaphore(
+    options.authConcurrency ?? 8,
+    (options.authConcurrency ?? 8) * 4,
+  );
 
   // Identity binding (S1/S2): the MQTT clientId MUST equal the username
   // (the device UID), and the clientId must be a valid device UID. All
@@ -86,20 +144,29 @@ export async function startBroker(
       callback(null, false);
       return;
     }
-    authenticateDevice(prisma, username, password)
-      .then(async (ok) => {
-        if (!ok) {
-          // M6: fixed delay on auth failure (cheap brute-force throttle;
-          // a real rate limiter belongs in the reverse proxy)
-          await new Promise((r) => setTimeout(r, AUTH_FAIL_DELAY_MS));
-        }
-        callback(null, ok);
-      })
-      .catch((error) => {
-        // database failure is a server problem, not bad credentials:
-        // returnCode 3 (server unavailable) so clients do not stop retrying
-        callback(Object.assign(error as Error, { returnCode: 3 }), null);
-      });
+    void authGate.acquire().then((release) => {
+      if (!release) {
+        // auth queue saturated: refuse now; the device retries (MQTT spec
+        // allows the client to reconnect). Refusing beats unbounded queuing.
+        callback(null, false);
+        return;
+      }
+      authenticateDevice(prisma, username, password)
+        .then(async (ok) => {
+          if (!ok) {
+            // M6: fixed delay on auth failure (cheap brute-force throttle;
+            // a real rate limiter belongs in the reverse proxy)
+            await new Promise((r) => setTimeout(r, AUTH_FAIL_DELAY_MS));
+          }
+          callback(null, ok);
+        })
+        .catch((error) => {
+          // database failure is a server problem, not bad credentials:
+          // returnCode 3 (server unavailable) so clients do not stop retrying
+          callback(Object.assign(error as Error, { returnCode: 3 }), null);
+        })
+        .finally(release);
+    });
   };
 
   // Devices may only publish to their own device-to-platform topics

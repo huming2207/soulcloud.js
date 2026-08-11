@@ -1,0 +1,23 @@
+# Production Compose override: remove every host port mapping from the base
+# stack so the ONLY public entry points are the proxy's 80/443.
+#
+# Usage (after the base stack and traefik are running):
+#   docker compose -f compose.yaml -f deploy/traefik/compose.prod.yaml up -d
+#
+# This is the WEB-04 remediation: with the plaintext MQTT (1883), API
+# (8080) and web (8081) mappings removed, devices can only reach the
+# broker through wss://<domain>/mqtt (TLS terminated by traefik), and
+# operator traffic only through https://<domain>.
+#
+# Compose list-merge semantics APPEND to the base `ports` list, so an
+# empty list cannot remove the base mappings. `!reset []` (Compose
+# 2.24+) replaces the merged list with nothing.
+services:
+  postgres:
+    ports: !reset []
+  api:
+    ports: !reset []
+  broker:
+    ports: !reset []
+  web:
+    ports: !reset []

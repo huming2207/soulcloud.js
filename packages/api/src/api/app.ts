@@ -68,6 +68,7 @@ export function createApp(
   jwt: JwtConfig,
   otaTargetTtlSeconds = 15 * 60,
   streamOptions: StreamOptions = {},
+  maxJsonBodyBytes = 1024 * 1024,
 ) {
   // C1 (round-5): never fall back to a hardcoded secret. The caller MUST
   // pass the configured JwtConfig (index.ts wires .env; tests inject
@@ -79,6 +80,22 @@ export function createApp(
   }
   const auth = jwt;
   return new Elysia()
+    .onRequest(({ request, set }) => {
+      // WEB-09: reject oversized non-multipart bodies before any JSON parse
+      // cost (JSON parsing runs before handler authentication). Firmware
+      // uploads are multipart and streamed with their own caps — exempt
+      // here; Bun's global maxRequestBodySize bounds those separately.
+      const contentType = request.headers.get("content-type") ?? "";
+      if (contentType.includes("multipart/form-data")) return;
+      const declared = Number(request.headers.get("content-length") ?? "0");
+      if (declared > maxJsonBodyBytes) {
+        set.status = 413;
+        return new Response(
+          JSON.stringify({ error: "payload_too_large", message: "request body too large" }),
+          { status: 413, headers: { "content-type": "application/json" } },
+        );
+      }
+    })
     .get("/health/live", () => ({ status: "ok" }))
     .get("/health/ready", async ({ set }) => {
       try {

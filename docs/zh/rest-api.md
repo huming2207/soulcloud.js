@@ -73,7 +73,7 @@ OTA 流：LISTEN `soulcloud_ota`（payload = 任务 ID），推送与 `GET /v1/o
 
 WebSocket 升级，为单台设备流式传输解码后的日志事件。由于浏览器无法在 WebSocket 上设置 header，访问令牌放在子协议列表中；令牌无效时升级以 `401` 拒绝，`device_id` 非 UUID 时 `400`，设备不存在或调用者不是项目成员时 `404`（通过把子协议令牌投影到 Authorization header 复用 `authenticateRequest`）。
 
-数据路径：`ingestLogPacket` `pg_notify` `soulcloud_log_events` 通道（payload = `<deviceId>:<eventId>`，按设计有损——消费者回退到 REST 分页）；API 进程运行进程级懒启动 LISTEN 中枢（hub，故障重连），在触碰数据库**之前**查找订阅者（无订阅者的通知绝不执行查询），并通过 `decodeEventsBatch` 在服务端解码（每个产物缓存字典，60 s TTL，有界淘汰），然后把每个事件扇出（fan-out）给该设备的每个订阅者。
+数据路径：`ingestLogPacket` / `ingestLogBundle` `pg_notify` `soulcloud_log_events` 通道（payload 仅为设备 id；hub 重新查询自身每设备高水位之上的所有事件，事件 id 不随通知传输——按设计有损，消费者回退到 REST 分页）；API 进程运行进程级懒启动 LISTEN 中枢（hub，故障重连），在触碰数据库**之前**查找订阅者（无订阅者的通知绝不执行查询），并通过 `decodeEventsBatch` 在服务端解码（每个产物缓存字典，60 s TTL，有界淘汰），然后把每个事件扇出（fan-out）给该设备的每个订阅者。
 
 流加固（与命令/OTA 流共享）：
 

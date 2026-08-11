@@ -13,6 +13,10 @@ const envSchema = z.object({
     .string()
     .transform((v) => v === "true")
     .default(false),
+  /// Max concurrent Argon2id device-auth verifications. Keeps a reconnect
+  /// burst (or a hostile device farm) from pinning every core on CPU-bound
+  /// password hashing; excess attempts queue (bounded) instead of failing.
+  BROKER_AUTH_CONCURRENCY: z.coerce.number().int().positive().default(8),
   COMMAND_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   COMMAND_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
   // OTA delivery:
@@ -32,5 +36,20 @@ const envSchema = z.object({
 export type BrokerConfig = BaseConfig & z.infer<typeof envSchema>;
 
 export function loadBrokerConfig(): BrokerConfig {
-  return loadEnv(envSchema);
+  const config = loadEnv(envSchema);
+  // MQTT_COMMAND_RETAIN replays the last command to any device that
+  // (re)subscribes. Retained state is never cleared and the device-side
+  // dedupe cache is small and volatile, so a stale state-changing command
+  // could be re-executed after a reboot. Refuse it in production instead
+  // of shipping a documented footgun.
+  // (config can be undefined only when loadEnv's process.exit was mocked
+  // in tests; the real process exits before this line.)
+  if (config?.MQTT_COMMAND_RETAIN && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "MQTT_COMMAND_RETAIN=true is not allowed in production: retained " +
+        "command state is never cleared and can replay stale commands. " +
+        "Remove the setting or run with NODE_ENV != production.",
+    );
+  }
+  return config;
 }

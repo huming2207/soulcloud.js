@@ -20,9 +20,17 @@ external MQTT server.
 - **Event-loop isolation**: Bun is single-threaded per process. MQTT routing
   and HTTP traffic must not starve each other; with real device counts, a
   shared event loop degrades both.
-- **Independent scaling**: API and broker scale separately. Multiple broker
-  instances coordinate through PostgreSQL lease locking (`FOR UPDATE SKIP
-  LOCKED`).
+- **Independent scaling**: the API and the broker are separate processes and
+  can be scaled independently of each other (e.g. API replicas behind the
+  reverse proxy).
+- **Single-broker constraint**: the broker currently runs as **one process**.
+  The durable command/OTA queues use PostgreSQL lease locking (`FOR UPDATE
+  SKIP LOCKED`) and would be safe across instances, but Aedes session state
+  (connections, subscriptions) is process-local: a second broker instance
+  could lease a command for a device connected to another instance, judge it
+  offline and defer it (correct, but slow and churny), and a restart drops all
+  live sessions. Device-to-broker ownership/partitioning or a cluster-aware
+  broker is required before advertising horizontal broker scaling.
 - **Failure isolation**: a broker crash does not take down the web API.
 
 ## Inter-process communication

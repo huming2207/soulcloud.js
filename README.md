@@ -7,8 +7,10 @@ embedded [Aedes](https://github.com/moscajs/aedes) MQTT broker.
 The original Rust implementation (REST API + MQTT worker as two processes with
 an external broker and Diesel ORM) was complex and hard to audit. This rewrite
 keeps the two-process separation — REST API and MQTT broker run in separate
-processes so their event loops cannot starve each other and they scale
-independently — but collapses the shared layer into one small TypeScript
+processes so their event loops cannot starve each other (the API can scale
+horizontally; the broker is a single process today, see
+docs/en/architecture.md) — but collapses the shared layer into one small
+TypeScript
 package with a declarative Prisma schema.
 
 ## Workspace layout
@@ -255,11 +257,13 @@ docker compose up -d --build
 - Images: `Dockerfile.backend` (api/broker targets, multi-stage Bun) and
   `packages/web/Dockerfile` (vite build -> minimal nginx static server).
 - The web container serves the built SPA only (SPA fallback + immutable
-  asset caching, no proxying inside the container). Compose exposes the
-  API (`:8080`), web (`:8081`) and MQTT (`:1883`) ports directly; the
-  reverse proxy in front — traefik in the reference deployment —
-  terminates TLS and routes `host/` to the web service and `host/v1`,
-  `host/health` to the api service.
+  asset caching, no proxying inside the container). Compose binds the API
+  (`127.0.0.1:8080`), web (`127.0.0.1:8081`) and MQTT
+  (`127.0.0.1:1883`) ports to loopback only — plaintext entry points are
+  never exposed to other hosts; the reverse proxy in front — traefik in
+  the reference deployment — terminates TLS and routes `host/` to the
+  web service and `host/v1`, `host/health` to the api service over the
+  docker network.
 - MQTT-over-WebSocket TLS is likewise expected at the proxy (stream
   passthrough to `:1883`).
 
@@ -288,10 +292,15 @@ What the proxy does (and what the app deliberately does not):
 - **Rate limiting** on the API routes (register brute-force and OTA
   download bandwidth; see the deployment notes above) and basic security
   headers
-- After the proxy is up, the base compose ports (8080/8081/1883) may be
-  dropped from `compose.yaml` (or left published for direct access); the
-  public entry points become `https://<domain>/`, `https://<domain>/v1`
-  and `wss://<domain>/mqtt`.
+- After the proxy is up, remove the base compose port mappings. The broker
+  port in particular must NOT stay published: it is plaintext MQTT, so a
+  published 1883 lets devices bypass TLS and send credentials over raw WS
+  (WEB-04). `deploy/traefik/compose.prod.yaml` is a ready override that
+  strips every host port:
+  `docker compose -f compose.yaml -f deploy/traefik/compose.prod.yaml up -d`
+  The public entry points then are `https://<domain>/`, `https://<domain>/v1`
+  and `wss://<domain>/mqtt`; devices MUST use `wss://` (plaintext `ws://`
+  only ever reaches the loopback mapping for local diagnostics).
 
 ## Log ingestion quick tour
 

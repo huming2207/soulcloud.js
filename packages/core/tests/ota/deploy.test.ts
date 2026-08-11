@@ -448,7 +448,7 @@ describe("ota result acknowledgements", () => {
     expect((await prisma.otaTarget.findUnique({ where: { id: row!.id } }))?.state).toBe("delivered");
   });
 
-  test("stat fallback cannot confirm bin-only releases (no artifact)", async () => {
+  test("stat fallback confirms bin-only releases by matching bin hash", async () => {
     const binOnly = await createFirmwareRelease(prisma, {
       projectId,
       bin: new Uint8Array([7, 7, 7]),
@@ -464,10 +464,13 @@ describe("ota result acknowledgements", () => {
       const row = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
       await leaseNextOtaTarget(prisma, 60_000);
       await markOtaTargetDelivered(prisma, row!.id);
-      await confirmOtaTargetByFirmware(prisma, deviceIds[0]!, buildId);
-      // the bin-only target has no artifact to match: it stays delivered
-      // (other targets may be confirmed — that is not this test's concern)
+      // a mismatched hash must NOT confirm a bin-only release: only the
+      // bin SHA-256 is a verifiable identity (deadbeef matches nothing)
+      expect(await confirmOtaTargetByFirmware(prisma, deviceIds[0]!, "deadbeef".repeat(8))).toBe(0);
       expect((await prisma.otaTarget.findUnique({ where: { id: row!.id } }))?.state).toBe("delivered");
+      // matching the bin hash confirms the target
+      expect(await confirmOtaTargetByFirmware(prisma, deviceIds[0]!, binOnly.binHash)).toBeGreaterThanOrEqual(1);
+      expect((await prisma.otaTarget.findUnique({ where: { id: row!.id } }))?.state).toBe("completed");
     } finally {
       const jobs = await prisma.otaJob.findMany({
         where: { releaseId: binOnly.releaseId },
@@ -476,6 +479,92 @@ describe("ota result acknowledgements", () => {
       await prisma.otaTarget.deleteMany({ where: { jobId: { in: jobs.map((j) => j.id) } } });
       await prisma.otaJob.deleteMany({ where: { id: { in: jobs.map((j) => j.id) } } });
       await prisma.firmwareRelease.delete({ where: { id: binOnly.releaseId } });
+    }
+  });
+
+  test("createOtaJob fast path: devices already on the release are completed", async () => {
+    // device reports the ELF build id already -> job target completes at creation
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId: deviceIds[0]! },
+      update: { fwHash: buildId, reportedAt: new Date() },
+      create: { deviceId: deviceIds[0]!, fwHash: buildId },
+    });
+    try {
+      const job = await createOtaJob(prisma, {
+        projectId,
+        releaseId,
+        createdBy: randomUUID(),
+        deviceIds,
+        targetTtlSeconds: 900,
+      });
+      const rows = await prisma.otaTarget.findMany({ where: { jobId: job.jobId } });
+      const byDevice = new Map(rows.map((r) => [r.deviceId, r.state]));
+      expect(byDevice.get(deviceIds[0]!)).toBe("completed");
+      for (const id of deviceIds.slice(1)) {
+        expect(byDevice.get(id)).toBe("pending");
+      }
+      // every target is now terminal in this single-device pool: nothing leaseable
+      expect(await leaseNextOtaTarget(prisma, 60_000)).toBeNull();
+      const completed = await prisma.otaTarget.findFirst({
+        where: { jobId: job.jobId, deviceId: deviceIds[0]! },
+      });
+      expect(completed?.resultCode).toBe(0);
+      expect(completed?.confirmedAt).not.toBeNull();
+    } finally {
+      await prisma.deviceFirmwareState.deleteMany({ where: { deviceId: deviceIds[0]! } });
+    }
+  });
+
+  test("createOtaJob fast path: mismatched firmware stays pending", async () => {
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId: deviceIds[0]! },
+      update: { fwHash: "ff".repeat(32), reportedAt: new Date() },
+      create: { deviceId: deviceIds[0]!, fwHash: "ff".repeat(32) },
+    });
+    try {
+      const job = await createOtaJob(prisma, {
+        projectId,
+        releaseId,
+        createdBy: randomUUID(),
+        deviceIds,
+        targetTtlSeconds: 900,
+      });
+      const rows = await prisma.otaTarget.findMany({ where: { jobId: job.jobId } });
+      expect(rows.every((r) => r.state === "pending")).toBe(true);
+    } finally {
+      await prisma.deviceFirmwareState.deleteMany({ where: { deviceId: deviceIds[0]! } });
+    }
+  });
+
+  test("createOtaJob fast path: bin-only release matches by bin hash", async () => {
+    const binOnly = await createFirmwareRelease(prisma, {
+      projectId,
+      bin: new Uint8Array([9, 9, 9]),
+    });
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId: deviceIds[0]! },
+      update: { fwHash: binOnly.binHash, reportedAt: new Date() },
+      create: { deviceId: deviceIds[0]!, fwHash: binOnly.binHash },
+    });
+    try {
+      const job = await createOtaJob(prisma, {
+        projectId,
+        releaseId: binOnly.releaseId,
+        createdBy: randomUUID(),
+        deviceIds,
+        targetTtlSeconds: 900,
+      });
+      const rows = await prisma.otaTarget.findMany({ where: { jobId: job.jobId } });
+      expect(rows.some((r) => r.deviceId === deviceIds[0]! && r.state === "completed")).toBe(true);
+    } finally {
+      const jobs = await prisma.otaJob.findMany({
+        where: { releaseId: binOnly.releaseId },
+        select: { id: true },
+      });
+      await prisma.otaTarget.deleteMany({ where: { jobId: { in: jobs.map((j) => j.id) } } });
+      await prisma.otaJob.deleteMany({ where: { id: { in: jobs.map((j) => j.id) } } });
+      await prisma.firmwareRelease.delete({ where: { id: binOnly.releaseId } });
+      await prisma.deviceFirmwareState.deleteMany({ where: { deviceId: deviceIds[0]! } });
     }
   });
 });

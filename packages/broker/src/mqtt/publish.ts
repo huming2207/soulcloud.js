@@ -1,11 +1,12 @@
 /**
  * Publishes queued commands to devices through the embedded Aedes broker.
  *
- * The poller leases the oldest eligible command (per-device order is enforced
- * by the lease query), publishes it to the device's `cmd/exec` topic at
- * QoS 1, and marks the row `broker_accepted` once `aedes.publish()` confirms
- * the broker accepted it. A local publish failure releases the lease so the
- * command can be retried.
+ * The poller leases eligible commands (per-device order is enforced by the
+ * lease query), publishes each to the device's `cmd/exec` topic at QoS 1,
+ * and marks the row `broker_accepted` once `aedes.publish()` confirms the
+ * broker accepted it. A local publish failure releases the lease so the
+ * command can be retried. Each poll cycle drains a bounded number of
+ * commands (see DEFAULT_DRAIN_MAX_PER_CYCLE).
  *
  * Unlike the Rust version (external broker + PUBACK tracking), the embedded
  * broker's publish callback IS the broker acceptance — a key simplification.
@@ -18,8 +19,24 @@ import {
   leaseNext,
   markBrokerAccepted,
   releaseLease,
+  type LeasedCommand,
   type PrismaClient,
 } from "@soulcloud/core";
+
+/**
+ * Commands published per poll cycle before the cycle yields to the next
+ * poll/wake. The pre-drain poller delivered at most one command per poll
+ * interval (~2/s with the default 500 ms interval), so a 1000-command
+ * batch took ~500 s even with every device online.
+ */
+export const DEFAULT_DRAIN_MAX_PER_CYCLE = 100;
+
+/**
+ * Retry delay when the device is connected but its SUBSCRIBE for the
+ * cmd/exec topic is still in flight (esp-mqtt subscribes asynchronously
+ * after CONNACK; the subscription registers within milliseconds).
+ */
+const SUBSCRIBE_RETRY_MS = 1_000;
 
 export interface PollerOptions {
   /** Poll interval in milliseconds. */
@@ -33,6 +50,11 @@ export interface PollerOptions {
    * (prevents a busy poll loop while a device stays offline).
    */
   offlineRetryMs?: number;
+  /**
+   * Maximum commands published per poll cycle (bounded drain). Defaults
+   * to DEFAULT_DRAIN_MAX_PER_CYCLE.
+   */
+  drainMaxPerCycle?: number;
 }
 
 export interface PollerLog {
@@ -93,7 +115,7 @@ export function startCommandPoller(
   };
 }
 
-/** One poll cycle: lease a command and publish it. */
+/** One poll cycle: drain up to `drainMaxPerCycle` queued commands. */
 export async function pollOnce(
   aedes: Aedes,
   prisma: PrismaClient,
@@ -104,9 +126,28 @@ export async function pollOnce(
   // per-device queue; no-op when no deadlines are set)
   await expireDelayedCommands(prisma);
 
-  const leased = await leaseNext(prisma, options.leaseDurationMs);
-  if (!leased) return;
+  // bounded drain (WEB-05): the pre-drain poller published at most one
+  // command per poll interval (~2/s per process with the default 500 ms),
+  // so a 1000-device batch took ~500 s. Lease and publish several commands
+  // per cycle, stopping when the queue is empty or the budget is spent.
+  // Per-command errors are handled inside handleLeasedCommand; only a
+  // database failure escapes (and is caught by the poll() wrapper).
+  const budget = options.drainMaxPerCycle ?? DEFAULT_DRAIN_MAX_PER_CYCLE;
+  for (let i = 0; i < budget; i++) {
+    const leased = await leaseNext(prisma, options.leaseDurationMs);
+    if (!leased) return;
+    await handleLeasedCommand(aedes, prisma, options, log, leased);
+  }
+}
 
+/** Publishes one leased command, or defers it back to the queue. */
+async function handleLeasedCommand(
+  aedes: Aedes,
+  prisma: PrismaClient,
+  options: PollerOptions,
+  log: PollerLog,
+  leased: LeasedCommand,
+): Promise<void> {
   // M2: never publish to an offline device. A QoS1 message to a clean-session
   // client is dropped by the broker, which would strand the command in
   // broker_accepted forever and block the per-device queue. Instead the
@@ -142,6 +183,34 @@ export async function pollOnce(
       error: (error as Error).message,
     });
     await releaseLease(prisma, leased.id);
+    return;
+  }
+
+  // WEB-01: check the subscription, not just the connection: a client can
+  // be connected while its SUBSCRIBE is still in flight (esp-mqtt
+  // subscribes asynchronously after CONNACK). Publishing to a topic with
+  // no subscriber is silently dropped on a clean-session client, yet
+  // aedes.publish still resolves and the row is marked broker_accepted —
+  // the command is then lost forever and blocks the per-device queue.
+  // Same pattern as the OTA poller (ota-publish.ts). client.subscriptions
+  // is populated for both clean and persistent sessions.
+  const mqttClient = (
+    clients as Record<string, { subscriptions?: Record<string, unknown> }> | undefined
+  )?.[leased.deviceUid];
+  const subscribed = !!mqttClient && !!mqttClient.subscriptions?.[topic];
+  if (!subscribed) {
+    log.debug("device not subscribed yet; deferring command", {
+      commandId: leased.id,
+      deviceUid: leased.deviceUid,
+    });
+    await prisma.deviceCommand.update({
+      where: { id: leased.id, state: "leased" },
+      data: {
+        state: "queued",
+        leaseExpiresAt: null,
+        availableAt: new Date(Date.now() + SUBSCRIBE_RETRY_MS),
+      },
+    });
     return;
   }
 

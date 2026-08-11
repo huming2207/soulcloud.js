@@ -57,9 +57,13 @@ mock.module("axios", () => ({
   },
 }));
 
-const { setAccessToken, setRefreshToken, getRefreshToken, setSessionEndHandler } = await import(
-  "./http"
-);
+const {
+  setAccessToken,
+  setRefreshToken,
+  getRefreshToken,
+  setSessionEndHandler,
+  ensureFreshAccessToken,
+} = await import("./http");
 
 // --- helpers ---------------------------------------------------------------------
 function makeError(status: number, url: string): {
@@ -72,6 +76,15 @@ function makeError(status: number, url: string): {
     response: { status },
     config: { url, headers: {} },
   };
+}
+
+/** Builds a structurally-valid JWT with the given exp (seconds). */
+function makeJwt(expSeconds: number): string {
+  const payload = btoa(JSON.stringify({ exp: expSeconds }))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+  return `h.${payload}.s`;
 }
 
 function runRequestInterceptor(config: Record<string, unknown>): void {
@@ -196,5 +209,66 @@ describe("errorMessage", () => {
     };
     expect(errorMessage(err)).toBe("device_uid_taken");
     expect(errorMessage(new Error("plain"))).toBe("plain");
+  });
+});
+
+describe("ensureFreshAccessToken", () => {
+  test("returns the current token without refreshing while it is fresh", async () => {
+    const fresh = makeJwt(Math.floor(Date.now() / 1000) + 600);
+    setAccessToken(fresh);
+    setRefreshToken("rt-1");
+    expect(await ensureFreshAccessToken()).toBe(fresh);
+    expect(refreshCalls).toBe(0);
+  });
+
+  test("refreshes when the token is missing", async () => {
+    setAccessToken(null);
+    setRefreshToken("rt-1");
+    expect(await ensureFreshAccessToken()).toBe("new-access");
+    expect(refreshCalls).toBe(1);
+    expect(getRefreshToken()).toBe("new-refresh");
+  });
+
+  test("refreshes when the token is already expired", async () => {
+    setAccessToken(makeJwt(Math.floor(Date.now() / 1000) - 60));
+    setRefreshToken("rt-1");
+    expect(await ensureFreshAccessToken()).toBe("new-access");
+    expect(refreshCalls).toBe(1);
+  });
+
+  test("refreshes proactively inside the 30s skew window", async () => {
+    setAccessToken(makeJwt(Math.floor(Date.now() / 1000) + 20));
+    setRefreshToken("rt-1");
+    expect(await ensureFreshAccessToken()).toBe("new-access");
+    expect(refreshCalls).toBe(1);
+  });
+
+  test("concurrent callers share one refresh", async () => {
+    setAccessToken(null);
+    setRefreshToken("rt-1");
+    const [a, b, c] = await Promise.all([
+      ensureFreshAccessToken(),
+      ensureFreshAccessToken(),
+      ensureFreshAccessToken(),
+    ]);
+    expect(a).toBe("new-access");
+    expect(b).toBe("new-access");
+    expect(c).toBe("new-access");
+    expect(refreshCalls).toBe(1);
+  });
+
+  test("a failed refresh returns null and clears the session without bouncing", async () => {
+    refreshError = new Error("refresh failed");
+    const assign = spyOn(window.location, "assign").mockImplementation(() => {});
+    const onEnd = mock(() => {});
+    setSessionEndHandler(onEnd);
+    setAccessToken("stale");
+    setRefreshToken("rt-1");
+    expect(await ensureFreshAccessToken()).toBeNull();
+    expect(getRefreshToken()).toBeNull();
+    expect(onEnd).toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+    assign.mockRestore();
+    setSessionEndHandler(null);
   });
 });

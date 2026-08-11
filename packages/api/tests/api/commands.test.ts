@@ -239,3 +239,48 @@ describe("G group: project membership", () => {
     expect(await outsider.json()).toMatchObject({ error: "forbidden" });
   });
 });
+
+describe("WEB-09: request-body ceilings", () => {
+  test("non-multipart body over the route-level JSON cap -> 413", async () => {
+    const shortApp = createApp(prisma, TEST_JWT, 15 * 60, {}, 1024);
+    const big = "x".repeat(4096);
+    const res = await shortApp.handle(
+      new Request("http://localhost/v1/command-batches", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(big.length),
+        },
+        body: big,
+      }),
+    );
+    expect(res.status).toBe(413);
+    expect(await res.json()).toMatchObject({ error: "payload_too_large" });
+  });
+
+  test("multipart bodies are exempt from the JSON cap", async () => {
+    const shortApp = createApp(prisma, TEST_JWT, 15 * 60, {}, 1024);
+    const res = await shortApp.handle(
+      new Request("http://localhost/v1/command-batches", {
+        method: "POST",
+        headers: {
+          "content-type": "multipart/form-data; boundary=xyz",
+          "content-length": "4096",
+        },
+        body: "x".repeat(4096),
+      }),
+    );
+    // not a 413: the multipart path is exempt (route-level checks apply)
+    expect(res.status).not.toBe(413);
+  });
+
+  test("small JSON bodies pass the ceiling check", async () => {
+    const shortApp = createApp(prisma, TEST_JWT, 15 * 60, {}, 1024);
+    const res = await shortApp.handle(
+      new Request("http://localhost/health/live", {
+        method: "GET",
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+});

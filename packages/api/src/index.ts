@@ -31,8 +31,19 @@ const app = createApp(
     refreshTtlSeconds: config.JWT_REFRESH_TTL_SECONDS,
   },
   config.OTA_TARGET_TTL_SECONDS,
+  {},
+  config.MAX_JSON_BODY_BYTES,
 );
-app.listen({ hostname, port });
+// WEB-09: Bun buffers request bodies up to maxRequestBodySize before
+// handlers run; the firmware multipart path is streamed and capped at
+// 2x MAX_FIRMWARE_BYTES, so an explicit ceiling slightly above that
+// bounds buffering for everything else (the route-level JSON cap below
+// is much tighter).
+app.listen({
+  hostname,
+  port,
+  maxRequestBodySize: config.MAX_BODY_BYTES,
+});
 // rollout FSM (proposal 19): slow, DB-only advance loop
 const rolloutPoller = startRolloutPoller(
   prisma,

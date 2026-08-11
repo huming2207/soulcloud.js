@@ -52,7 +52,11 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       MQTT_BROKER_PORT: 1883
     ports:
-      - "1883:1883"
+      # loopback only: plaintext MQTT must not be reachable from other
+      # hosts (WEB-04). The reverse proxy reaches the broker over the
+      # docker network; production removes this mapping entirely (see
+      # deploy/traefik/compose.prod.yaml).
+      - "127.0.0.1:1883:1883"
     restart: unless-stopped
     depends_on:
       postgres:
@@ -70,10 +74,9 @@ services:
       context: .
       dockerfile: packages/web/Dockerfile
     ports:
-      # nginx serves the SPA (no proxying inside the container); the
-      # proxy in front (traefik) routes /v1 + /health to the api
-      # service and terminates TLS
-      - "8081:80"
+      # loopback only; the reverse proxy terminates TLS and routes
+      # host/ to this service over the docker network
+      - "127.0.0.1:8081:80"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/"]

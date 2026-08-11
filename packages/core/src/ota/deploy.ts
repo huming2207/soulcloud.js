@@ -115,7 +115,9 @@ export interface CreateOtaJobOptions {
 export interface OtaJobTarget {
   deviceId: string;
   deviceUid: string;
-  state: "pending";
+  /** "pending" normally; "completed" when the fast path confirmed the
+   *  device is already running this release's firmware. */
+  state: "pending" | "completed";
 }
 
 export interface CreatedOtaJob {
@@ -131,7 +133,11 @@ export interface CreatedOtaJob {
  * whole job is rejected (explicit-target semantics, like command batches).
  *
  * Re-deploying the same release to the same devices is allowed: each call
- * creates a fresh job (devices deduplicate by release on their side).
+ * creates a fresh job. Targets whose device firmware state already matches
+ * the release are created as `completed` immediately (fast path) — the
+ * device already runs this build, so there is nothing to deliver; the
+ * device-side dedupe would otherwise ignore the notice and the job could
+ * never reach a terminal state.
  *
  * @throws {OtaError}
  */
@@ -153,7 +159,7 @@ export async function createOtaJob(
   // already checks membership)
   const release = await prisma.firmwareRelease.findUnique({
     where: { id: options.releaseId },
-    select: { projectId: true },
+    select: { projectId: true, artifactId: true, binHash: true },
   });
   if (!release || release.projectId !== options.projectId) {
     throw new OtaError(
@@ -182,6 +188,30 @@ export async function createOtaJob(
 
   const jobId = randomUUID();
   const expiresAt = new Date(Date.now() + options.targetTtlSeconds * 1000);
+
+  // fast path: targets whose device already reports this release's firmware
+  // identity (ELF build id when an artifact exists, bin hash otherwise) are
+  // completed without delivering anything. The reported identity must match
+  // the same rule as confirmOtaTargetByFirmware.
+  let expectedFw: string | null = null;
+  if (release.artifactId) {
+    const artifact = await prisma.firmwareArtifact.findUnique({
+      where: { id: release.artifactId },
+      select: { buildId: true },
+    });
+    expectedFw = artifact?.buildId ?? null;
+  } else {
+    expectedFw = release.binHash;
+  }
+  const alreadyRunning = new Set<string>();
+  if (expectedFw) {
+    const states = await prisma.deviceFirmwareState.findMany({
+      where: { deviceId: { in: options.deviceIds }, fwHash: expectedFw },
+      select: { deviceId: true },
+    });
+    for (const s of states) alreadyRunning.add(s.deviceId);
+  }
+
   try {
     await prisma.$transaction(async (tx) => {
       await tx.otaJob.create({
@@ -195,6 +225,12 @@ export async function createOtaJob(
       await tx.otaTarget.createMany({
         data: devices.map((d) => ({ jobId, deviceId: d.id, expiresAt })),
       });
+      if (alreadyRunning.size > 0) {
+        await tx.otaTarget.updateMany({
+          where: { jobId, deviceId: { in: [...alreadyRunning] }, state: "pending" },
+          data: { state: "completed", confirmedAt: new Date(), resultCode: 0 },
+        });
+      }
       // wake broker processes (lossy hint only)
       await tx.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
     });
@@ -210,7 +246,9 @@ export async function createOtaJob(
     targets: devices.map((d) => ({
       deviceId: d.id,
       deviceUid: d.deviceUid,
-      state: "pending" as const,
+      // fast-path targets were completed during creation; report the real
+      // state instead of a blanket "pending"
+      state: alreadyRunning.has(d.id) ? "completed" : "pending",
     })),
   };
 }
@@ -465,11 +503,15 @@ export async function recordOtaResult(
 }
 
 /**
- * stat.fw fallback (fact layer): when a device reports a firmware hash
- * that matches a release's ELF build id, any of its non-terminal targets
- * for that release are confirmed as `completed`. This is the ONLY driver
- * of `completed` — the platform never guesses, it requires the new
- * firmware to have actually booted (proposal 18, D6).
+ * stat.fw fallback (fact layer): when a device reports a firmware hash,
+ * any of its non-terminal targets for that release are confirmed as
+ * `completed` when the reported identity matches the release — the ELF
+ * build id when the release has an artifact, otherwise the release's bin
+ * hash (bin-only releases have no ELF to match, so the SHA-256 of the bin
+ * is the only verifiable identity). This is the ONLY driver of `completed`
+ * — the platform never guesses, it requires the reported firmware to
+ * actually match the release (proposal 18, D6). Idempotent: terminal
+ * targets are not touched.
  *
  * @returns the number of targets confirmed.
  */
@@ -485,11 +527,12 @@ export async function confirmOtaTargetByFirmware(
         result_code = 0
     FROM ota_jobs j
     INNER JOIN firmware_releases r ON r.id = j.release_id
-    INNER JOIN firmware_artifacts a ON a.id = r.artifact_id
+    LEFT JOIN firmware_artifacts a ON a.id = r.artifact_id
     WHERE t.job_id = j.id
       AND t.device_id = ${deviceId}
       AND t.state IN ('delivered', 'delivering', 'downloaded', 'installed')
-      AND a."buildId" = ${fwHash}
+      AND ((a.id IS NOT NULL AND a."buildId" = ${fwHash})
+           OR (a.id IS NULL AND r.bin_hash = ${fwHash}))
   `;
   return result;
 }

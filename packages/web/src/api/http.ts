@@ -41,6 +41,9 @@ export function getAccessToken(): string | null {
 
 let sessionEndHandler: (() => void) | null = null;
 
+/** How early (ms) before JWT expiry a token is treated as stale. */
+const ACCESS_TOKEN_EXPIRE_SKEW_MS = 30_000;
+
 /**
  * Registers a callback invoked when the session ends (failed refresh,
  * i.e. forced logout). The app wires it to queryClient.clear() so one
@@ -48,6 +51,47 @@ let sessionEndHandler: (() => void) | null = null;
  */
 export function setSessionEndHandler(fn: (() => void) | null): void {
   sessionEndHandler = fn;
+}
+
+/** Clears the session state (forced logout); used by the 401 interceptor
+ * and the WS reconnect path when the refresh token is rejected. */
+function endSession(): void {
+  accessToken = null;
+  setRefreshToken(null);
+  sessionEndHandler?.();
+}
+
+function isAccessTokenExpired(token: string): boolean {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return true;
+    // JWT payloads are base64url; atob needs the standard alphabet
+    const json = JSON.parse(
+      atob(payload.replace(/-/g, "+").replace(/_/g, "/")),
+    ) as { exp?: unknown };
+    return (
+      typeof json.exp !== "number" ||
+      json.exp * 1000 - ACCESS_TOKEN_EXPIRE_SKEW_MS <= Date.now()
+    );
+  } catch {
+    return true; // unparsable: treat as expired and refresh
+  }
+}
+
+/**
+ * Returns a fresh access token for flows outside the axios interceptor
+ * (WebSocket reconnects). Refreshes single-flight when the in-memory token
+ * is missing or already expired; returns null when the refresh fails (the
+ * session ended - the caller should stop retrying).
+ */
+export async function ensureFreshAccessToken(): Promise<string | null> {
+  if (accessToken && !isAccessTokenExpired(accessToken)) return accessToken;
+  try {
+    return await refreshTokens();
+  } catch {
+    endSession();
+    return null;
+  }
 }
 
 /** Refreshes the token pair once; concurrent callers share the promise. */
@@ -98,9 +142,7 @@ http.interceptors.response.use(
         original.headers.Authorization = `Bearer ${token}`;
         return http(original);
       } catch {
-        accessToken = null;
-        setRefreshToken(null);
-        sessionEndHandler?.();
+        endSession();
         if (window.location.pathname !== "/login") {
           window.location.assign("/login");
         }

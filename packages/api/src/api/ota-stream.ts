@@ -38,13 +38,15 @@ import { OTA_NOTIFY_CHANNEL, type JwtConfig, type PrismaClient } from "@soulclou
 import { createPgChannelListener } from "../pg-listen";
 import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
+import { createTtlCache } from "./ttl-cache";
 
 const WS_PROTOCOL = "soulcloud";
 
 /** jobId -> project id, resolved during the handshake (a job's project
  *  never changes). Avoids a re-query per WS connection for the
- *  membership re-check. */
-const jobProjectCache = new Map<string, string>();
+ *  membership re-check; entries expire so a long-lived process does not
+ *  accumulate every job it ever saw. */
+const jobProjectCache = createTtlCache<string>(10 * 60_000, 1000);
 
 /** Default per-job notification debounce window (ms). */
 const DEBOUNCE_MS = 250;

@@ -14,6 +14,14 @@ export const envSchema = z.object({
   OTA_TARGET_TTL_SECONDS: z.coerce.number().int().positive().default(15 * 60),
   // Rollout FSM advance loop cadence
   ROLLOUT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  /// Global HTTP request-body ceiling passed to Bun.serve (WEB-09). Must
+  /// stay above the largest legitimate upload: firmware multipart can reach
+  /// ~2x MAX_FIRMWARE_BYTES (64 MiB) before the route-level cap rejects it.
+  MAX_BODY_BYTES: z.coerce.number().int().positive().default(80 * 1024 * 1024),
+  /// Route-level ceiling for non-multipart bodies (JSON APIs). Firmware
+  /// uploads are multipart and exempt; this bounds the JSON parse cost that
+  /// runs before authentication on body-carrying routes.
+  MAX_JSON_BODY_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
 });
 
 export type ApiConfig = BaseConfig & z.infer<typeof envSchema>;

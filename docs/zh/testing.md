@@ -2,7 +2,7 @@
 
 > 本文档是 `docs/en/testing.md` 的中文翻译，与英文版一一对应。
 
-**基线**：后端 524 个测试、42 个文件（隔离的 `soulcloud_test` 数据库，`--isolate` 按文件独立进程）+ 前端 201 个单元测试、33 个文件，`tsc --noEmit` 干净，oxlint 干净，CI 硬编码中文（CJK）扫描（scripts/scan-hardcoded-i18n.sh）通过。E2E 脚本（命令循环、日志摄取、OTA、滚动发布、web <-> API）全部通过。
+**基线**：后端 596 个测试、48 个文件（隔离的 `soulcloud_test` 数据库，`--isolate` 按文件独立进程）+ 前端 221 个单元测试、35 个文件，`tsc --noEmit` 干净，oxlint 干净，CI 硬编码中文（CJK）扫描（scripts/scan-hardcoded-i18n.sh）通过。E2E 脚本（命令循环、日志摄取、OTA、滚动发布、web <-> API）全部通过。
 
 ## 策略
 
@@ -53,8 +53,8 @@ packages/broker/tests/mqtt/
 
 `.github/workflows/ci.yml`（GitHub Actions，`master` 分支）并行运行三个任务：
 
-1. **backend**（postgres 服务）：install → `db:generate` → `db:deploy` → `bun run typecheck` → `bash scripts/test.sh`（在隔离的 `soulcloud_test` 数据库上 524 个测试）→ 双进程 E2E（`scripts/run-e2e.sh`）
-2. **web**（无数据库）：install → web typecheck → 201 个单元测试（`bun run --cwd packages/web test`）→ 生产构建
+1. **backend**（postgres 服务）：install → `db:generate` → `db:deploy` → `bun run typecheck` → `bash scripts/test.sh`（在隔离的 `soulcloud_test` 数据库上 596 个测试）→ 双进程 E2E（`scripts/run-e2e.sh`）
+2. **web**（无数据库）：install → web typecheck → 221 个单元测试（`bun run --cwd packages/web test`）→ 生产构建
 3. **web-e2e**（postgres 服务）：install → `db:generate`/`db:deploy` → 安装 agent-browser（Chrome for Testing）→ `bash scripts/web-e2e-ci.sh`（浏览器 <-> API 对全新数据库的 E2E）
 
 ## 前端测试

@@ -40,13 +40,15 @@ import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate
 import { loadCommandBatchDetail } from "./devices";
 import { createPgChannelListener, type PgListenLog } from "../pg-listen";
 import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
+import { createTtlCache } from "./ttl-cache";
 
 const WS_PROTOCOL = "soulcloud";
 
 /** batchId -> target device project ids, resolved during the handshake
  *  (batches are immutable after creation). Avoids a full batch re-query
- *  per WS connection for the membership re-check. */
-const batchProjectsCache = new Map<string, string[]>();
+ *  per WS connection for the membership re-check; entries expire so a
+ *  long-lived process does not accumulate every batch it ever saw. */
+const batchProjectsCache = createTtlCache<string[]>(10 * 60_000, 1000);
 
 /** Default per-batch notification debounce window (ms). */
 const DEBOUNCE_MS = 250;

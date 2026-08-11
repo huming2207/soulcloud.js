@@ -41,6 +41,15 @@ http:
     compress:
       compress: {}
 
+    # WEB-09: cap request bodies at the proxy. The api's global Bun
+    # ceiling is 80 MiB (firmware multipart can reach ~64 MiB) and its
+    # route-level JSON cap is 1 MiB; this buffering middleware is the
+    # first gate for the api routes. Tune maxRequestBodyBytes if you
+    # change MAX_BODY_BYTES (or the firmware multipart ceiling).
+    body-limit-api:
+      buffering:
+        maxRequestBodyBytes: 83886080  # 80 MiB, matches MAX_BODY_BYTES
+
 # --- routers + services ---------------------------------------------------
 
   routers:
@@ -60,7 +69,7 @@ http:
       rule: "Host(`example.com`) && (PathPrefix(`/v1`) || PathPrefix(`/health`))"
       entryPoints: [websecure]
       service: api
-      middlewares: [ratelimit-web, security-headers]
+      middlewares: [ratelimit-web, security-headers, body-limit-api]
       tls:
         certResolver: letsencrypt
 

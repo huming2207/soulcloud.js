@@ -90,12 +90,14 @@ not exist or the caller is not a project member (`authenticateRequest`
 is reused by projecting the subprotocol token onto an Authorization
 header).
 
-Data path: `ingestLogPacket` `pg_notify`s the `soulcloud_log_events`
-channel (payload = `<deviceId>:<eventId>`, lossy by design — consumers
-fall back to REST paging); the API process runs a process-wide lazy
-LISTEN hub (reconnects on failure) that looks up subscribers **before**
-touching the database (a notify with no subscribers never runs a query)
-and decodes server-side via `decodeEventsBatch` (dictionary cached per
+Data path: `ingestLogPacket` / `ingestLogBundle` `pg_notify` the
+`soulcloud_log_events` channel (payload = the device id only; the hub
+re-queries everything above its per-device high-water mark, so event
+ids never travel in the notify — lossy by design, consumers fall back
+to REST paging); the API process runs a process-wide lazy LISTEN hub
+(reconnects on failure) that looks up subscribers **before** touching
+the database (a notify with no subscribers never runs a query) and
+decodes server-side via `decodeEventsBatch` (dictionary cached per
 artifact, 60 s TTL, bounded eviction), then fans each event out to
 every subscriber of the device.
 

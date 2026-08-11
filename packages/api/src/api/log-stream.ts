@@ -11,11 +11,10 @@
  * UUID and travels in the query string.
  *
  * Delivery model: PostgreSQL LISTEN on `soulcloud_log_events`. The
- * notify payload is "<deviceId>:<eventId>" so the hub can check its
- * subscribers BEFORE hitting the database. Events are batched per
- * device inside a debounce window (default 250ms): a burst of log
- * packets costs one batched query + one decode pass (shared
- * dictionary) instead of one full dictionary scan per packet.
+ * notify payload is the device id only — the hub checks its subscribers
+ * BEFORE hitting the database, then re-queries everything above its
+ * per-device high-water mark in one batched query + one decode pass
+ * (shared dictionary) instead of one query per packet or per event id.
  *
  * Connection lifecycle: the hub records the access-token exp at
  * handshake and closes sockets with 4401 once it passes (the client
@@ -87,39 +86,67 @@ export function getLogStreamHub(
   const debounceMs = options.debounceMs ?? DEBOUNCE_MS;
   const maxConnections = options.maxConnections ?? MAX_CONNECTIONS;
   const subscribers = new Map<string, Set<ServerWebSocket>>();
-  // deviceId -> event ids collected inside the debounce window
-  const pendingEvents = new Map<string, string[]>();
+  // deviceId -> highest event id already pushed (high-water mark). The
+  // notify payload carries only the device id; every push queries
+  // `id > mark` and advances it. Initialised to the device's current max
+  // id at subscribe time so history (loaded via REST) is never replayed.
+  const lastPushed = new Map<string, bigint>();
   const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingSince = new Map<string, number>();
   let connectionCount = 0;
 
-  /** Flushes the queued events for a device (timer edge or max-wait). */
+  /**
+   * Establishes the initial high-water mark for a device as its current
+   * max event id. Fire-and-forget at subscribe time; a notify that races
+   * this query is handled by the fallback in `flush` (the event stays
+   * queryable via REST — the stream is lossy by design).
+   */
+  function initBaseline(deviceId: string) {
+    if (lastPushed.has(deviceId)) return;
+    void prisma.rawLogEvent
+      .aggregate({ where: { deviceId }, _max: { id: true } })
+      .then((res) => {
+        const max = res._max.id;
+        // only set if nobody pushed in the meantime
+        if (!lastPushed.has(deviceId)) {
+          lastPushed.set(deviceId, max ?? 0n);
+        }
+      })
+      .catch(() => {
+        // baseline failure: flush falls back to establishing it; the
+        // stream simply stays silent for this device until then
+      });
+  }
+
+  // per-device in-flight guard: a flush that is still querying/sending
+  // must not run concurrently with a second one (they would both read the
+  // same high-water mark and duplicate events). If a flush is in flight,
+  // the debounce timer re-arms on the next notify and runs after it.
+  const flushing = new Set<string>();
+
+  /** Flushes everything above the high-water mark for a device. */
   function flush(deviceId: string) {
     pendingTimers.delete(deviceId);
     pendingSince.delete(deviceId);
-    const batch = pendingEvents.get(deviceId);
-    pendingEvents.delete(deviceId);
-    if (batch && batch.length > 0) {
-      void pushEvents(prisma, subscribers, deviceId, batch, log);
-    }
+    const sockets = subscribers.get(deviceId);
+    if (!sockets || sockets.size === 0) return;
+    if (flushing.has(deviceId)) return;
+    flushing.add(deviceId);
+    void pushEvents(prisma, subscribers, deviceId, lastPushed, log).finally(() => {
+      flushing.delete(deviceId);
+    });
   }
 
   /**
-   * Queues an event for a device and arms/resets the debounce window.
-   * Subscribers are checked first: with nobody listening the notify is
-   * dropped without touching the database (lossy by design; REST is the
-   * recovery path). MAX_WAIT_MS bounds the merge window so a continuous
-   * burst can never starve the push.
+   * Arms/resets the debounce window for a device. Subscribers are checked
+   * first: with nobody listening the notify is dropped without touching
+   * the database (lossy by design; REST is the recovery path).
+   * MAX_WAIT_MS bounds the merge window so a continuous burst can never
+   * starve the push.
    */
-  function schedulePush(deviceId: string, eventId: string) {
+  function schedulePush(deviceId: string) {
     const sockets = subscribers.get(deviceId);
     if (!sockets || sockets.size === 0) return;
-    let ids = pendingEvents.get(deviceId);
-    if (!ids) {
-      ids = [];
-      pendingEvents.set(deviceId, ids);
-    }
-    ids.push(eventId);
 
     const now = Date.now();
     const existing = pendingTimers.get(deviceId);
@@ -159,10 +186,9 @@ export function getLogStreamHub(
     LOG_EVENTS_CHANNEL,
     (payload) => {
       if (!payload) return;
-      // payload = "<deviceId>:<eventId>"
-      const sep = payload.indexOf(":");
-      if (sep <= 0) return;
-      schedulePush(payload.slice(0, sep).toLowerCase(), payload.slice(sep + 1));
+      // payload = the device id (single event and bundle ingest both send
+      // just the device id; the hub re-queries from its high-water mark)
+      schedulePush(payload.toLowerCase());
     },
     log,
   );
@@ -185,21 +211,35 @@ export function getLogStreamHub(
       }
       set.add(ws);
       connectionCount += 1;
+      initBaseline(key);
       listener.start();
     },
     unsubscribe(deviceId: string, ws: ServerWebSocket) {
-      const set = subscribers.get(deviceId.toLowerCase());
+      const key = deviceId.toLowerCase();
+      const set = subscribers.get(key);
       if (!set) return;
       const removed = set.delete(ws);
       if (removed) connectionCount = Math.max(0, connectionCount - 1);
-      if (set.size === 0) subscribers.delete(deviceId.toLowerCase());
+      if (set.size === 0) {
+        subscribers.delete(key);
+        // nobody is streaming this device any more; drop the mark so the
+        // next subscription starts from a fresh baseline (history stays
+        // on REST, not the stream)
+        lastPushed.delete(key);
+        const timer = pendingTimers.get(key);
+        if (timer) {
+          clearTimeout(timer);
+          pendingTimers.delete(key);
+          pendingSince.delete(key);
+        }
+      }
     },
     async close() {
       await listener.close();
       for (const timer of pendingTimers.values()) clearTimeout(timer);
       pendingTimers.clear();
-      pendingEvents.clear();
       pendingSince.clear();
+      lastPushed.clear();
       subscribers.clear();
       connectionCount = 0;
       hubSingleton = null;
@@ -209,46 +249,66 @@ export function getLogStreamHub(
 }
 
 /**
- * Decodes a batch of stored log events (one shared dictionary pass) and
- * pushes each to every subscriber of the device. Failures are logged and
- * skipped per event (they stay queryable via REST).
+ * Pushes every stored event above the device's high-water mark to each
+ * subscriber, then advances the mark (one shared dictionary decode pass).
+ * Failures are logged and the mark is left in place (events stay queryable
+ * via REST; the next notify retries them).
  */
 async function pushEvents(
   prisma: PrismaClient,
   subscribers: Map<string, Set<ServerWebSocket>>,
   deviceId: string,
-  eventIds: string[],
+  lastPushed: Map<string, bigint>,
   log: PgListenLog,
 ): Promise<void> {
-  const sockets = subscribers.get(deviceId.toLowerCase());
+  const sockets = subscribers.get(deviceId);
   if (!sockets || sockets.size === 0) return;
 
-  let rows: Awaited<ReturnType<typeof prisma.rawLogEvent.findMany>>;
-  try {
-    rows = await prisma.rawLogEvent.findMany({
-      where: { id: { in: eventIds.map((id) => BigInt(id)) } },
-    });
-  } catch (error) {
-    log.warn("log stream batch load failed", { error: (error as Error).message });
-    return;
-  }
-  if (rows.length === 0) return;
-
-  // preserve the arrival order of the notifications
-  const byId = new Map(rows.map((r) => [r.id.toString(), r]));
-  const ordered = eventIds
-    .map((id) => byId.get(id))
-    .filter((r): r is NonNullable<typeof r> => r !== undefined);
-
-  let decoded: Array<{ tag: string | null; message: string | null }> = [];
-  try {
-    decoded = await decodeEventsBatch(prisma, ordered);
-  } catch (error) {
-    log.warn("log stream decode failed", { error: (error as Error).message });
-    decoded = ordered.map(() => ({ tag: null, message: null }));
+  // first push for this device: establish the baseline as the current
+  // max (the UI loads history via REST; only NEW events are streamed).
+  // A notify that raced initBaseline lands at or below this mark and is
+  // skipped — lossy by design, recoverable via REST.
+  let mark = lastPushed.get(deviceId);
+  if (mark === undefined) {
+    try {
+      const max = await prisma.rawLogEvent.aggregate({
+        where: { deviceId },
+        _max: { id: true },
+      });
+      mark = max._max.id ?? 0n;
+      lastPushed.set(deviceId, mark);
+    } catch (error) {
+      log.warn("log stream baseline failed", { error: (error as Error).message });
+      return;
+    }
   }
 
-  const payloads = ordered.map((row, i) => {
+  // Bounded replay: a device that burst many events between flushes must
+  // not produce one unbounded query + WS send; loop in PUSH_BATCH_SIZE
+  // slices, advancing the mark after each.
+  for (;;) {
+    let rows: Awaited<ReturnType<typeof prisma.rawLogEvent.findMany>>;
+    try {
+      rows = await prisma.rawLogEvent.findMany({
+        where: { deviceId, id: { gt: mark } },
+        orderBy: { id: "asc" },
+        take: PUSH_BATCH_SIZE,
+      });
+    } catch (error) {
+      log.warn("log stream batch load failed", { error: (error as Error).message });
+      return;
+    }
+    if (rows.length === 0) return;
+
+    let decoded: Array<{ tag: string | null; message: string | null }> = [];
+    try {
+      decoded = await decodeEventsBatch(prisma, rows);
+    } catch (error) {
+      log.warn("log stream decode failed", { error: (error as Error).message });
+      decoded = rows.map(() => ({ tag: null, message: null }));
+    }
+
+    const payloads = rows.map((row, i) => {
     const event = {
       id: row.id.toString(),
       received_at: row.receivedAt,
@@ -274,7 +334,16 @@ async function pushEvents(
       }
     }
   }
+    // advance the mark past everything just pushed (even if some sockets
+    // were closed mid-batch: the REST fallback covers those events)
+    mark = rows[rows.length - 1]!.id;
+    lastPushed.set(deviceId, mark);
+    if (rows.length < PUSH_BATCH_SIZE) break;
+  }
 }
+
+/** Max events replayed per flush slice (bounds one query + one WS send). */
+const PUSH_BATCH_SIZE = 500;
 
 /** Reads the exp claim from a verified JWT (base64url; no signature check needed here). */
 function jwtExp(token: string): number | undefined {

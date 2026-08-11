@@ -1,6 +1,6 @@
 # Web Console — Current Status
 
-**Date**: 2026-08-09 · **Baseline**: 201 unit tests / 33 files green,
+**Date**: 2026-08-09 · **Baseline**: 221 unit tests / 33 files green,
 `tsc --noEmit` clean, web <-> API browser E2E passes, CI runs three
 parallel jobs (backend / web / web-e2e).
 
@@ -100,7 +100,7 @@ language menu in the app bar persists the choice.
 
 ## Testing
 
-- **201 unit tests / 33 files** (`bun run --cwd packages/web test`):
+- **221 unit tests / 33 files** (`bun run --cwd packages/web test`):
   i18n dictionary invariants, axios auth flow (mock axios: Bearer
   injection, single-flight 401 refresh, exemption list, logout bounce),
   auth/project contexts, every page and dialog (rendering, validation,

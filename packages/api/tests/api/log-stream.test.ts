@@ -219,9 +219,9 @@ describe("GET /v1/ws/logs", () => {
     // NOTIFY is lossy and the hub's LISTEN session starts lazily on the
     // first subscription: re-notify on a short loop until the event arrives
     // (3s deadline) instead of assuming the listener is already up.
-    // Payload format: "<deviceId>:<eventId>" (device first so the hub can
-    // check subscribers before querying).
-    const notifyPayload = `${deviceId}:${eventId}`;
+    // Payload format: the device id only (the hub re-queries everything
+    // above its high-water mark, so no event ids travel in the notify).
+    const notifyPayload = `${deviceId}`;
     const deadline = Date.now() + 3000;
     let msg: Record<string, any> | null = null;
     for (;;) {
@@ -287,6 +287,10 @@ describe("GET /v1/ws/logs", () => {
   });
 
   test("a notify with no subscribers never touches the database", async () => {
+    // wait out the previous tests' debounce-flush tail: their sockets may
+    // close a moment after the last notify is processed, and a timer
+    // armed in that window would otherwise fire inside this test's spy
+    await Bun.sleep(400);
     // notify for a device nobody is subscribed to: the hub must check its
     // subscriber map from the payload BEFORE querying (a ghost device also
     // makes the test independent of leftover sockets from earlier tests)
@@ -298,7 +302,7 @@ describe("GET /v1/ws/logs", () => {
       return original(...(args as Parameters<typeof original>));
     }) as typeof prisma.rawLogEvent.findMany;
     try {
-      await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${ghost}:${BigInt(Date.now()).toString()}`})`;
+      await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${ghost}`})`;
       // give the listener a moment to deliver and (wrongly) query
       await Bun.sleep(300);
       expect(calls).toBe(0);
@@ -340,7 +344,7 @@ describe("GET /v1/ws/logs", () => {
       });
       const probeDeadline = Date.now() + 3000;
       for (;;) {
-        await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${deviceId}:${probe.id.toString()}`})`;
+        await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${deviceId}`})`;
         const probed = client.messages.some((raw) => {
           try {
             const m = JSON.parse(raw) as { type?: string; event?: { id?: unknown } };
@@ -377,7 +381,7 @@ describe("GET /v1/ws/logs", () => {
           },
         });
         rows.push(row.id.toString());
-        await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${deviceId}:${row.id.toString()}`})`;
+        await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${deviceId}`})`;
       }
       const got = new Set<string>();
       await waitForMessage<{ type: string; event?: { id?: unknown } }>(
@@ -392,6 +396,89 @@ describe("GET /v1/ws/logs", () => {
       client.ws.close();
     } finally {
       await server2.stop(true);
+      await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
+    }
+  });
+
+  test("one notify delivers every event inserted since the last push", async () => {
+    await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
+    const appN = createApp(prisma, TEST_JWT, 900, { debounceMs: 60 });
+    const serverN = appN.listen({ port: 0, hostname: "127.0.0.1" });
+    const baseN = `ws://127.0.0.1:${serverN.server!.port}`;
+    try {
+      const client = connectWs(`${baseN}/v1/ws/logs?device_id=${deviceId}`, [
+        WS_PROTOCOL,
+        accessToken,
+      ]);
+      expect(await waitForSettle(client)).toBe("open");
+      await waitForMessage(client, (m) => m.type === "ready");
+
+      // probe: the hub's LISTEN session starts lazily on the first
+      // subscribe; re-notify until the probe frame comes back (this also
+      // establishes the high-water mark past the probe row)
+      const probe = await prisma.rawLogEvent.create({
+        data: {
+          deviceId,
+          deviceTimeMs: 0n,
+          sequence: -2,
+          packetType: 0,
+          level: 0,
+          rawPacket: new Uint8Array([0x9a, 0x03]),
+          decodeState: "unknown_fw",
+        },
+      });
+      const probeDeadline = Date.now() + 3000;
+      for (;;) {
+        await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${deviceId}`})`;
+        const probed = client.messages.some((raw) => {
+          try {
+            const m = JSON.parse(raw) as { type?: string; event?: { id?: unknown } };
+            return m.type === "log" && String(m.event?.id) === probe.id.toString();
+          } catch {
+            return false;
+          }
+        });
+        if (probed) break;
+        if (Date.now() >= probeDeadline) {
+          throw new Error("listener never came up (no log frame received)");
+        }
+        await Bun.sleep(50);
+      }
+      // wait out the probe's debounce timer, then clear its frame
+      await Bun.sleep(160);
+      client.messages.length = 0;
+
+      // three events inserted, a SINGLE notify: the hub must deliver all
+      // three (it re-queries above its high-water mark on one notify)
+      const rows: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const row = await prisma.rawLogEvent.create({
+          data: {
+            deviceId,
+            deviceTimeMs: BigInt(2000 + i),
+            sequence: i,
+            packetType: 0,
+            level: 3,
+            rawPacket: new Uint8Array([0x9a, 0x03]),
+            decodeState: "unknown_fw",
+          },
+        });
+        rows.push(row.id.toString());
+      }
+      await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${deviceId}`})`;
+      const got = new Set<string>();
+      await waitForMessage<{ type: string; event?: { id?: unknown } }>(
+        client,
+        (m) => {
+          if (m.type === "log") got.add(String(m.event?.id));
+          return got.size >= 3;
+        },
+        3000,
+      );
+      expect(got).toEqual(new Set(rows));
+      client.ws.close();
+    } finally {
+      await serverN.stop(true);
       await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
     }
   });
@@ -421,7 +508,7 @@ describe("GET /v1/ws/logs", () => {
       });
       const deadline = Date.now() + 3000;
       for (;;) {
-        await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${deviceId}:${row.id.toString()}`})`;
+        await prisma.$executeRaw`SELECT pg_notify(${LOG_EVENTS_CHANNEL}, ${`${deviceId}`})`;
         const seen = client.messages.some((raw) => {
           try {
             const m = JSON.parse(raw) as { type?: string; event?: { id?: unknown } };

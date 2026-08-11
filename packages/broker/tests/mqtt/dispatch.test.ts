@@ -8,10 +8,23 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Aedes } from "aedes";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { encodeDeviceStat, prisma } from "@soulcloud/core";
 import { msgpackLogBundle, validLogPacket } from "../helpers/mqtt-client";
 import { attachDispatch, type DispatchLog } from "../../src/mqtt/dispatch";
+import { buildNoloadElf } from "../../../core/tests/helpers/elf-builder";
+import { createFirmwareRelease } from "../../../core/src/ota/release";
+import {
+  createOtaJob,
+  leaseNextOtaTarget,
+  markOtaTargetDelivered,
+} from "../../../core/src/ota/deploy";
+// Serialises this file against the other ota_targets leasing files
+// (deploy, broker): ota_targets leasing is a global FIFO over a shared
+// dev database. Held for the whole process; the advisory lock dies with
+// the connection (crash-safe).
+import { acquireLeaseLock } from "../../../core/tests/helpers/lease-lock";
+await acquireLeaseLock(prisma);
 
 let projectId: string;
 let deviceId: string;
@@ -116,6 +129,61 @@ describe("attachDispatch guards", () => {
     );
   });
 
+  test("a log bundle costs one rate-limit token per element (WEB-03)", async () => {
+    const log = makeLog();
+    const aedes = new Aedes();
+    attachDispatch(aedes, prisma, log, {
+      maxPacketBytes: 65536,
+      ratePerSecond: 0.001, // refills ~never
+      rateBurst: 2,
+    });
+    const logTopic = `soulcloud/v1/devices/${deviceUid}/log`;
+
+    // a 3-element bundle needs 3 tokens and must be refused at burst 2
+    const big = msgpackLogBundle(validLogPacket(), validLogPacket(), validLogPacket());
+    emitUplink(aedes, deviceUid, logTopic, new Uint8Array([0x01, ...big]));
+    expect(log.entries.some((e) => e.msg === "dropped uplink packet over rate limit")).toBe(
+      true,
+    );
+
+    // a 2-element bundle fits the burst: it is ingested
+    const log2 = makeLog();
+    const aedes2 = new Aedes();
+    attachDispatch(aedes2, prisma, log2, {
+      maxPacketBytes: 65536,
+      ratePerSecond: 0.001,
+      rateBurst: 2,
+    });
+    const fit = msgpackLogBundle(validLogPacket(), validLogPacket());
+    emitUplink(aedes2, deviceUid, logTopic, new Uint8Array([0x01, ...fit]));
+    await waitFor(
+      async () => (await prisma.rawLogEvent.count({ where: { deviceId } })) >= 2,
+      "two-element bundle stored",
+    );
+    expect(
+      log2.entries.some((e) => e.msg === "dropped uplink packet over rate limit"),
+    ).toBe(false);
+
+    // a single raw packet still costs one token and fits burst 1
+    const log3 = makeLog();
+    const aedes3 = new Aedes();
+    attachDispatch(aedes3, prisma, log3, {
+      maxPacketBytes: 65536,
+      ratePerSecond: 0.001,
+      rateBurst: 1,
+    });
+    emitUplink(aedes3, deviceUid, logTopic, validLogPacket());
+    await waitFor(
+      async () => (await prisma.rawLogEvent.count({ where: { deviceId } })) >= 3,
+      "raw packet stored under burst 1",
+    );
+    expect(
+      log3.entries.some((e) => e.msg === "dropped uplink packet over rate limit"),
+    ).toBe(false);
+
+    await prisma.rawLogEvent.deleteMany({ where: { deviceId } });
+  });
+
   test("without guards, oversized packets reach the handler", async () => {
     const log = makeLog();
     const aedes = new Aedes();
@@ -190,6 +258,75 @@ describe("handleStat", () => {
       async () => log.entries.some((e) => e.msg === "ignored stat from unknown device"),
       "ignored stat from unknown device",
     );
+  });
+
+  test("stat confirms an OTA target without a firmware change (redeploy path)", async () => {
+    const elf = buildNoloadElf(["v=%d"], ["t"], 32, true);
+    const buildId = createHash("sha256").update(elf).digest("hex");
+    const rel = await createFirmwareRelease(prisma, {
+      projectId,
+      bin: new Uint8Array([1, 2, 3, 4]),
+      elf,
+    });
+    try {
+      const job = await createOtaJob(prisma, {
+        projectId,
+        releaseId: rel.releaseId,
+        createdBy: randomUUID(),
+        deviceIds: [deviceId],
+        targetTtlSeconds: 900,
+      });
+      const target = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
+      await leaseNextOtaTarget(prisma, 60_000);
+      await markOtaTargetDelivered(prisma, target!.id);
+      // the device already reported this firmware BEFORE the job existed
+      // (redeploy of the currently running release): the notice is
+      // ignored by the device and the next stat reports the SAME hash.
+      await prisma.deviceFirmwareState.upsert({
+        where: { deviceId },
+        update: { fwHash: buildId, reportedAt: new Date() },
+        create: { deviceId, fwHash: buildId },
+      });
+      const log = makeLog();
+      const aedes = new Aedes();
+      attachDispatch(aedes, prisma, log, {
+        maxPacketBytes: 1024,
+        ratePerSecond: 100,
+        rateBurst: 100,
+      });
+      emitUplink(
+        aedes,
+        deviceUid,
+        `soulcloud/v1/devices/${deviceUid}/stat`,
+        encodeDeviceStat({
+          sn: new Uint8Array([1, 2, 3]),
+          fw: Buffer.from(buildId, "hex"),
+          up: 1n,
+          rst: "power-on",
+        }),
+      );
+      await waitFor(async () => {
+        const t = await prisma.otaTarget.findUnique({ where: { id: target!.id } });
+        return t?.state === "completed";
+      }, "target confirmed by same-hash stat");
+      // the confirm log is emitted by the same async path that completed
+      // the target, so it must be present once the state is authoritative
+      expect(log.entries).toContainEqual(
+        expect.objectContaining({ msg: "ota target confirmed by firmware state" }),
+      );
+    } finally {
+      const jobs = await prisma.otaJob.findMany({
+        where: { releaseId: rel.releaseId },
+        select: { id: true },
+      });
+      await prisma.otaTarget.deleteMany({ where: { jobId: { in: jobs.map((j) => j.id) } } });
+      await prisma.otaJob.deleteMany({ where: { id: { in: jobs.map((j) => j.id) } } });
+      if (rel.artifactId) {
+        await prisma.firmwareArtifact.delete({ where: { id: rel.artifactId } });
+      }
+      await prisma.firmwareRelease.delete({ where: { id: rel.releaseId } });
+      await prisma.deviceFirmwareState.deleteMany({ where: { deviceId } });
+    }
   });
 });
 

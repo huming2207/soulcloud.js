@@ -12,9 +12,12 @@
 #     below instead of relying on project name guessing
 #   - replace example.com in dynamic.yaml with your real domain and set
 #     the ACME email in traefik.yaml
-#   - ports 80/443 must be free on the host; the base compose ports
-#     (8080/8081/1883) can stay published for direct access or be
-#     removed once the proxy is the only entry point
+#   - ports 80/443 must be free on the host. In production REMOVE the
+#     base compose port mappings (8080/8081/1883) — the broker port in
+#     particular must not be published, or devices can bypass TLS and
+#     send credentials over plaintext WS. Use
+#     `docker compose -f compose.yaml -f deploy/traefik/compose.prod.yaml up -d`
+#     to strip all host ports (or edit compose.yaml yourself).
 #
 # Once the proxy is up, the public entry points are:
 #   https://example.com/          web console
