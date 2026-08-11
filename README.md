@@ -209,7 +209,7 @@ The web console (`packages/web`) covers the human-facing workflows:
 CI runs three parallel jobs: backend (typecheck + tests + both-process
 E2E), web (typecheck + unit tests + build) and web <-> API browser E2E
 (see `scripts/web-e2e-ci.sh`, requires agent-browser). See
-`docs/CURRENT_STATUS.web.md` for details.
+`docs/en/web.md` for details.
 
 ## Status
 
@@ -301,7 +301,7 @@ curl -F "project_id=<uuid>" -F "file=@firmware.elf" \
      http://localhost:8080/v1/firmware-artifacts
 
 # devices publish on9log packets (raw, or MsgPack bundles of packets — see
-# docs/PROTOCOL.log-packaging.md) to soulcloud/v1/devices/{uid}/log;
+# docs/en/protocol-log-packaging.md) to soulcloud/v1/devices/{uid}/log;
 # a stat message with fw=<firmware hash> links logs to the artifact
 
 # query logs (decoded on demand)

@@ -41,7 +41,7 @@ stream are unchanged. A malformed element is dropped and counted; it never
 invalidates the rest of the container. Elements must be `bin8`/`bin16`
 (self-delimiting) and the element count is capped at 4096 per container.
 
-See [PROTOCOL.log-packaging.md](PROTOCOL.log-packaging.md) for the
+See [protocol-log-packaging.md](protocol-log-packaging.md) for the
 firmware-facing wire specification (byte-level examples, encoder choices,
 merge guidance).
 

@@ -12,17 +12,17 @@ and what is deliberately left open.
 
 | Document | Covers |
 | --- | --- |
-| [CURRENT_STATUS.architecture.md](CURRENT_STATUS.architecture.md) | Workspace layout, processes, inter-process communication |
-| [CURRENT_STATUS.database.md](CURRENT_STATUS.database.md) | PostgreSQL schema, migrations, constraints |
-| [CURRENT_STATUS.mqtt-broker.md](CURRENT_STATUS.mqtt-broker.md) | MQTT-over-WebSocket broker, topics, device auth/ACL, WS adapter |
-| [CURRENT_STATUS.command-queue.md](CURRENT_STATUS.command-queue.md) | Durable command state machine, leases, delivery timeouts |
-| [CURRENT_STATUS.logging.md](CURRENT_STATUS.logging.md) | on9log binary log ingestion, ELF artifacts, decoding |
-| [PROTOCOL.log-packaging.md](PROTOCOL.log-packaging.md) | Firmware-facing log uplink packaging spec: dispatch container (0x9a raw / 0x01 MessagePack array), byte-level examples |
-| [CURRENT_STATUS.rest-api.md](CURRENT_STATUS.rest-api.md) | REST endpoints, error mapping, pagination |
-| [CURRENT_STATUS.authentication.md](CURRENT_STATUS.authentication.md) | Human JWT dual-token auth, device per-session auth, credentials |
-| [CURRENT_STATUS.security.md](CURRENT_STATUS.security.md) | Threat model, DDoS guards, audit history (3 review rounds) |
-| [CURRENT_STATUS.testing.md](CURRENT_STATUS.testing.md) | Test strategy, fixtures, CI |
-| [CURRENT_STATUS.web.md](CURRENT_STATUS.web.md) | Web console: stack, auth flow, pages, i18n, tests |
+| [architecture.md](architecture.md) | Workspace layout, processes, inter-process communication |
+| [database.md](database.md) | PostgreSQL schema, migrations, constraints |
+| [mqtt-broker.md](mqtt-broker.md) | MQTT-over-WebSocket broker, topics, device auth/ACL, WS adapter |
+| [command-queue.md](command-queue.md) | Durable command state machine, leases, delivery timeouts |
+| [logging.md](logging.md) | on9log binary log ingestion, ELF artifacts, decoding |
+| [protocol-log-packaging.md](protocol-log-packaging.md) | Firmware-facing log uplink packaging spec: dispatch container (0x9a raw / 0x01 MessagePack array), byte-level examples |
+| [rest-api.md](rest-api.md) | REST endpoints, error mapping, pagination |
+| [authentication.md](authentication.md) | Human JWT dual-token auth, device per-session auth, credentials |
+| [security.md](security.md) | Threat model, DDoS guards, audit history (3 review rounds) |
+| [testing.md](testing.md) | Test strategy, fixtures, CI |
+| [web.md](web.md) | Web console: stack, auth flow, pages, i18n, tests |
 
 ## Quick facts
 
@@ -35,7 +35,7 @@ and what is deliberately left open.
   polling; LISTEN/NOTIFY as a lossy wake-up).
 - **Protocol**: MQTT 3.1.1 over WebSocket; MessagePack payloads for commands;
   raw on9log packets for logs (single packets or MsgPack bundles — see
-  [PROTOCOL.log-packaging.md](PROTOCOL.log-packaging.md)).
+  [protocol-log-packaging.md](protocol-log-packaging.md)).
 - **Auth**: humans use JWT dual-token (access + server-side refresh); devices
   use per-session MQTT authentication (never JWT).
 - **Web UI**: React 19 + Material UI 9, five locales (zh/en/ru/uk/it),
