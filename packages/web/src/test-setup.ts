@@ -102,6 +102,14 @@ if (!g.scrollTo) {
 // React 19 + Testing Library require the act environment flag
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// Auto-cleanup between tests: unmounting every rendered component also
+// cancels in-flight async work (e.g. a delayed WS reconnect IIFE from the
+// previous test), which would otherwise leak into the next test's
+// assertions under slow CI scheduling.
+import { cleanup } from "@testing-library/react";
+import { afterEach } from "bun:test";
+afterEach(() => cleanup());
+
 // clipboard is not implemented by happy-dom
 const nav = window.navigator as unknown as Navigator & { clipboard?: Clipboard };
 if (!nav.clipboard) {
