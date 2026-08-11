@@ -116,7 +116,11 @@ export function useWebSocketStream(
               // auth problem fixed: restart from the base delay
               retryDelayRef.current = retryBaseMs;
               connect();
+            } else if (!token) {
+              // refresh failed: the session ended, so stop retrying
+              // (a REST call would bounce us to /login anyway)
             } else {
+              // token unchanged: 4401 was budget/revocation, not expiry
               const delay = retryDelayRef.current;
               retryDelayRef.current = Math.min(delay * 2, RETRY_MAX_MS);
               retryTimerRef.current = setTimeout(connect, delay);
