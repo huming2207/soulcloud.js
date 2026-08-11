@@ -66,10 +66,14 @@ function notifyDeviceStatus(uid: string, online: boolean): void {
 aedes.on("client", (client) => {
   // NOTE: aedes Client has no "close" event (the type definition is
   // right) - disconnects surface on the broker as "clientDisconnect"
+  logger.info("client connected", { clientId: client.id, clean: client.clean });
   notifyDeviceStatus(client.id, true);
 });
 aedes.on("clientDisconnect", (client) => {
-  logger.info("client disconnected", { clientId: client.id });
+  // replaced: a newer connection with the same clientId took over (the
+  // device reconnected while this session was still registered)
+  const clients = (aedes as unknown as { clients?: Record<string, unknown> }).clients ?? {};
+  logger.info("client disconnected", { clientId: client.id, replaced: clients[client.id] !== client });
   notifyDeviceStatus(client.id, false);
 });
 attachDispatch(aedes, prisma, logger, {
