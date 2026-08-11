@@ -7,7 +7,7 @@
  * mocked at the axios layer.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { setAccessToken, setRefreshToken } from "./http";
 import { useWebSocketStream } from "./webSocketStream";
 
@@ -86,6 +86,10 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.WebSocket = originalWebSocket;
+  // unmount any component left mounted by a previous test: its async
+  // 4401 reconnect IIFE could otherwise resolve after the next test's
+  // beforeEach and push a stray instance (slow-CI scheduling)
+  cleanup();
 });
 
 describe("useWebSocketStream", () => {
