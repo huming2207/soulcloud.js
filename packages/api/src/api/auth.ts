@@ -47,7 +47,40 @@ const AUTH_FAIL_DELAY_MS = 100;
  */
 const LOGIN_MAX_FAILURES = 5;
 const LOGIN_LOCK_SECONDS = 60;
+const LOGIN_FAILURE_CACHE_CAPACITY_DEFAULT = 10_000;
 const loginFailures = new Map<string, { count: number; lockedUntil: number }>();
+
+/**
+ * Non-queuing admission limit for memory-hard password work. A request that
+ * cannot acquire a slot returns 429 instead of retaining another request and
+ * allowing Argon2 memory use to grow with the incoming burst.
+ */
+export class Argon2AdmissionLimiter {
+  private active = 0;
+
+  constructor(private readonly concurrency: number) {
+    if (!Number.isInteger(concurrency) || concurrency <= 0) {
+      throw new RangeError("Argon2 concurrency must be a positive integer");
+    }
+  }
+
+  tryAcquire(): (() => void) | null {
+    if (this.active >= this.concurrency) return null;
+    this.active += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active -= 1;
+    };
+  }
+}
+
+export interface AuthRouteOptions {
+  argon2Concurrency?: number;
+  argon2Limiter?: Argon2AdmissionLimiter;
+  loginFailureCapacity?: number;
+}
 
 /** Returns the remaining lock seconds for a username (0 = not locked). */
 function loginLockRemaining(username: string): number {
@@ -64,14 +97,22 @@ function loginLockRemaining(username: string): number {
   return Math.ceil((entry.lockedUntil - Date.now()) / 1000);
 }
 
-function recordLoginFailure(username: string): void {
+function recordLoginFailure(username: string, capacity: number): void {
   const entry = loginFailures.get(username) ?? { count: 0, lockedUntil: 0 };
   entry.count += 1;
   if (entry.count >= LOGIN_MAX_FAILURES) {
     entry.lockedUntil = Date.now() + LOGIN_LOCK_SECONDS * 1000;
     entry.count = 0;
   }
+  // Refresh insertion order for a small fixed-capacity LRU. Unknown username
+  // attacks can no longer grow this process-global map without bound.
+  loginFailures.delete(username);
   loginFailures.set(username, entry);
+  while (loginFailures.size > capacity) {
+    const oldest = loginFailures.keys().next().value;
+    if (oldest === undefined) break;
+    loginFailures.delete(oldest);
+  }
 }
 
 function clearLoginFailures(username: string): void {
@@ -88,8 +129,8 @@ const RegisterBody = z
 
 const LoginBody = z
   .object({
-    username: z.string().min(1),
-    password: z.string().min(1),
+    username: z.string().min(1).max(64),
+    password: z.string().min(1).max(128),
   })
   .strict();
 
@@ -97,7 +138,20 @@ const RefreshBody = z
   .object({ refresh_token: z.string().min(1) })
   .strict();
 
-export function createAuthRoutes(prisma: PrismaClient, jwt: JwtConfig) {
+export function createAuthRoutes(
+  prisma: PrismaClient,
+  jwt: JwtConfig,
+  options: AuthRouteOptions = {},
+) {
+  const argon2Limiter = options.argon2Limiter ?? new Argon2AdmissionLimiter(
+    options.argon2Concurrency ?? 4,
+  );
+  const loginFailureCapacity =
+    options.loginFailureCapacity ?? LOGIN_FAILURE_CACHE_CAPACITY_DEFAULT;
+  if (!Number.isInteger(loginFailureCapacity) || loginFailureCapacity <= 0) {
+    throw new RangeError("login failure capacity must be a positive integer");
+  }
+
   return new Elysia({ prefix: "/v1/auth" })
     .post("/register", async ({ body, set }) => {
       try {
@@ -107,7 +161,17 @@ export function createAuthRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           return { error: "invalid_request", message: "invalid registration payload" };
         }
         const { username, password, email } = parsed.data;
-        const passwordHash = await hashPassword(password);
+        const releaseArgon2 = argon2Limiter.tryAcquire();
+        if (!releaseArgon2) {
+          set.status = 429;
+          return { error: "rate_limited", message: "password service is busy; retry later" };
+        }
+        let passwordHash: string;
+        try {
+          passwordHash = await hashPassword(password);
+        } finally {
+          releaseArgon2();
+        }
         // create the user and a personal project in one transaction
         const user = await prisma.$transaction(async (tx) => {
           const created = await tx.user.create({
@@ -157,14 +221,24 @@ export function createAuthRoutes(prisma: PrismaClient, jwt: JwtConfig) {
         const user = await prisma.user.findUnique({
           where: { username: parsed.data.username },
         });
+        const releaseArgon2 = argon2Limiter.tryAcquire();
+        if (!releaseArgon2) {
+          set.status = 429;
+          return { error: "rate_limited", message: "password service is busy; retry later" };
+        }
         // timing-equalized credential check: unknown users verify against
         // the dummy hash instead of short-circuiting
-        const passwordOk = user
-          ? await verifyPassword(parsed.data.password, user.passwordHash)
-          : await verifyPassword(parsed.data.password, DUMMY_PASSWORD_HASH);
+        let passwordOk: boolean;
+        try {
+          passwordOk = user
+            ? await verifyPassword(parsed.data.password, user.passwordHash)
+            : await verifyPassword(parsed.data.password, DUMMY_PASSWORD_HASH);
+        } finally {
+          releaseArgon2();
+        }
         if (!user || !passwordOk) {
           // throttle brute force; also masks the timing oracle
-          recordLoginFailure(parsed.data.username);
+          recordLoginFailure(parsed.data.username, loginFailureCapacity);
           await new Promise((r) => setTimeout(r, AUTH_FAIL_DELAY_MS));
           set.status = 401;
           return { error: "invalid_credentials", message: "invalid username or password" };

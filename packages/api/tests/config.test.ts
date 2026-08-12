@@ -5,7 +5,14 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { loadApiConfig, parseBindAddress } from "../src/config";
 
-const SAVED = ["JWT_SECRET", "API_BIND_ADDRESS", "OTA_TARGET_TTL_SECONDS", "ROLLOUT_POLL_INTERVAL_MS"];
+const SAVED = [
+  "JWT_SECRET",
+  "API_BIND_ADDRESS",
+  "OTA_TARGET_TTL_SECONDS",
+  "ROLLOUT_POLL_INTERVAL_MS",
+  "AUTH_ARGON2_CONCURRENCY",
+  "AUTH_LOGIN_FAILURE_CAPACITY",
+];
 
 afterEach(() => {
   for (const k of SAVED) delete process.env[k];
@@ -19,15 +26,19 @@ describe("loadApiConfig", () => {
     expect(config.OTA_TARGET_TTL_SECONDS).toBe(15 * 60);
     expect(config.ROLLOUT_POLL_INTERVAL_MS).toBe(30_000);
     expect(config.JWT_ACCESS_TTL_SECONDS).toBe(15 * 60);
+    expect(config.AUTH_ARGON2_CONCURRENCY).toBe(4);
+    expect(config.AUTH_LOGIN_FAILURE_CAPACITY).toBe(10_000);
   });
 
   test("honours explicit values", () => {
     process.env.JWT_SECRET = "a".repeat(32);
     process.env.API_BIND_ADDRESS = "127.0.0.1:9999";
     process.env.OTA_TARGET_TTL_SECONDS = "60";
+    process.env.AUTH_ARGON2_CONCURRENCY = "2";
     const config = loadApiConfig();
     expect(config.API_BIND_ADDRESS).toBe("127.0.0.1:9999");
     expect(config.OTA_TARGET_TTL_SECONDS).toBe(60);
+    expect(config.AUTH_ARGON2_CONCURRENCY).toBe(2);
   });
 
   test("exits with a readable listing when JWT_SECRET is missing", () => {

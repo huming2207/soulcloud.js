@@ -22,6 +22,11 @@ export const envSchema = z.object({
   /// uploads are multipart and exempt; this bounds the JSON parse cost that
   /// runs before authentication on body-carrying routes.
   MAX_JSON_BODY_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
+  /// Public login/registration Argon2 protection. Requests beyond this
+  /// simultaneous-work cap receive 429 rather than queueing in memory.
+  AUTH_ARGON2_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  /// Hard bound for distinct usernames retained by the local failure cache.
+  AUTH_LOGIN_FAILURE_CAPACITY: z.coerce.number().int().positive().default(10_000),
 });
 
 export type ApiConfig = BaseConfig & z.infer<typeof envSchema>;

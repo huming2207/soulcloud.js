@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:
 import { randomUUID } from "node:crypto";
 import { prisma } from "@soulcloud/core";
 import { createApp } from "../../src/api/app";
+import { Argon2AdmissionLimiter, createAuthRoutes } from "../../src/api/auth";
+import { Elysia } from "elysia";
 
 // G-group auth tests: register/login/refresh rotation/logout/reuse
 // detection, device credential issue/revoke, revoked device refused by
@@ -297,6 +299,37 @@ describe("device credentials", () => {
 });
 
 describe("auth edge cases", () => {
+  test("Argon2 saturation rejects login and registration with 429", async () => {
+    const limiter = new Argon2AdmissionLimiter(1);
+    const release = limiter.tryAcquire()!;
+    const limitedApp = new Elysia().use(
+      createAuthRoutes(prisma, TEST_JWT, { argon2Limiter: limiter }),
+    );
+    try {
+      const login = await limitedApp.handle(
+        jsonRequest("/v1/auth/login", "POST", {
+          username: `busy-${randomUUID().slice(0, 8)}`,
+          password: "test-password-123",
+        }),
+      );
+      expect(login.status).toBe(429);
+      expect(await login.json()).toMatchObject({ error: "rate_limited" });
+
+      const username = `busy-${randomUUID().slice(0, 8)}`;
+      const registration = await limitedApp.handle(
+        jsonRequest("/v1/auth/register", "POST", {
+          username,
+          password: "test-password-123",
+          email: `${username}@example.com`,
+        }),
+      );
+      expect(registration.status).toBe(429);
+      expect(await registration.json()).toMatchObject({ error: "rate_limited" });
+    } finally {
+      release();
+    }
+  });
+
   test("refresh with an unknown token -> 401 invalid_token", async () => {
     const res = await app.handle(
       jsonRequest("/v1/auth/refresh", "POST", { refresh_token: "definitely-not-a-real-token" }),

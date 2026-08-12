@@ -63,12 +63,20 @@ export interface StreamOptions {
   maxConnections?: number;
 }
 
+export interface AuthWorkOptions {
+  /** Maximum simultaneous memory-hard password hash/verify operations. */
+  argon2Concurrency?: number;
+  /** Hard bound for the in-process username failure tracker. */
+  loginFailureCapacity?: number;
+}
+
 export function createApp(
   prisma: PrismaClient,
   jwt: JwtConfig,
   otaTargetTtlSeconds = 15 * 60,
   streamOptions: StreamOptions = {},
   maxJsonBodyBytes = 1024 * 1024,
+  authWorkOptions: AuthWorkOptions = {},
 ) {
   // C1 (round-5): never fall back to a hardcoded secret. The caller MUST
   // pass the configured JwtConfig (index.ts wires .env; tests inject
@@ -149,7 +157,7 @@ export function createApp(
         return mapQueueError(error, set);
       }
     })
-    .use(createAuthRoutes(prisma, auth))
+    .use(createAuthRoutes(prisma, auth, authWorkOptions))
     .use(createLoggingRoutes(prisma, auth))
     .use(createLogStreamRoutes(prisma, auth, { databaseUrl: process.env.DATABASE_URL ?? "", debounceMs: streamOptions.debounceMs, expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))
     .use(createCommandStreamRoutes(prisma, auth, { debounceMs: streamOptions.debounceMs, expCheckIntervalMs: streamOptions.expCheckIntervalMs, maxConnections: streamOptions.maxConnections }))

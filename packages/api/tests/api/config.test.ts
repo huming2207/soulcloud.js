@@ -37,6 +37,7 @@ describe("API env config (C1)", () => {
       expect(result.data.JWT_ACCESS_TTL_SECONDS).toBe(15 * 60);
       expect(result.data.JWT_REFRESH_TTL_SECONDS).toBe(30 * 24 * 3600);
       expect(result.data.OTA_TARGET_TTL_SECONDS).toBe(15 * 60);
+      expect(result.data.AUTH_ARGON2_CONCURRENCY).toBe(4);
     }
   });
 

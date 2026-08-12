@@ -33,6 +33,10 @@ const app = createApp(
   config.OTA_TARGET_TTL_SECONDS,
   {},
   config.MAX_JSON_BODY_BYTES,
+  {
+    argon2Concurrency: config.AUTH_ARGON2_CONCURRENCY,
+    loginFailureCapacity: config.AUTH_LOGIN_FAILURE_CAPACITY,
+  },
 );
 // WEB-09: Bun buffers request bodies up to maxRequestBodySize before
 // handlers run; the firmware multipart path is streamed and capped at
