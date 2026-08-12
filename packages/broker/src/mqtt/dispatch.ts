@@ -152,10 +152,12 @@ export function attachDispatch(
 
   aedes.on("publish", (packet, client) => {
     if (!client) return; // server-side or internal publishes
+    // defensive: mqtt-packet always produces a payload for PUBLISH, but a
+    // missing one must never crash the broker via the sync event listener
     const payload =
       typeof packet.payload === "string"
         ? Buffer.from(packet.payload)
-        : packet.payload;
+        : (packet.payload ?? Buffer.alloc(0));
 
     if (guards && payload.length > guards.maxPacketBytes) {
       log.warn("dropped oversized uplink packet", {
@@ -434,11 +436,28 @@ async function handleStat(
       log.warn("ignored stat from unknown device", { deviceUid });
       return;
     }
-    await prisma.deviceFirmwareState.upsert({
+    // Write throttle (perf audit): a stat heartbeat with an unchanged
+    // hash does not need to rewrite reported_at every time - the rollout
+    // stall judgement treats a device as alive within a 1h window, so a
+    // 60s write granularity keeps the signal intact while avoiding
+    // constant row updates + WAL + autovacuum churn at fleet scale.
+    const STAT_WRITE_THROTTLE_MS = 60_000;
+    const existing = await prisma.deviceFirmwareState.findUnique({
       where: { deviceId },
-      update: { fwHash, reportedAt: new Date() },
-      create: { deviceId, fwHash },
+      select: { fwHash: true, reportedAt: true },
     });
+    const now = new Date();
+    const needsWrite =
+      !existing ||
+      existing.fwHash !== fwHash ||
+      now.getTime() - existing.reportedAt.getTime() > STAT_WRITE_THROTTLE_MS;
+    if (needsWrite) {
+      await prisma.deviceFirmwareState.upsert({
+        where: { deviceId },
+        update: { fwHash, reportedAt: now },
+        create: { deviceId, fwHash },
+      });
+    }
     log.debug("recorded device firmware state", {
       deviceUid,
       fwHash,
