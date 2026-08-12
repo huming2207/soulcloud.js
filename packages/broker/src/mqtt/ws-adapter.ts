@@ -203,10 +203,12 @@ export function startWsBroker(
       },
     });
 
-    // Bun.serve resolves once listening; surface the handle immediately
+    // Bun.serve resolves once listening; surface the handle immediately.
+    // The port is the ACTUAL bound port (port: 0 asks for a free one,
+    // which tests rely on).
     resolve({
       server: { stop: (closeActive = false) => server.stop(closeActive) },
-      port: options.port,
+      port: server.port ?? options.port,
     });
   });
 }

@@ -52,6 +52,7 @@ export class MqttTestClient extends EventEmitter {
       // stream the MQTT packets received on this connection
       const packetParser = parser();
       const handlePacket = (packet: Record<string, unknown>) => {
+        this.emit("packet", packet);
         if (packet.cmd === "connack") {
           if (packet.returnCode === 0) {
             clearTimeout(timeout);
@@ -145,6 +146,31 @@ export class MqttTestClient extends EventEmitter {
           this.pendingSub = null;
           reject(new Error("subscribe timeout"));
         }
+      }, 5000);
+    });
+  }
+
+  /** Unsubscribes from topics (resolves on UNSUBACK). */
+  unsubscribe(topics: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const packetId = this.packetId++;
+      const onPacket = (packet: Record<string, unknown>) => {
+        if (packet.cmd === "unsuback" && packet.messageId === packetId) {
+          this.removeListener("packet", onPacket);
+          resolve();
+        }
+      };
+      this.on("packet", onPacket);
+      this.ws?.send(
+        generate({
+          cmd: "unsubscribe",
+          messageId: packetId,
+          unsubscriptions: topics,
+        }),
+      );
+      setTimeout(() => {
+        this.removeListener("packet", onPacket);
+        reject(new Error("unsubscribe timeout"));
       }, 5000);
     });
   }
