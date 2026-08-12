@@ -23,9 +23,18 @@ import {
   markOtaTargetDelivered,
   releaseOtaTarget,
   signOtaToken,
+  type LeasedOtaTarget,
   type PrismaClient,
 } from "@soulcloud/core";
 import { otaCommand } from "@soulcloud/core";
+
+/**
+ * OTA notices published per poll cycle before yielding to the next
+ * poll/wake. Previously a cycle sent one notice, making a 1,000-device
+ * rollout take roughly 500 seconds at the default 500 ms interval even
+ * when every device was online.
+ */
+export const DEFAULT_OTA_DRAIN_MAX_PER_CYCLE = 100;
 
 export interface OtaPollerOptions {
   /** HS256 secret for per-device download JWTs. */
@@ -40,6 +49,11 @@ export interface OtaPollerOptions {
   stallTimeoutMinutes: number;
   /** Backoff before an offline-targeted notice becomes claimable again. */
   offlineRetryMs?: number;
+  /**
+   * Maximum OTA notices published per poll cycle. Defaults to
+   * DEFAULT_OTA_DRAIN_MAX_PER_CYCLE.
+   */
+  drainMaxPerCycle?: number;
 }
 
 export interface OtaPollerLog {
@@ -95,7 +109,7 @@ export function startOtaPoller(
   };
 }
 
-/** One OTA poll cycle: expire, lease, publish. */
+/** One OTA poll cycle: expire stale targets, then drain a bounded batch. */
 export async function otaPollOnce(
   aedes: Aedes,
   prisma: PrismaClient,
@@ -108,9 +122,22 @@ export async function otaPollOnce(
     log.info("ota targets failed by stall timeout", { count: stalled });
   }
 
-  const target = await leaseNextOtaTarget(prisma, options.leaseDurationMs);
-  if (!target) return;
+  const budget = options.drainMaxPerCycle ?? DEFAULT_OTA_DRAIN_MAX_PER_CYCLE;
+  for (let i = 0; i < budget; i++) {
+    const target = await leaseNextOtaTarget(prisma, options.leaseDurationMs);
+    if (!target) return;
+    await handleLeasedOtaTarget(aedes, prisma, options, log, target);
+  }
+}
 
+/** Publishes one leased OTA target, or defers it back to the queue. */
+async function handleLeasedOtaTarget(
+  aedes: Aedes,
+  prisma: PrismaClient,
+  options: OtaPollerOptions,
+  log: OtaPollerLog,
+  target: LeasedOtaTarget,
+): Promise<void> {
   // never publish to an offline device: a QoS1 message to a clean-session
   // client would be broker-dropped and the notice lost. Defer instead —
   // the target retries until its delivery window expires.
@@ -181,19 +208,6 @@ export async function otaPollOnce(
     download,
   };
   if (target.version) notice.version = target.version;
-
-  try {
-    topic = otaCommand(target.deviceUid);
-  } catch (error) {
-    // unsafe UID cannot form a topic; abandon the target
-    log.warn("ota target has an invalid device UID", {
-      targetId: target.id,
-      deviceUid: target.deviceUid,
-      error: (error as Error).message,
-    });
-    await releaseOtaTarget(prisma, target.id, options.offlineRetryMs ?? 5_000);
-    return;
-  }
 
   log.debug("publishing ota notice", {
     targetId: target.id,

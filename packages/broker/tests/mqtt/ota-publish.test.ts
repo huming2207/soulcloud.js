@@ -164,6 +164,63 @@ describe("ota poller", () => {
     client.end();
   });
 
+  test("one poll cycle drains multiple online targets up to its configured budget", async () => {
+    const extraDevice = await createDevice(`ota-drain-${randomUUID().slice(0, 8)}`, projectId);
+    const clients = [
+      new MqttTestClient(BROKER_URL, {
+        clientId: onlineDeviceUid,
+        username: onlineDeviceUid,
+        password: "secret",
+      }),
+      new MqttTestClient(BROKER_URL, {
+        clientId: extraDevice.deviceUid,
+        username: extraDevice.deviceUid,
+        password: "secret",
+      }),
+    ];
+    const jobIds: string[] = [];
+
+    try {
+      await Promise.all(clients.map((client) => client.connect()));
+      await Promise.all([
+        clients[0]!.subscribe(`soulcloud/v1/devices/${onlineDeviceUid}/ota`),
+        clients[1]!.subscribe(`soulcloud/v1/devices/${extraDevice.deviceUid}/ota`),
+      ]);
+
+      for (const deviceId of [onlineDeviceId, extraDevice.id]) {
+        const job = await createOtaJob(prisma, {
+          projectId,
+          releaseId,
+          createdBy: randomUUID(),
+          deviceIds: [deviceId],
+          targetTtlSeconds: 900,
+        });
+        jobIds.push(job.jobId);
+      }
+
+      await otaPollOnce(broker.aedes, prisma, {
+        secret: SECRET,
+        pollIntervalMs: 500,
+        leaseDurationMs: 60_000,
+        tokenTtlSeconds: 900,
+        stallTimeoutMinutes: 30,
+        drainMaxPerCycle: 2,
+      }, silentLog);
+
+      const targets = await prisma.otaTarget.findMany({
+        where: { jobId: { in: jobIds } },
+        select: { state: true },
+      });
+      expect(targets).toHaveLength(2);
+      expect(targets.every((target) => target.state === "delivered")).toBe(true);
+    } finally {
+      for (const client of clients) client.end();
+      await prisma.otaTarget.deleteMany({ where: { jobId: { in: jobIds } } });
+      await prisma.otaJob.deleteMany({ where: { id: { in: jobIds } } });
+      await prisma.device.delete({ where: { id: extraDevice.id } });
+    }
+  });
+
   test("offline device is deferred, not published", async () => {
     const job = await createOtaJob(prisma, {
       projectId,
