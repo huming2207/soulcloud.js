@@ -35,7 +35,7 @@ import {
 } from "@soulcloud/core";
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
 import { createPgChannelListener, type PgListenLog } from "../pg-listen";
-import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
+import { jwtSubject, rawSocket, scheduleMembershipCheck } from "./ws-access";
 
 const WS_PROTOCOL = "soulcloud";
 
@@ -49,8 +49,9 @@ const DEBOUNCE_MS = 250;
  */
 const MAX_WAIT_MS = DEBOUNCE_MS * 2;
 
-/** Global cap on live log-stream sockets. */
-const MAX_CONNECTIONS = 500;
+/** Global cap on live log-stream sockets (env-overridable like the other
+ * streams; see SOULCLOUD_WS_MAX_CONNECTIONS in command-stream.ts). */
+const MAX_CONNECTIONS = Number(process.env.SOULCLOUD_WS_MAX_CONNECTIONS) || 500;
 
 /** How often to re-check the handshake token's exp (ms). */
 const EXP_CHECK_INTERVAL_MS = 30_000;
@@ -449,7 +450,7 @@ export function createLogStreamRoutes(
         ws.close(4401, "unauthorized");
         return;
       }
-      const socket = ws as unknown as ServerWebSocket;
+      const socket = rawSocket(ws);
       hub.subscribe(deviceId, socket);
       // membership re-check (Kimi round-8 low): a user removed from the
       // project must stop receiving frames even on an established socket
@@ -503,7 +504,7 @@ export function createLogStreamRoutes(
       }
     },
     close(ws) {
-      const socket = ws as unknown as ServerWebSocket;
+      const socket = rawSocket(ws);
       const stop = accessCleanups.get(socket);
       if (stop) {
         stop();

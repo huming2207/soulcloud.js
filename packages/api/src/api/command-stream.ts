@@ -39,7 +39,7 @@ import {
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
 import { loadCommandBatchDetail } from "./devices";
 import { createPgChannelListener, type PgListenLog } from "../pg-listen";
-import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
+import { jwtSubject, rawSocket, scheduleMembershipCheck } from "./ws-access";
 import { createTtlCache } from "./ttl-cache";
 
 const WS_PROTOCOL = "soulcloud";
@@ -190,8 +190,11 @@ export function getCommandStreamHub(
     unsubscribe(batchId: string, ws: ServerWebSocket) {
       const set = subscribers.get(batchId);
       if (!set) return;
-      set.delete(ws);
-      connectionCount = Math.max(0, connectionCount - 1);
+      // only count actual removals: a socket refused by the connection cap
+      // was never added (close still fires) and must not decrement the
+      // counter below the real value (which would bypass the cap)
+      const removed = set.delete(ws);
+      if (removed) connectionCount = Math.max(0, connectionCount - 1);
       if (set.size === 0) subscribers.delete(batchId);
     },
     async close() {
@@ -376,7 +379,7 @@ export function createCommandStreamRoutes(
       // device set is immutable after creation)
       batchProjectsCache.set(batchId.data, [...loaded.projects]);
     },
-    open(ws) {
+    async open(ws) {
       // the upgrade was already authenticated in beforeHandle; the batch
       // id rides the query string (visible in ws.data.query)
       const batchId = canonicalId(
@@ -386,7 +389,7 @@ export function createCommandStreamRoutes(
         ws.close(4401, "unauthorized");
         return;
       }
-      const socket = ws as unknown as ServerWebSocket;
+      const socket = rawSocket(ws);
       hub.subscribe(batchId, socket);
       // membership re-check (Kimi round-8 low): a user removed from any
       // of the batch's projects stops receiving frames
@@ -398,7 +401,30 @@ export function createCommandStreamRoutes(
         .map((s) => s.trim())[1];
       const userId = jwtSubject(token);
       if (userId) {
-        const projects = batchProjectsCache.get(batchId) ?? [];
+        let projects = batchProjectsCache.get(batchId) ?? [];
+        if (projects.length === 0) {
+          // cache miss (evicted/cleared) must NOT silently disable the
+          // membership re-check for the connection's whole lifetime:
+          // fall back to re-resolving the batch's projects from the DB
+          try {
+            const loaded = await loadCommandBatchDetail(prisma, batchId);
+            if (loaded && loaded.projects.size > 0) {
+              projects = [...loaded.projects];
+              batchProjectsCache.set(batchId, projects);
+            } else {
+              // the batch disappeared: the connection is stale, close it
+              ws.close(4403, "access revoked");
+              return;
+            }
+          } catch {
+            // transient DB failure: schedule an empty check (no-op) is
+            // worse than skipping - keep the connection and re-arm on
+            // the next opportunity via beforeHandle of new handshakes;
+            // close conservatively instead
+            ws.close(4403, "access revoked");
+            return;
+          }
+        }
         accessCleanups.set(
           socket,
           scheduleMembershipCheck(socket, prisma, userId, projects, expCheckIntervalMs),
@@ -422,8 +448,8 @@ export function createCommandStreamRoutes(
       const batchId = canonicalId(
         (ws.data as { query?: { batch_id?: string } }).query?.batch_id,
       );
-      if (batchId) hub.unsubscribe(batchId, ws as unknown as ServerWebSocket);
-      const socket = ws as unknown as ServerWebSocket;
+      if (batchId) hub.unsubscribe(batchId, rawSocket(ws));
+      const socket = rawSocket(ws);
       const stop = accessCleanups.get(socket);
       if (stop) {
         stop();

@@ -8,6 +8,11 @@
 
 import { prisma } from "@soulcloud/core";
 import { createApp } from "./api/app";
+import { getLogStreamHub } from "./api/log-stream";
+import { getCommandStreamHub } from "./api/command-stream";
+import { getOtaStreamHub } from "./api/ota-stream";
+import { getStatusStreamHub } from "./api/status-stream";
+import { getNotificationsHub } from "./api/notifications-stream";
 import { startRolloutPoller } from "./rollout-poller";
 import { loadApiConfig, parseBindAddress } from "./config";
 
@@ -68,6 +73,15 @@ async function shutdown(signal: string) {
   console.log(`[soulcloud-api] received ${signal}, shutting down`);
   rolloutPoller.stop();
   app.stop();
+  // close the per-stream pg LISTEN connections and pending debounce
+  // timers so the process can exit without relying on process.exit()
+  await Promise.allSettled([
+    getLogStreamHub(prisma, "", { warn: () => {} }).close(),
+    getCommandStreamHub(prisma, "", { warn: () => {} }).close(),
+    getOtaStreamHub(prisma, "", { warn: () => {} }).close(),
+    getStatusStreamHub(prisma, "", { warn: () => {} }).close(),
+    getNotificationsHub("", { warn: () => {} }).close(),
+  ]);
   await prisma.$disconnect();
   process.exit(0);
 }

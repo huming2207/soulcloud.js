@@ -46,6 +46,13 @@ export function createPgChannelListener(
     client = c;
     try {
       await c.connect();
+      // close() may have run while connect() was in flight (it could only
+      // see the previous, already-ended client); end the orphan instead of
+      // letting it LISTEN forever
+      if (closed) {
+        await c.end().catch(() => {});
+        return;
+      }
       await c.query(`LISTEN ${channel}`);
       c.on("notification", (msg) => {
         onNotification(msg.payload ?? undefined);

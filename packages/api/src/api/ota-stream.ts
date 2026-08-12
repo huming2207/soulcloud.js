@@ -36,7 +36,7 @@ import type { ServerWebSocket } from "bun";
 import { createDecoder } from "fast-jwt";
 import { OTA_NOTIFY_CHANNEL, type JwtConfig, type PrismaClient } from "@soulcloud/core";
 import { createPgChannelListener } from "../pg-listen";
-import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
+import { jwtSubject, rawSocket, scheduleMembershipCheck } from "./ws-access";
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
 import { createTtlCache } from "./ttl-cache";
 
@@ -186,8 +186,10 @@ export function getOtaStreamHub(
     unsubscribe(jobId: string, ws: ServerWebSocket) {
       const set = subscribers.get(jobId);
       if (!set) return;
-      set.delete(ws);
-      connectionCount = Math.max(0, connectionCount - 1);
+      // see command-stream: only count actual removals (a socket refused
+      // by the connection cap was never added)
+      const removed = set.delete(ws);
+      if (removed) connectionCount = Math.max(0, connectionCount - 1);
       if (set.size === 0) subscribers.delete(jobId);
     },
     async close() {
@@ -430,7 +432,7 @@ export function createOtaStreamRoutes(
         return { error: "not_found", message: "job does not exist" };
       }
     },
-    open(ws) {
+    async open(ws) {
       // the upgrade was already authenticated in beforeHandle; the job id
       // rides the query string (visible in ws.data.query)
       const jobId = canonicalId((ws.data as { query?: { job_id?: string } }).query?.job_id);
@@ -438,7 +440,7 @@ export function createOtaStreamRoutes(
         ws.close(4401, "unauthorized");
         return;
       }
-      const socket = ws as unknown as ServerWebSocket;
+      const socket = rawSocket(ws);
       hub.subscribe(jobId, socket);
       // membership re-check (Kimi round-8 low): a user removed from the
       // job's project stops receiving frames
@@ -450,13 +452,30 @@ export function createOtaStreamRoutes(
         .map((s) => s.trim())[1];
       const userId = jwtSubject(token);
       if (userId) {
-        const projectId = jobProjectCache.get(jobId);
-        if (projectId) {
-          accessCleanups.set(
-            socket,
-            scheduleMembershipCheck(socket, prisma, userId, [projectId], expCheckIntervalMs),
-          );
+        let projectId = jobProjectCache.get(jobId);
+        if (!projectId) {
+          // cache miss must not silently disable the membership re-check
+          // for the connection's lifetime: fall back to the DB
+          try {
+            const job = await prisma.otaJob.findUnique({
+              where: { id: jobId },
+              select: { projectId: true },
+            });
+            if (!job) {
+              ws.close(4403, "access revoked");
+              return;
+            }
+            projectId = job.projectId;
+            jobProjectCache.set(jobId, projectId);
+          } catch {
+            ws.close(4403, "access revoked");
+            return;
+          }
         }
+        accessCleanups.set(
+          socket,
+          scheduleMembershipCheck(socket, prisma, userId, [projectId], expCheckIntervalMs),
+        );
       }
       armExpiryCheck(socket);
       ws.send(JSON.stringify({ type: "ready", job_id: jobId }));
@@ -474,8 +493,8 @@ export function createOtaStreamRoutes(
     },
     close(ws) {
       const jobId = canonicalId((ws.data as { query?: { job_id?: string } }).query?.job_id);
-      if (jobId) hub.unsubscribe(jobId, ws as unknown as ServerWebSocket);
-      const socket = ws as unknown as ServerWebSocket;
+      if (jobId) hub.unsubscribe(jobId, rawSocket(ws));
+      const socket = rawSocket(ws);
       const stop = accessCleanups.get(socket);
       if (stop) {
         stop();

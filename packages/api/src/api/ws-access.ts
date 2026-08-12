@@ -20,6 +20,19 @@ import type { PrismaClient } from "@soulcloud/core";
 const ACCESS_REVOKED_CLOSE_CODE = 4403;
 
 /**
+ * Elysia 1.4 wraps the Bun ServerWebSocket in a NEW ElysiaWS instance for
+ * every ws event (open/message/close), so the handler argument is never
+ * referentially stable across events. Every Set/WeakMap keyed by a socket
+ * MUST use the underlying raw Bun socket (stable per connection), or
+ * cleanup never matches (leaked subscriber entries, stale connection
+ * counters).
+ */
+export function rawSocket(ws: unknown): ServerWebSocket {
+  const candidate = ws as { raw?: unknown } | null;
+  return (candidate?.raw as ServerWebSocket | undefined) ?? (ws as ServerWebSocket);
+}
+
+/**
  * Re-checks project membership on a fixed interval until the socket closes.
  * A missing link closes the socket (4403 "access revoked"). Each pass uses
  * one batched query, and a slow query never overlaps the next interval.

@@ -28,7 +28,7 @@ import {
   type PrismaClient,
 } from "@soulcloud/core";
 import { createPgChannelListener, type PgListenLog } from "../pg-listen";
-import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
+import { jwtSubject, rawSocket, scheduleMembershipCheck } from "./ws-access";
 import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate";
 
 const WS_PROTOCOL = "soulcloud";
@@ -258,7 +258,7 @@ export function createNotificationsStreamRoutes(
         ws.close(4401, "unauthorized");
         return;
       }
-      const socket = ws as unknown as ServerWebSocket;
+      const socket = rawSocket(ws);
       hub.subscribe(projectId, socket);
       // membership re-check: a user removed from the project stops
       // receiving notifications
@@ -288,7 +288,7 @@ export function createNotificationsStreamRoutes(
       }
     },
     close(ws) {
-      const socket = ws as unknown as ServerWebSocket;
+      const socket = rawSocket(ws);
       const stopAccess = accessCleanups.get(socket);
       if (stopAccess) {
         stopAccess();
