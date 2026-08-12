@@ -5,10 +5,11 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { prisma } from "../../src/db";
 import {
   MAX_OTA_TARGETS,
+  OTA_TOKEN_AUDIENCE,
   OtaError,
   confirmOtaTargetByFirmware,
   createOtaJob,
@@ -22,6 +23,7 @@ import {
   signOtaToken,
   verifyOtaToken,
 } from "../../src/ota/deploy";
+import { ACCESS_TOKEN_AUDIENCE } from "../../src/auth/tokens";
 import { buildNoloadElf } from "../helpers/elf-builder";
 import { createFirmwareRelease } from "../../src/ota/release";
 // Serialises this file against the other global-lease test files
@@ -78,10 +80,60 @@ afterAll(async () => {
 });
 
 describe("OTA download JWT", () => {
+  /** Hand-signs a JWT with exactly the given claims (bypasses the signer). */
+  function craftOtaJwt(claims: Record<string, unknown>): string {
+    const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+    const sig = createHmac("sha256", SECRET)
+      .update(`${header}.${payload}`)
+      .digest("base64url");
+    return `${header}.${payload}.${sig}`;
+  }
+
+  const validExtraClaims = {
+    sub: deviceUid,
+    releaseId: "rel",
+    jobId: randomUUID(),
+  } as const;
+
   test("sign + verify round trip", async () => {
     const token = await signOtaToken(SECRET, { deviceUid, releaseId, jobId: randomUUID() }, 900);
     const claims = await verifyOtaToken(SECRET, token);
     expect(claims).toEqual({ deviceUid, releaseId, jobId: expect.any(String) });
+  });
+
+  test("token without an aud claim is rejected", async () => {
+    const token = craftOtaJwt({
+      ...validExtraClaims,
+      exp: Math.floor(Date.now() / 1000) + 900,
+    });
+    expect(await verifyOtaToken(SECRET, token)).toBeNull();
+  });
+
+  test("token without an exp claim is rejected", async () => {
+    const token = craftOtaJwt({
+      ...validExtraClaims,
+      aud: OTA_TOKEN_AUDIENCE,
+    });
+    expect(await verifyOtaToken(SECRET, token)).toBeNull();
+  });
+
+  test("token missing releaseId/jobId is rejected", async () => {
+    const token = craftOtaJwt({
+      sub: deviceUid,
+      aud: OTA_TOKEN_AUDIENCE,
+      exp: Math.floor(Date.now() / 1000) + 900,
+    });
+    expect(await verifyOtaToken(SECRET, token)).toBeNull();
+  });
+
+  test("the access-token audience is rejected (no cross-class confusion)", async () => {
+    const token = craftOtaJwt({
+      ...validExtraClaims,
+      aud: ACCESS_TOKEN_AUDIENCE,
+      exp: Math.floor(Date.now() / 1000) + 900,
+    });
+    expect(await verifyOtaToken(SECRET, token)).toBeNull();
   });
 
   test("expired token is rejected", async () => {

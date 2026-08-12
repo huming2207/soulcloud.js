@@ -59,6 +59,11 @@ function validClaims(extra: Record<string, unknown>): string {
   );
 }
 
+/** A validly-signed JWT carrying EXACTLY the given claims (no defaults). */
+function signedClaims(claims: Record<string, unknown>): string {
+  return craftJwt(JSON.stringify(claims));
+}
+
 async function capture(
   promise: Promise<unknown>,
 ): Promise<{ error: AuthError | null; value: unknown }> {
@@ -132,6 +137,40 @@ describe("verifyAccessToken malformed-payload handling", () => {
     const { error } = await capture(verifyAccessToken(CONFIG, expired));
     expect(error).toBeInstanceOf(AuthError);
     expect(error!.kind).toBe("token_expired");
+  });
+
+  test("rejects tokens without an aud claim (fast-jwt would skip allowedAud)", async () => {
+    const noAud = signedClaims({
+      sub: "user-1",
+      username: "alice",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    const { error } = await capture(verifyAccessToken(CONFIG, noAud));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error!.kind).toBe("invalid_token");
+  });
+
+  test("rejects tokens without an exp claim (a WS session would never expire)", async () => {
+    const noExp = signedClaims({
+      sub: "user-1",
+      username: "alice",
+      aud: ACCESS_TOKEN_AUDIENCE,
+    });
+    const { error } = await capture(verifyAccessToken(CONFIG, noExp));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error!.kind).toBe("invalid_token");
+  });
+
+  test("rejects the ota-download audience (no token-class confusion)", async () => {
+    const wrongAud = signedClaims({
+      sub: "user-1",
+      username: "alice",
+      aud: "ota-download",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    const { error } = await capture(verifyAccessToken(CONFIG, wrongAud));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error!.kind).toBe("invalid_token");
   });
 
   test("garbage/truncated/tampered tokens are rejected as invalid_token", async () => {
