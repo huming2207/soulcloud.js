@@ -31,12 +31,19 @@ const envSchema = z.object({
   UPLINK_MAX_PACKET_BYTES: z.coerce.number().int().positive().default(65536),
   UPLINK_RATE_PER_SECOND: z.coerce.number().int().positive().default(20),
   UPLINK_RATE_BURST: z.coerce.number().int().positive().default(100),
+  /// Global database-work bounds. Capacity includes running work; it must be
+  /// at least concurrency so overload is rejected instead of accumulating.
+  UPLINK_WORK_CONCURRENCY: z.coerce.number().int().positive().default(16),
+  UPLINK_WORK_CAPACITY: z.coerce.number().int().positive().default(1024),
 });
 
 export type BrokerConfig = BaseConfig & z.infer<typeof envSchema>;
 
 export function loadBrokerConfig(): BrokerConfig {
   const config = loadEnv(envSchema);
+  if (config && config.UPLINK_WORK_CAPACITY < config.UPLINK_WORK_CONCURRENCY) {
+    throw new Error("UPLINK_WORK_CAPACITY must be >= UPLINK_WORK_CONCURRENCY");
+  }
   // MQTT_COMMAND_RETAIN replays the last command to any device that
   // (re)subscribes. Retained state is never cleared and the device-side
   // dedupe cache is small and volatile, so a stale state-changing command

@@ -41,6 +41,83 @@ export interface DispatchGuardOptions {
   ratePerSecond: number;
   /** Per-device burst allowance. */
   rateBurst: number;
+  /** Maximum uplink handlers executing concurrently across all devices. */
+  workConcurrency?: number;
+  /** Maximum executing + queued uplinks retained by this broker process. */
+  workCapacity?: number;
+}
+
+const DEFAULT_WORK_CONCURRENCY = 16;
+const DEFAULT_WORK_CAPACITY = 1024;
+
+export interface UplinkWork {
+  deviceUid: string;
+  run: () => Promise<void>;
+}
+
+/**
+ * Bounded, per-device-ordered uplink executor. Different devices may run in
+ * parallel up to `concurrency`; one device never has two handlers in flight.
+ */
+export class UplinkWorkQueue {
+  private readonly byDevice = new Map<string, UplinkWork[]>();
+  private readonly activeDevices = new Set<string>();
+  private readonly readyDevices: string[] = [];
+  private running = 0;
+  private outstanding = 0;
+
+  constructor(
+    private readonly concurrency: number,
+    private readonly capacity: number,
+  ) {
+    if (!Number.isInteger(concurrency) || concurrency <= 0) {
+      throw new RangeError("uplink work concurrency must be a positive integer");
+    }
+    if (!Number.isInteger(capacity) || capacity < concurrency) {
+      throw new RangeError("uplink work capacity must be an integer >= concurrency");
+    }
+  }
+
+  /** Returns false when accepting the work would exceed the hard capacity. */
+  enqueue(work: UplinkWork): boolean {
+    if (this.outstanding >= this.capacity) return false;
+    let queue = this.byDevice.get(work.deviceUid);
+    if (!queue) {
+      queue = [];
+      this.byDevice.set(work.deviceUid, queue);
+    }
+    const wasEmpty = queue.length === 0;
+    queue.push(work);
+    this.outstanding += 1;
+    if (wasEmpty && !this.activeDevices.has(work.deviceUid)) {
+      this.readyDevices.push(work.deviceUid);
+    }
+    this.drain();
+    return true;
+  }
+
+  private drain(): void {
+    while (this.running < this.concurrency && this.readyDevices.length > 0) {
+      const deviceUid = this.readyDevices.shift()!;
+      if (this.activeDevices.has(deviceUid)) continue;
+      const queue = this.byDevice.get(deviceUid);
+      const work = queue?.shift();
+      if (!queue || !work) continue;
+      this.activeDevices.add(deviceUid);
+      this.running += 1;
+      void work.run().finally(() => {
+        this.running -= 1;
+        this.outstanding -= 1;
+        this.activeDevices.delete(deviceUid);
+        if (queue.length > 0) {
+          this.readyDevices.push(deviceUid);
+        } else {
+          this.byDevice.delete(deviceUid);
+        }
+        this.drain();
+      });
+    }
+  }
 }
 
 export interface DispatchLog {
@@ -68,6 +145,10 @@ export function attachDispatch(
         refillPerSecond: guards.ratePerSecond,
       })
     : null;
+  const workQueue = new UplinkWorkQueue(
+    guards?.workConcurrency ?? DEFAULT_WORK_CONCURRENCY,
+    guards?.workCapacity ?? DEFAULT_WORK_CAPACITY,
+  );
 
   aedes.on("publish", (packet, client) => {
     if (!client) return; // server-side or internal publishes
@@ -98,7 +179,24 @@ export function attachDispatch(
       return;
     }
 
-    void handleUplink(prisma, client.id, packet.topic, payload, log, parsedLog);
+    const accepted = workQueue.enqueue({
+      deviceUid: client.id,
+      run: async () => {
+        try {
+          await handleUplink(prisma, client.id, packet.topic, payload, log, parsedLog);
+        } catch (error) {
+          log.warn("uplink handler failed", {
+            deviceUid: client.id,
+            error: (error as Error).message,
+          });
+        }
+      },
+    });
+    if (!accepted) {
+      log.warn("dropped uplink packet over global work limit", {
+        deviceUid: client.id,
+      });
+    }
   });
 }
 

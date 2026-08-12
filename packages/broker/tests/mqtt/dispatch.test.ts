@@ -11,7 +11,7 @@ import { Aedes } from "aedes";
 import { createHash, randomUUID } from "node:crypto";
 import { encodeDeviceStat, prisma } from "@soulcloud/core";
 import { msgpackLogBundle, validLogPacket } from "../helpers/mqtt-client";
-import { attachDispatch, type DispatchLog } from "../../src/mqtt/dispatch";
+import { attachDispatch, type DispatchLog, UplinkWorkQueue } from "../../src/mqtt/dispatch";
 import { buildNoloadElf } from "../../../core/tests/helpers/elf-builder";
 import { createFirmwareRelease } from "../../../core/src/ota/release";
 import {
@@ -99,6 +99,42 @@ afterAll(async () => {
 });
 
 describe("attachDispatch guards", () => {
+  test("global work queue is bounded and serializes each device", async () => {
+    const queue = new UplinkWorkQueue(2, 3);
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    expect(queue.enqueue({
+      deviceUid: "device-a",
+      run: async () => {
+        order.push("a1-start");
+        await firstBlocked;
+        order.push("a1-end");
+      },
+    })).toBe(true);
+    expect(queue.enqueue({
+      deviceUid: "device-a",
+      run: async () => { order.push("a2"); },
+    })).toBe(true);
+    expect(queue.enqueue({
+      deviceUid: "device-b",
+      run: async () => { order.push("b1"); },
+    })).toBe(true);
+    expect(queue.enqueue({
+      deviceUid: "device-c",
+      run: async () => { order.push("c1"); },
+    })).toBe(false);
+
+    await Bun.sleep(5);
+    expect(order).toEqual(["a1-start", "b1"]);
+    releaseFirst();
+    await Bun.sleep(5);
+    expect(order).toEqual(["a1-start", "b1", "a1-end", "a2"]);
+  });
+
   test("drops oversized uplink packets before any handling", async () => {
     const log = makeLog();
     const aedes = new Aedes();

@@ -27,6 +27,8 @@ describe("loadBrokerConfig", () => {
     expect(config.MQTT_COMMAND_RETAIN).toBe(false);
     expect(config.OTA_STALL_TIMEOUT_MINUTES).toBe(30);
     expect(config.UPLINK_RATE_PER_SECOND).toBe(20);
+    expect(config.UPLINK_WORK_CONCURRENCY).toBe(16);
+    expect(config.UPLINK_WORK_CAPACITY).toBe(1024);
   });
 
   test("coerces and honours explicit values", () => {
@@ -66,6 +68,15 @@ describe("loadBrokerConfig", () => {
     process.env.BROKER_AUTH_CONCURRENCY = "2";
     const config = loadBrokerConfig();
     expect(config.BROKER_AUTH_CONCURRENCY).toBe(2);
+  });
+
+  test("rejects uplink capacity below concurrency", () => {
+    process.env.JWT_SECRET = "z".repeat(32);
+    process.env.UPLINK_WORK_CONCURRENCY = "8";
+    process.env.UPLINK_WORK_CAPACITY = "4";
+    expect(() => loadBrokerConfig()).toThrow(/UPLINK_WORK_CAPACITY/);
+    delete process.env.UPLINK_WORK_CONCURRENCY;
+    delete process.env.UPLINK_WORK_CAPACITY;
   });
 
   test("refuses MQTT_COMMAND_RETAIN in production (WEB-12)", () => {
