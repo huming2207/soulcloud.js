@@ -52,6 +52,16 @@ async function waitFor(
 beforeAll(async () => {
   aedes = await Aedes.createBroker();
   registry = attachConnectionRegistry(aedes);
+  // Mirror the broker.ts wiring: allow only the device's own cmd/exec
+  // topic and record authorized subscriptions in the registry (the
+  // persistent-session restore path re-runs this gate).
+  aedes.authorizeSubscribe = (client, subscription, callback) => {
+    const allowed = subscription.topic === `soulcloud/v1/devices/${client.id}/cmd/exec`;
+    if (allowed) {
+      registry.noteAuthorizedSubscription(client.id, subscription.topic);
+    }
+    callback(allowed ? null : new Error("topic not allowed"), subscription);
+  };
   server = await startWsBroker(aedes, { port: 0, path: "/mqtt" });
   url = `ws://127.0.0.1:${server.port}/mqtt`;
 });
@@ -132,5 +142,51 @@ describe("connection registry", () => {
     await closed;
     await waitFor(() => !registry.isConnected(OTHER_UID), "kick disconnect");
     expect(registry.getClient(OTHER_UID)).toBeNull();
+  });
+
+  test("persistent session (clean=false) restores subscriptions on reconnect", async () => {
+    // First connect: persistent session + explicit subscribe.
+    const first = new MqttTestClient(url, {
+      clientId: DEVICE_UID,
+      username: DEVICE_UID,
+      password: "secret",
+      clean: false,
+    });
+    void first.connect().catch(() => {});
+    await waitForConnect(first);
+    await first.subscribe(TOPIC);
+    await waitFor(() => registry.isSubscribed(DEVICE_UID, TOPIC), "initial subscribe");
+    first.end();
+    await waitFor(() => !registry.isConnected(DEVICE_UID), "first disconnect");
+    expect(registry.isSubscribed(DEVICE_UID, TOPIC)).toBe(false);
+
+    // Reconnect WITHOUT re-subscribing: aedes restores the saved
+    // subscription through the authorizeSubscribe gate (no 'subscribe'
+    // event fires on the restore path), and the registry must learn it
+    // via noteAuthorizedSubscription + the pending buffer.
+    const second = new MqttTestClient(url, {
+      clientId: DEVICE_UID,
+      username: DEVICE_UID,
+      password: "secret",
+      clean: false,
+    });
+    void second.connect().catch(() => {});
+    await waitForConnect(second);
+    await waitFor(() => registry.isSubscribed(DEVICE_UID, TOPIC), "restored subscription");
+    second.end();
+    await waitFor(() => !registry.isConnected(DEVICE_UID), "final disconnect");
+  });
+
+  test("rejected subscriptions never enter the registry", async () => {
+    const client = clientFor(DEVICE_UID);
+    void client.connect().catch(() => {});
+    await waitForConnect(client);
+
+    // the gate rejects anything but the device's own cmd/exec topic
+    const forbidden = `soulcloud/v1/devices/${OTHER_UID}/cmd/exec`;
+    await expect(client.subscribe(forbidden)).rejects.toThrow();
+    // aedes disconnects the offender on authorization failure
+    await waitFor(() => !registry.isConnected(DEVICE_UID), "offender disconnect");
+    expect(registry.isSubscribed(DEVICE_UID, forbidden)).toBe(false);
   });
 });

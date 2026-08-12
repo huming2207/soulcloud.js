@@ -204,6 +204,12 @@ export async function startBroker(
     const allowed = DOWNLINK_SUFFIXES.some(
       (suffix) => subscription.topic === `${TOPIC_PREFIX}/${client.id}/${suffix}`,
     );
+    if (allowed) {
+      // the registry learns subscriptions from this gate too: persistent
+      // session restores (clean=false) re-run authorize without emitting
+      // the 'subscribe' event, so this is their only signal
+      registry.noteAuthorizedSubscription(client.id, subscription.topic);
+    }
     callback(allowed ? null : new Error("topic not allowed"), subscription);
   };
 

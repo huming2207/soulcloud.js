@@ -26,6 +26,8 @@ export interface MqttTestClientOptions {
   username?: string;
   password?: string;
   keepalive?: number;
+  /** clean session flag (default true; false = persistent session). */
+  clean?: boolean;
 }
 
 export class MqttTestClient extends EventEmitter {
@@ -93,7 +95,7 @@ export class MqttTestClient extends EventEmitter {
             cmd: "connect",
             protocolId: "MQTT",
             protocolVersion: 4,
-            clean: true,
+            clean: this.options.clean ?? true,
             clientId: this.options.clientId,
             keepalive: this.options.keepalive ?? 30,
             ...(this.options.username !== undefined
