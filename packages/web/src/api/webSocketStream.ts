@@ -29,6 +29,8 @@ const RETRY_MAX_MS = 30_000;
 const WS_PROTOCOL = "soulcloud";
 /** Server closes the socket with this code when the access token expired. */
 const TOKEN_EXPIRED_CLOSE_CODE = 4401;
+/** Server closes the socket with this code when project access was revoked. */
+const ACCESS_REVOKED_CLOSE_CODE = 4403;
 
 /**
  * Subscribes to a WebSocket stream. Pass an empty `path` (or `enabled:
@@ -101,13 +103,18 @@ export function useWebSocketStream(
       ws.onclose = (ev?: CloseEvent) => {
         if (disposed) return;
         setStatus("error");
+        if (ev?.code === ACCESS_REVOKED_CLOSE_CODE) {
+          // A fresh access token cannot restore removed project membership.
+          // Leave the stream stopped until its owner changes the resource or
+          // remounts it after access has been granted again.
+          return;
+        }
         if (ev?.code === TOKEN_EXPIRED_CLOSE_CODE) {
-          // The server reuses 4401 for several reasons: token expired,
-          // connection budget exhausted, access revoked. Only the first
-          // is fixed by a refresh, so reconnect immediately ONLY when the
-          // refresh actually produced a new token; otherwise back off
-          // like any other close (a busy loop would hammer a saturated
-          // server or a revoked session).
+          // The server reuses 4401 for token expiry and connection policy.
+          // Only expiry is fixed by a refresh, so reconnect immediately ONLY
+          // when the refresh actually produced a new token; otherwise back
+          // off like any other close (a busy loop would hammer a saturated
+          // server).
           void (async () => {
             const previous = tokenRef.current;
             const token = await ensureFreshAccessToken();

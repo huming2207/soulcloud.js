@@ -13,6 +13,7 @@ import {
   getRefreshToken,
   setAccessToken,
   setRefreshToken,
+  subscribeSessionEnd,
 } from "../api/http";
 
 interface AuthUser {
@@ -35,6 +36,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<"loading" | "authed" | "anon">("loading");
   const [user, setUser] = useState<AuthUser | null>(null);
   const queryClient = useQueryClient();
+
+  // A refresh can fail in a request outside this provider (for example a
+  // background query or WebSocket reconnect). Reflect that forced logout in
+  // React state immediately instead of waiting for a navigation or reload.
+  useEffect(() => {
+    return subscribeSessionEnd(() => {
+      queryClient.clear();
+      setUser(null);
+      setStatus("anon");
+    });
+  }, [queryClient]);
 
   // Session restore: with only a refresh token stored, fetchMe() gets a 401
   // and the http interceptor transparently refreshes + retries it.
@@ -63,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [queryClient]);
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await authApi.login(username, password);

@@ -62,6 +62,7 @@ const {
   setRefreshToken,
   getRefreshToken,
   setSessionEndHandler,
+  subscribeSessionEnd,
   ensureFreshAccessToken,
 } = await import("./http");
 
@@ -171,14 +172,18 @@ describe("401 refresh + retry", () => {
     refreshError = new Error("refresh failed");
     const assign = spyOn(window.location, "assign").mockImplementation(() => {});
     const onEnd = mock(() => {});
+    const listener = mock(() => {});
+    const unsubscribe = subscribeSessionEnd(listener);
     setSessionEndHandler(onEnd);
     setAccessToken("stale");
     setRefreshToken("rt-1");
     await expect(runResponseError(makeError(401, "/v1/devices"))).rejects.toThrow();
     expect(getRefreshToken()).toBeNull();
     expect(onEnd).toHaveBeenCalled();
+    expect(listener).toHaveBeenCalled();
     expect(assign).toHaveBeenCalledWith("/login");
     assign.mockRestore();
+    unsubscribe();
     setSessionEndHandler(null);
   });
 
@@ -261,14 +266,18 @@ describe("ensureFreshAccessToken", () => {
     refreshError = new Error("refresh failed");
     const assign = spyOn(window.location, "assign").mockImplementation(() => {});
     const onEnd = mock(() => {});
+    const listener = mock(() => {});
+    const unsubscribe = subscribeSessionEnd(listener);
     setSessionEndHandler(onEnd);
     setAccessToken("stale");
     setRefreshToken("rt-1");
     expect(await ensureFreshAccessToken()).toBeNull();
     expect(getRefreshToken()).toBeNull();
     expect(onEnd).toHaveBeenCalled();
+    expect(listener).toHaveBeenCalled();
     expect(assign).not.toHaveBeenCalled();
     assign.mockRestore();
+    unsubscribe();
     setSessionEndHandler(null);
   });
 });

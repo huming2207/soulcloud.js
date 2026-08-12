@@ -40,6 +40,7 @@ export function getAccessToken(): string | null {
 }
 
 let sessionEndHandler: (() => void) | null = null;
+const sessionEndListeners = new Set<() => void>();
 
 /** How early (ms) before JWT expiry a token is treated as stale. */
 const ACCESS_TOKEN_EXPIRE_SKEW_MS = 30_000;
@@ -53,12 +54,29 @@ export function setSessionEndHandler(fn: (() => void) | null): void {
   sessionEndHandler = fn;
 }
 
+/**
+ * Subscribes to forced-session-end events. This is separate from the legacy
+ * application handler so stateful providers can immediately reflect a
+ * failed refresh without owning the HTTP interceptor.
+ */
+export function subscribeSessionEnd(fn: () => void): () => void {
+  sessionEndListeners.add(fn);
+  return () => sessionEndListeners.delete(fn);
+}
+
 /** Clears the session state (forced logout); used by the 401 interceptor
  * and the WS reconnect path when the refresh token is rejected. */
 function endSession(): void {
   accessToken = null;
   setRefreshToken(null);
   sessionEndHandler?.();
+  for (const listener of sessionEndListeners) {
+    try {
+      listener();
+    } catch {
+      // A view listener must not prevent token clearing or other listeners.
+    }
+  }
 }
 
 function isAccessTokenExpired(token: string): boolean {

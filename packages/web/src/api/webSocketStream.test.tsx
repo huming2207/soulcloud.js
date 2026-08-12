@@ -13,6 +13,7 @@ import { useWebSocketStream } from "./webSocketStream";
 
 let refreshCalls = 0;
 let refreshError: unknown;
+let refreshedAccessToken = "fresh-token";
 
 const instance = {
   interceptors: {
@@ -32,7 +33,7 @@ mock.module("axios", () => ({
       refreshCalls += 1;
       if (refreshError) throw refreshError;
       return {
-        data: { access_token: "fresh-token", refresh_token: "rt-2" },
+        data: { access_token: refreshedAccessToken, refresh_token: "rt-2" },
       };
     },
     isAxiosError: (e: unknown) =>
@@ -82,6 +83,7 @@ beforeEach(() => {
   setRefreshToken("rt-1");
   refreshCalls = 0;
   refreshError = undefined;
+  refreshedAccessToken = "fresh-token";
 });
 
 afterEach(() => {
@@ -147,6 +149,32 @@ describe("useWebSocketStream", () => {
     await Bun.sleep(50);
     expect(MockWebSocket.instances).toHaveLength(1);
     expect(refreshCalls).toBe(1);
+  });
+
+  test("on 4401 with an unchanged token backs off instead of reconnecting immediately", async () => {
+    refreshedAccessToken = "tok-123";
+    renderHook(() =>
+      useWebSocketStream("/v1/ws/logs", { device_id: "dev-1" }, { retryBaseMs: 40 }),
+    );
+    act(() => {
+      MockWebSocket.instances[0]!.closeWith(4401);
+    });
+    await Bun.sleep(20);
+    expect(refreshCalls).toBe(1);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(2));
+  });
+
+  test("on 4403 stops without refreshing or reconnecting", async () => {
+    renderHook(() =>
+      useWebSocketStream("/v1/ws/logs", { device_id: "dev-1" }, { retryBaseMs: 10 }),
+    );
+    act(() => {
+      MockWebSocket.instances[0]!.closeWith(4403);
+    });
+    await Bun.sleep(50);
+    expect(refreshCalls).toBe(0);
+    expect(MockWebSocket.instances).toHaveLength(1);
   });
 
   test("unmount stops reconnects", async () => {
