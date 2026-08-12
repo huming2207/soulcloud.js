@@ -32,15 +32,59 @@ export interface WsBrokerHandle {
 
 interface WsConnectionData {
   duplex: Duplex | null;
+  /** Partial MQTT bytes carried across WS message boundaries. */
+  partial: { chunks: Buffer[]; length: number } | null;
+  /** Absolute ceiling for one declared MQTT frame (early DoS guard). */
+  maxPacketBytes: number;
 }
 
 type ServerWebSocket = import("bun").ServerWebSocket<WsConnectionData>;
 
+/**
+ * Default ceiling for one declared MQTT frame, enforced BEFORE the bytes
+ * reach mqtt-packet. The parser buffers a payload according to its
+ * declared remaining length (up to ~268MB); without this pre-scan a
+ * hostile or broken device can declare a huge length and OOM the broker
+ * before `authorizePublish` ever runs. 256KB matches the broker's
+ * MAX_PUBLISH_BYTES early-reject ceiling.
+ */
+export const DEFAULT_MAX_FRAME_BYTES = 256 * 1024;
+
+type MqttScanResult =
+  | { kind: "incomplete" }
+  | { kind: "frame"; total: number }
+  | { kind: "malformed" };
+
+/**
+ * Scans ONE MQTT fixed header at the start of `buf` and returns the total
+ * frame length (1 type byte + varint bytes + remaining length).
+ * `incomplete` = need more bytes; `malformed` = varint continuation
+ * beyond 4 bytes (invalid per MQTT 3.1.1/5.0).
+ */
+function scanMqttFrameLength(buf: Uint8Array): MqttScanResult {
+  if (buf.length < 2) return { kind: "incomplete" };
+  let i = 1;
+  let remainingLen = 0;
+  let multiplier = 1;
+  while (i < buf.length) {
+    const b = buf[i]!;
+    remainingLen += (b & 0x7f) * multiplier;
+    if ((b & 0x80) === 0) {
+      return { kind: "frame", total: 1 + i + remainingLen };
+    }
+    multiplier *= 128;
+    i++;
+    if (i > 4) return { kind: "malformed" };
+  }
+  return { kind: "incomplete" };
+}
+
 /** Creates and starts the MQTT-over-WebSocket broker endpoint. */
 export function startWsBroker(
   aedes: Aedes,
-  options: WsBrokerOptions,
+  options: WsBrokerOptions & { maxPacketBytes?: number },
 ): Promise<WsBrokerHandle> {
+  const maxPacketBytes = options.maxPacketBytes ?? DEFAULT_MAX_FRAME_BYTES;
   return new Promise((resolve, reject) => {
     const server = Bun.serve<WsConnectionData>({
       port: options.port,
@@ -49,7 +93,9 @@ export function startWsBroker(
         if (url.pathname !== options.path) {
           return new Response("not found", { status: 404 });
         }
-        if (!srv.upgrade(req, { data: { duplex: null } })) {
+        if (!srv.upgrade(req, {
+          data: { duplex: null, partial: null, maxPacketBytes },
+        })) {
           return new Response("upgrade failed", { status: 400 });
         }
         return undefined;
@@ -74,7 +120,66 @@ export function startWsBroker(
               : Buffer.isBuffer(message)
                 ? message
                 : Buffer.from(message);
-          if (!duplex.push(bytes)) {
+          if (bytes.length === 0) return;
+
+          // Early frame pre-scan (S-audit): MQTT-over-WS allows several
+          // complete packets per WS message AND packets split across WS
+          // messages. mqtt-packet buffers a payload to its full declared
+          // remaining length before authorizePublish can reject it, so a
+          // malicious (even unauthenticated) device could declare ~268MB
+          // and OOM the broker. Reject oversized/malformed declared frames
+          // here, before any byte reaches the parser.
+          const partial = ws.data.partial;
+          let buf: Buffer;
+          if (partial && partial.chunks.length > 0) {
+            partial.chunks.push(bytes);
+            partial.length += bytes.length;
+            // A well-formed varint completes within 5 bytes; a partial
+            // buffer beyond maxPacketBytes + 5 means the peer is dribbling
+            // an over-limit frame. Refuse instead of accumulating.
+            if (partial.length > ws.data.maxPacketBytes + 5) {
+              ws.data.partial = null;
+              try {
+                ws.close();
+              } catch {
+                // already closing
+              }
+              return;
+            }
+            buf = Buffer.concat(partial.chunks);
+          } else {
+            buf = bytes;
+          }
+
+          let offset = 0;
+          for (;;) {
+            const rest = buf.subarray(offset);
+            const scan = scanMqttFrameLength(rest);
+            if (scan.kind === "incomplete") break;
+            if (scan.kind === "malformed" || scan.total > ws.data.maxPacketBytes) {
+              ws.data.partial = null;
+              try {
+                ws.close();
+              } catch {
+                // already closing
+              }
+              return;
+            }
+            offset += scan.total;
+          }
+
+          if (offset === 0) {
+            // no complete frame yet: buffer everything for the next message
+            ws.data.partial = partial ?? { chunks: [], length: 0 };
+            ws.data.partial.chunks.push(bytes);
+            ws.data.partial.length += bytes.length;
+            return;
+          }
+          ws.data.partial =
+            offset < buf.length
+              ? { chunks: [buf.subarray(offset)], length: buf.length - offset }
+              : null;
+          if (!duplex.push(buf.subarray(0, offset))) {
             // readable side is saturated; aedes backpressure will drain it
           }
         },
@@ -86,6 +191,7 @@ export function startWsBroker(
           console.log(`[soulcloud-broker] ws closed code=${code} reason=${reason}`);
           const duplex = ws.data.duplex;
           ws.data.duplex = null;
+          ws.data.partial = null;
           if (duplex) {
             duplex.destroy();
           }
@@ -129,21 +235,15 @@ class MqttFrameBuffer {
 
 /** Returns the complete frame length for a buffered MQTT packet, or null. */
 function mqttFrameLength(buf: Buffer): number | null {
-  if (buf.length < 2) return null;
-  let i = 1;
-  let remainingLen = 0;
-  let multiplier = 1;
-  while (i < buf.length) {
-    const b = buf[i]!;
-    remainingLen += (b & 0x7f) * multiplier;
-    if ((b & 0x80) === 0) break;
-    multiplier *= 128;
-    i++;
-    if (i > 4) return null; // malformed varint
+  const scan = scanMqttFrameLength(buf);
+  if (scan.kind === "incomplete") return null;
+  if (scan.kind === "malformed") {
+    // write-side frames come from mqtt-packet and are always well-formed;
+    // this is defensive only - a malformed varint here would otherwise
+    // never drain and grow the buffer without bound
+    throw new Error("malformed MQTT varint on the write side");
   }
-  if (i >= buf.length) return null; // varint incomplete
-  const total = 1 + i + remainingLen; // type byte + varint bytes + payload
-  return total <= buf.length ? total : null;
+  return scan.total <= buf.length ? scan.total : null;
 }
 
 /** Bridges a Bun server WebSocket to a Duplex for aedes.handle. */

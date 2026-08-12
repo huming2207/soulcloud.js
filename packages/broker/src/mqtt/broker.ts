@@ -197,7 +197,12 @@ export async function startBroker(
     callback(allowed ? null : new Error("topic not allowed"), subscription);
   };
 
-  const { server } = await startWsBroker(aedes, { port, path });
+  const { server } = await startWsBroker(aedes, {
+    port,
+    path,
+    // the pre-scan ceiling matches authorizePublish's MAX_PUBLISH_BYTES
+    maxPacketBytes: MAX_PUBLISH_BYTES,
+  });
 
   return {
     aedes,
