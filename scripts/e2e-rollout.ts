@@ -105,7 +105,13 @@ const t1 = await prisma.otaTarget.findMany({
 });
 assert(t1.length === 2, `phase1 targets: ${t1.length}`);
 for (const t of t1) {
-  await prisma.otaTarget.update({ where: { id: t.id }, data: { state: "delivered", deliveredAt: new Date() } });
+  // The real broker runs beside this script and may already have leased the
+  // synthetic offline target. Simulate broker delivery as one consistent
+  // transition: every non-leased state must clear lease_expires_at.
+  await prisma.otaTarget.update({
+    where: { id: t.id },
+    data: { state: "delivered", deliveredAt: new Date(), leaseExpiresAt: null },
+  });
   await recordOtaResult(prisma, { deviceUid: t.device.deviceUid, jobId: job_id, releaseId: target.release_id, state: "installed", code: 0 });
   await prisma.deviceFirmwareState.upsert({
     where: { deviceId: t.deviceId },
