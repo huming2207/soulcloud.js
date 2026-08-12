@@ -22,6 +22,7 @@ import {
   type LeasedCommand,
   type PrismaClient,
 } from "@soulcloud/core";
+import type { ConnectionRegistry } from "./connection-registry";
 
 /**
  * Commands published per poll cycle before the cycle yields to the next
@@ -78,6 +79,7 @@ export interface CommandPoller {
  * restarted: it re-polls on its own afterwards.
  */
 export function startCommandPoller(
+  registry: ConnectionRegistry,
   aedes: Aedes,
   prisma: PrismaClient,
   options: PollerOptions,
@@ -90,7 +92,7 @@ export function startCommandPoller(
     if (running || stopped) return;
     running = true;
     try {
-      await pollOnce(aedes, prisma, options, log);
+      await pollOnce(registry, aedes, prisma, options, log);
     } catch (error) {
       // pollOnce handles expected errors; this guards against unexpected
       // failures so a bad cycle never becomes an unhandled rejection.
@@ -117,6 +119,7 @@ export function startCommandPoller(
 
 /** One poll cycle: drain up to `drainMaxPerCycle` queued commands. */
 export async function pollOnce(
+  registry: ConnectionRegistry,
   aedes: Aedes,
   prisma: PrismaClient,
   options: PollerOptions,
@@ -136,12 +139,13 @@ export async function pollOnce(
   for (let i = 0; i < budget; i++) {
     const leased = await leaseNext(prisma, options.leaseDurationMs);
     if (!leased) return;
-    await handleLeasedCommand(aedes, prisma, options, log, leased);
+    await handleLeasedCommand(registry, aedes, prisma, options, log, leased);
   }
 }
 
 /** Publishes one leased command, or defers it back to the queue. */
 async function handleLeasedCommand(
+  registry: ConnectionRegistry,
   aedes: Aedes,
   prisma: PrismaClient,
   options: PollerOptions,
@@ -152,10 +156,7 @@ async function handleLeasedCommand(
   // client is dropped by the broker, which would strand the command in
   // broker_accepted forever and block the per-device queue. Instead the
   // command stays queued and is delivered when the device reconnects.
-  // (aedes exposes `clients` as a plain object keyed by clientId; the type
-  // definitions only expose connectedClients, hence the duck typing)
-  const clients = (aedes as unknown as { clients?: Record<string, unknown> }).clients;
-  const online = clients ? leased.deviceUid in clients : false;
+  const online = registry.isConnected(leased.deviceUid);
   if (!online) {
     log.debug("device offline; deferring command", {
       commandId: leased.id,
@@ -192,12 +193,9 @@ async function handleLeasedCommand(
   // no subscriber is silently dropped on a clean-session client, yet
   // aedes.publish still resolves and the row is marked broker_accepted —
   // the command is then lost forever and blocks the per-device queue.
-  // Same pattern as the OTA poller (ota-publish.ts). client.subscriptions
-  // is populated for both clean and persistent sessions.
-  const mqttClient = (
-    clients as Record<string, { subscriptions?: Record<string, unknown> }> | undefined
-  )?.[leased.deviceUid];
-  const subscribed = !!mqttClient && !!mqttClient.subscriptions?.[topic];
+  // Same pattern as the OTA poller (ota-publish.ts). The registry tracks
+  // subscriptions from aedes' subscribe/unsubscribe events.
+  const subscribed = registry.isSubscribed(leased.deviceUid, topic);
   if (!subscribed) {
     log.debug("device not subscribed yet; deferring command", {
       commandId: leased.id,

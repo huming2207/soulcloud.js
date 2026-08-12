@@ -130,7 +130,7 @@ describe("ota poller", () => {
     });
 
     await waitFor(async () => {
-      await otaPollOnce(broker.aedes, prisma, {
+      await otaPollOnce(broker.registry, broker.aedes, prisma, {
         secret: SECRET,
         pollIntervalMs: 500,
         leaseDurationMs: 60_000,
@@ -198,7 +198,7 @@ describe("ota poller", () => {
         jobIds.push(job.jobId);
       }
 
-      await otaPollOnce(broker.aedes, prisma, {
+      await otaPollOnce(broker.registry, broker.aedes, prisma, {
         secret: SECRET,
         pollIntervalMs: 500,
         leaseDurationMs: 60_000,
@@ -231,7 +231,7 @@ describe("ota poller", () => {
     });
     // several poll cycles: nothing should be published (device offline)
     for (let i = 0; i < 3; i++) {
-      await otaPollOnce(broker.aedes, prisma, {
+      await otaPollOnce(broker.registry, broker.aedes, prisma, {
         secret: SECRET,
         pollIntervalMs: 500,
         leaseDurationMs: 60_000,
@@ -255,7 +255,7 @@ describe("ota poller", () => {
       where: { jobId: job.jobId },
       data: { expiresAt: new Date(Date.now() - 1000) },
     });
-    await otaPollOnce(broker.aedes, prisma, {
+    await otaPollOnce(broker.registry, broker.aedes, prisma, {
       secret: SECRET,
       pollIntervalMs: 500,
       leaseDurationMs: 60_000,
@@ -287,7 +287,7 @@ describe("ota result acknowledgements over MQTT", () => {
 
     // deliver the notice
     await waitFor(async () => {
-      await otaPollOnce(broker.aedes, prisma, {
+      await otaPollOnce(broker.registry, broker.aedes, prisma, {
         secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000, tokenTtlSeconds: 900,
             stallTimeoutMinutes: 30,
       }, silentLog);
@@ -338,7 +338,7 @@ describe("ota result acknowledgements over MQTT", () => {
       targetTtlSeconds: 900,
     });
     await waitFor(async () => {
-      await otaPollOnce(broker.aedes, prisma, {
+      await otaPollOnce(broker.registry, broker.aedes, prisma, {
         secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000, tokenTtlSeconds: 900,
             stallTimeoutMinutes: 30,
       }, silentLog);
@@ -394,7 +394,7 @@ describe("ota result acknowledgements over MQTT", () => {
       targetTtlSeconds: 900,
     });
     await waitFor(async () => {
-      await otaPollOnce(broker.aedes, prisma, {
+      await otaPollOnce(broker.registry, broker.aedes, prisma, {
         secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000, tokenTtlSeconds: 900,
             stallTimeoutMinutes: 30,
       }, silentLog);
@@ -471,7 +471,7 @@ describe("ota notice payload shape", () => {
       await client.connect();
       await client.subscribe(`soulcloud/v1/devices/${dev.deviceUid}/ota`);
       await waitFor(async () => {
-        await otaPollOnce(broker.aedes, prisma, {
+        await otaPollOnce(broker.registry, broker.aedes, prisma, {
           secret: SECRET, pollIntervalMs: 500, leaseDurationMs: 60_000,
           tokenTtlSeconds: 900, stallTimeoutMinutes: 30,
         }, silentLog);

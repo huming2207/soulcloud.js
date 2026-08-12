@@ -27,6 +27,7 @@ import {
   type PrismaClient,
 } from "@soulcloud/core";
 import { otaCommand } from "@soulcloud/core";
+import type { ConnectionRegistry } from "./connection-registry";
 
 /**
  * OTA notices published per poll cycle before yielding to the next
@@ -74,6 +75,7 @@ export interface OtaPoller {
  * fixed interval + lossy wake()).
  */
 export function startOtaPoller(
+  registry: ConnectionRegistry,
   aedes: Aedes,
   prisma: PrismaClient,
   options: OtaPollerOptions,
@@ -86,7 +88,7 @@ export function startOtaPoller(
     if (running || stopped) return;
     running = true;
     try {
-      await otaPollOnce(aedes, prisma, options, log);
+      await otaPollOnce(registry, aedes, prisma, options, log);
     } catch (error) {
       log.warn("ota poll cycle failed", {
         error: (error as Error).message,
@@ -111,6 +113,7 @@ export function startOtaPoller(
 
 /** One OTA poll cycle: expire stale targets, then drain a bounded batch. */
 export async function otaPollOnce(
+  registry: ConnectionRegistry,
   aedes: Aedes,
   prisma: PrismaClient,
   options: OtaPollerOptions,
@@ -126,12 +129,13 @@ export async function otaPollOnce(
   for (let i = 0; i < budget; i++) {
     const target = await leaseNextOtaTarget(prisma, options.leaseDurationMs);
     if (!target) return;
-    await handleLeasedOtaTarget(aedes, prisma, options, log, target);
+    await handleLeasedOtaTarget(registry, aedes, prisma, options, log, target);
   }
 }
 
 /** Publishes one leased OTA target, or defers it back to the queue. */
 async function handleLeasedOtaTarget(
+  registry: ConnectionRegistry,
   aedes: Aedes,
   prisma: PrismaClient,
   options: OtaPollerOptions,
@@ -141,8 +145,7 @@ async function handleLeasedOtaTarget(
   // never publish to an offline device: a QoS1 message to a clean-session
   // client would be broker-dropped and the notice lost. Defer instead —
   // the target retries until its delivery window expires.
-  const clients = (aedes as unknown as { clients?: Record<string, unknown> }).clients;
-  const online = clients ? target.deviceUid in clients : false;
+  const online = registry.isConnected(target.deviceUid);
   if (!online) {
     log.debug("device offline; deferring ota notice", {
       targetId: target.id,
@@ -172,13 +175,9 @@ async function handleLeasedOtaTarget(
   // subscriber is silently dropped on a clean-session client, yet
   // aedes.publish still resolves and the target gets marked delivered -
   // the notice is then lost forever. Defer until the subscription is
-  // registered. client.subscriptions is populated for both clean and
-  // persistent sessions (persistence.subscriptionsByTopic only covers
-  // the latter).
-  const mqttClient = (aedes as unknown as {
-    clients?: Record<string, { subscriptions?: Record<string, unknown> }>;
-  }).clients?.[target.deviceUid];
-  const subscribed = !!mqttClient && !!mqttClient.subscriptions?.[topic];
+  // registered. The registry tracks subscriptions from aedes'
+  // subscribe/unsubscribe events.
+  const subscribed = registry.isSubscribed(target.deviceUid, topic);
   if (!subscribed) {
     log.debug("device not subscribed yet; deferring ota notice", {
       targetId: target.id,

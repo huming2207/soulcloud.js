@@ -31,7 +31,7 @@ const logger = {
   },
 };
 
-const { aedes, close: closeBroker } = await startBroker(prisma, {
+const { aedes, registry, close: closeBroker } = await startBroker(prisma, {
   port: config.MQTT_BROKER_PORT,
   path: config.MQTT_BROKER_PATH,
   authConcurrency: config.BROKER_AUTH_CONCURRENCY,
@@ -86,6 +86,7 @@ attachDispatch(aedes, prisma, logger, {
   workCapacity: config.UPLINK_WORK_CAPACITY,
 });
 const poller = startCommandPoller(
+  registry,
   aedes,
   prisma,
   {
@@ -98,6 +99,7 @@ const poller = startCommandPoller(
 // OTA delivery: metadata + per-device download JWT over MQTT; the device
 // fetches the bin over HTTP itself.
 const otaPoller = startOtaPoller(
+  registry,
   aedes,
   prisma,
   {
@@ -118,7 +120,7 @@ const notifier = await startNotifier(
     onCommand: () => poller.wake(),
     onOta: () => otaPoller.wake(),
     onCredentialRevoked: (deviceUid) => {
-      const kicked = kickDeviceSession(aedes, deviceUid);
+      const kicked = kickDeviceSession(registry, deviceUid);
       logger.info("revoked device session", { deviceUid, kicked });
     },
   },

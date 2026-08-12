@@ -67,7 +67,7 @@ beforeAll(async () => {
       onCommand: () => {},
       onOta: () => {},
       onCredentialRevoked: (deviceUid) => {
-        kickDeviceSession(broker.aedes, deviceUid);
+        kickDeviceSession(broker.registry, deviceUid);
       },
     },
     silentLog,
@@ -271,7 +271,7 @@ describe("command delivery loop", () => {
 
     const received = device.waitMessage(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
 
-    await pollOnce(broker.aedes, prisma, {
+    await pollOnce(broker.registry, broker.aedes, prisma, {
       pollIntervalMs: 100,
       leaseDurationMs: 60_000,
       retain: false,
@@ -357,7 +357,7 @@ describe("command delivery loop", () => {
 
     const received = device.waitMessage(`soulcloud/v1/devices/${DEVICE_UID}/cmd/exec`);
 
-    await pollOnce(broker.aedes, prisma, {
+    await pollOnce(broker.registry, broker.aedes, prisma, {
       pollIntervalMs: 100,
       leaseDurationMs: 60_000,
       retain: false,
@@ -603,7 +603,7 @@ describe("M2: offline devices", () => {
     });
 
     // no device connected under DEVICE_UID
-    await pollOnce(broker.aedes, prisma, {
+    await pollOnce(broker.registry, broker.aedes, prisma, {
       pollIntervalMs: 100,
       leaseDurationMs: 60_000,
       retain: false,
@@ -866,7 +866,7 @@ describe("G group: kickDeviceSession", () => {
   });
 
   test("returns false for devices that are not connected", () => {
-    const kicked = kickDeviceSession(broker.aedes, "not-connected-device");
+    const kicked = kickDeviceSession(broker.registry, "not-connected-device");
     expect(kicked).toBe(false);
   });
 });

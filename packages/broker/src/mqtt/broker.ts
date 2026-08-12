@@ -25,6 +25,7 @@ import {
   verifyDevicePassword,
 } from "@soulcloud/core";
 import { startWsBroker, type WsBrokerHandle } from "./ws-adapter";
+import { attachConnectionRegistry, type ConnectionRegistry } from "./connection-registry";
 
 /** Delay before answering a failed authentication attempt. */
 const AUTH_FAIL_DELAY_MS = 100;
@@ -81,14 +82,17 @@ export class AuthSemaphore {
 /**
  * Kills a device's live MQTT session (credential revocation).
  *
- * aedes exposes `clients` as a plain object keyed by clientId; with the
- * S1/S2 identity binding the clientId IS the device UID. The client's
- * `close()` tears down the connection; on reconnect the revoked credential
- * is refused by authenticate.
+ * The registry tracks only authenticated sessions (aedes fires 'client'
+ * after the CONNECT credential check), keyed by the clientId which IS the
+ * device UID (S1/S2 identity binding). The client's close() tears down
+ * the connection; on reconnect the revoked credential is refused by
+ * authenticate.
  */
-export function kickDeviceSession(aedes: Aedes, deviceUid: string): boolean {
-  const clients = (aedes as unknown as { clients?: Record<string, Client> }).clients;
-  const client = clients?.[deviceUid];
+export function kickDeviceSession(
+  registry: ConnectionRegistry,
+  deviceUid: string,
+): boolean {
+  const client = registry.getClient(deviceUid);
   if (!client) return false; // not connected
   client.close();
   return true;
@@ -103,6 +107,8 @@ export interface BrokerHandle {
   aedes: Aedes;
   /** WebSocket server bound to the broker port. */
   server: WsBrokerHandle["server"];
+  /** Live sessions + subscriptions (replaces aedes internal lookups). */
+  registry: ConnectionRegistry;
   /** Closes the broker and the WebSocket server. */
   close: () => Promise<void>;
 }
@@ -127,6 +133,10 @@ export async function startBroker(
   // Aedes 1.x: createBroker() initialises the broker (including its internal
   // persistence) and starts it; the constructor alone does not fully start.
   const aedes = await Aedes.createBroker();
+  // Live-session/subscription lookup (attached before the first connection
+  // so no session is ever missed; the pollers and the revoke kick read
+  // this instead of aedes' internal clients/subscriptions structures).
+  const registry = attachConnectionRegistry(aedes);
   // CPU-bound auth guard (WEB-09): bounded concurrency so a reconnect burst
   // cannot pin every core on Argon2id. Default 8; configured via
   // BROKER_AUTH_CONCURRENCY. Queue cap = 4x limit, then refuse immediately.
@@ -206,6 +216,7 @@ export async function startBroker(
 
   return {
     aedes,
+    registry,
     server,
     close: () =>
       new Promise<void>((resolve) => {

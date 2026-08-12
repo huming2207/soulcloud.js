@@ -102,6 +102,7 @@ async function waitFor(predicate: () => Promise<boolean>, what: string, timeoutM
 describe("startCommandPoller", () => {
   test("wake() polls: an offline device command is deferred back to queued", async () => {
     const poller = startCommandPoller(
+      broker.registry,
       broker.aedes,
       prisma,
       { pollIntervalMs: 100, leaseDurationMs: 60_000, retain: false },
@@ -135,6 +136,7 @@ describe("startCommandPoller", () => {
 
   test("a stopped poller no longer processes commands", async () => {
     const poller = startCommandPoller(
+      broker.registry,
       broker.aedes,
       prisma,
       { pollIntervalMs: 50, leaseDurationMs: 60_000, retain: false },
@@ -151,6 +153,7 @@ describe("startCommandPoller", () => {
 
   test("stop() can be called repeatedly", () => {
     const poller = startCommandPoller(
+      broker.registry,
       broker.aedes,
       prisma,
       { pollIntervalMs: 60_000, leaseDurationMs: 60_000, retain: false },
@@ -171,6 +174,7 @@ describe("startCommandPoller", () => {
     const client = await connectLiveDevice(device);
     try {
       const poller = startCommandPoller(
+        broker.registry,
         broker.aedes,
         prisma,
         // short interval: the unsubscribed defer backs off 1s; the
@@ -223,6 +227,7 @@ describe("startCommandPoller", () => {
         await client.subscribe(`soulcloud/v1/devices/${device.uid}/cmd/exec`);
       }
       const poller = startCommandPoller(
+        broker.registry,
         broker.aedes,
         prisma,
         {
