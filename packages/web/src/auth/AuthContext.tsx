@@ -32,6 +32,25 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/**
+ * Clears per-account browser state beyond the TanStack cache: the
+ * per-device command history (soulcloud.cmdhistory.<deviceId>) and the
+ * remembered project selection must not leak into the next account on
+ * this browser.
+ */
+function clearPerAccountLocalStorage(): void {
+  try {
+    const prefix = "soulcloud.cmdhistory.";
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(prefix)) localStorage.removeItem(key);
+    }
+    localStorage.removeItem("soulcloud.project_id");
+  } catch {
+    // storage unavailable (privacy mode etc.): nothing to clear
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<"loading" | "authed" | "anon">("loading");
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -43,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     return subscribeSessionEnd(() => {
       queryClient.clear();
+      clearPerAccountLocalStorage();
       setUser(null);
       setStatus("anon");
     });
@@ -69,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // the stored session is gone; drop cached data so it cannot leak
         // into a later account on this browser
         queryClient.clear();
+        clearPerAccountLocalStorage();
         setStatus("anon");
       }
     })();
@@ -103,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // wipe all cached queries (devices/logs/rollouts belong to the
     // previous account; a later login on this browser must start clean)
     queryClient.clear();
+    clearPerAccountLocalStorage();
     setUser(null);
     setStatus("anon");
   }, [queryClient]);

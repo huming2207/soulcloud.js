@@ -26,6 +26,9 @@ export interface UseWebSocketStreamOptions {
 }
 
 const RETRY_MAX_MS = 30_000;
+/** ±25% jitter on reconnect delays so a whole fleet of tabs does not
+ *  reconnect in synchronized waves after a server restart. */
+const RETRY_JITTER_RATIO = 0.25;
 const WS_PROTOCOL = "soulcloud";
 /** Server closes the socket with this code when the access token expired. */
 const TOKEN_EXPIRED_CLOSE_CODE = 4401;
@@ -48,6 +51,12 @@ export function useWebSocketStream(
   const socketRef = useRef<WebSocket | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryDelayRef = useRef(retryBaseMs);
+
+  /** Applies ±25% random jitter to a delay (kept >= base). */
+  function withJitter(delay: number): number {
+    const jitter = Math.floor(delay * RETRY_JITTER_RATIO * (Math.random() * 2 - 1));
+    return Math.max(retryBaseMs, delay + jitter);
+  }
   /** Token used by the connection that was just closed (to detect whether
    *  a 4401 close was actually fixed by a refresh). */
   const tokenRef = useRef<string | null>(null);
@@ -93,6 +102,9 @@ export function useWebSocketStream(
         const parsed = frame as Record<string, unknown>;
         if (parsed.type === "ready") {
           setStatus("open");
+          // a successful (re)connect resets the backoff so an occasional
+          // blip much later does not inherit a long-obsolete delay
+          retryDelayRef.current = retryBaseMs;
         }
         onFrameRef.current?.(parsed);
       };
@@ -130,14 +142,14 @@ export function useWebSocketStream(
               // token unchanged: 4401 was budget/revocation, not expiry
               const delay = retryDelayRef.current;
               retryDelayRef.current = Math.min(delay * 2, RETRY_MAX_MS);
-              retryTimerRef.current = setTimeout(connect, delay);
+              retryTimerRef.current = setTimeout(connect, withJitter(delay));
             }
           })();
           return;
         }
         const delay = retryDelayRef.current;
         retryDelayRef.current = Math.min(delay * 2, RETRY_MAX_MS);
-        retryTimerRef.current = setTimeout(connect, delay);
+        retryTimerRef.current = setTimeout(connect, withJitter(delay));
       };
     };
 

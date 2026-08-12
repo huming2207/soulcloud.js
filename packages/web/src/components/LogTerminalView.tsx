@@ -49,15 +49,41 @@ const GRAY = "\x1b[90m";
  * \n and \t are kept (legitimate line structure); everything else below
  * 0x20 and the 0x7F-0x9F range is dropped. Our own ANSI level colors are
  * applied by formatLogLine AFTER sanitizing the device-controlled parts.
+ *
+ * Unicode bidi/format controls (WS round-2): RLO/LRI/RLI/FSI/PDI/POP and
+ * LRM/RLM/ALM plus zero-width chars can visually reverse device text
+ * (e.g. "auth failed" rendered as "auth passed"). xterm.js does not
+ * guard against them, so they are stripped here too.
  */
+const BIDI_CONTROL_CODEPOINTS = new Set([
+  0x061c, // ARABIC LETTER MARK
+  0x200e, // LEFT-TO-RIGHT MARK
+  0x200f, // RIGHT-TO-LEFT MARK
+  0x200b, // ZERO WIDTH SPACE
+  0x202a, // LEFT-TO-RIGHT EMBEDDING
+  0x202b, // RIGHT-TO-LEFT EMBEDDING
+  0x202c, // POP DIRECTIONAL FORMATTING
+  0x202d, // LEFT-TO-RIGHT OVERRIDE
+  0x202e, // RIGHT-TO-LEFT OVERRIDE
+  0x2066, // LEFT-TO-RIGHT ISOLATE
+  0x2067, // RIGHT-TO-LEFT ISOLATE
+  0x2068, // FIRST STRONG ISOLATE
+  0x2069, // POP DIRECTIONAL ISOLATE
+  0xfeff, // ZERO WIDTH NO-BREAK SPACE / BOM
+]);
+
 export function sanitizeTerminalText(text: string): string {
   let out = "";
   for (const ch of text) {
     const code = ch.codePointAt(0)!;
     if (code === 0x0a || code === 0x09) {
       out += ch;
-    } else if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
-      // drop C0 (except \n \t) and C1 control characters
+    } else if (
+      code < 0x20 ||
+      (code >= 0x7f && code <= 0x9f) ||
+      BIDI_CONTROL_CODEPOINTS.has(code)
+    ) {
+      // drop C0 (except \n \t), C1 and bidi/zero-width control characters
     } else {
       out += ch;
     }

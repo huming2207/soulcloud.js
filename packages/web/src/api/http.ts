@@ -112,19 +112,37 @@ export async function ensureFreshAccessToken(): Promise<string | null> {
   }
 }
 
-/** Refreshes the token pair once; concurrent callers share the promise. */
+/**
+ * Performs one refresh round-trip. Must run under the cross-tab lock when
+ * available: rotation revokes the previous token server-side, so two tabs
+ * refreshing concurrently would trip reuse detection (reuse_detected
+ * revokes the WHOLE session family) and force a logout in both tabs.
+ */
+async function doRefreshRoundTrip(): Promise<string> {
+  const rt = getRefreshToken();
+  if (!rt) throw new Error("no refresh token stored");
+  // bare axios: this call must not go through the 401-retry interceptor
+  const res = await axios.post<TokenPair>("/v1/auth/refresh", {
+    refresh_token: rt,
+  });
+  setRefreshToken(res.data.refresh_token);
+  accessToken = res.data.access_token;
+  return res.data.access_token;
+}
+
+/** Refreshes the token pair once; concurrent callers share the promise.
+ *  Web Locks extends the single-flight across tabs of the same origin:
+ *  tab B re-reads the rotated token from shared localStorage after tab A
+ *  finishes, so it never replays an already-revoked token. */
 function refreshTokens(): Promise<string> {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
-      const rt = getRefreshToken();
-      if (!rt) throw new Error("no refresh token stored");
-      // bare axios: this call must not go through the 401-retry interceptor
-      const res = await axios.post<TokenPair>("/v1/auth/refresh", {
-        refresh_token: rt,
-      });
-      setRefreshToken(res.data.refresh_token);
-      accessToken = res.data.access_token;
-      return res.data.access_token;
+      if (typeof navigator !== "undefined" && navigator.locks?.request) {
+        return navigator.locks.request("soulcloud-refresh", async () => {
+          return doRefreshRoundTrip();
+        });
+      }
+      return doRefreshRoundTrip();
     })().finally(() => {
       refreshInFlight = null;
     });
