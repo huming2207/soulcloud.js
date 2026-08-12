@@ -95,6 +95,12 @@ export function getStatusStreamHub(
   const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let connectionCount = 0;
 
+  function pruneExpiredKnown(now: number): void {
+    for (const [uid, status] of known) {
+      if (status.expiresAt <= now) known.delete(uid);
+    }
+  }
+
   /** Pushes the resolved status for a uid to every subscriber. */
   async function resolveAndPush(uid: string, online: boolean): Promise<void> {
     let device: { projectId: string } | null = null;
@@ -198,8 +204,9 @@ export function getStatusStreamHub(
       set.add(ws);
       listener.start();
       // initial state: replay the known status for this project's devices
-      // (entries past their TTL are treated as unknown and skipped)
+      // (entries past their TTL are treated as unknown and removed)
       const now = Date.now();
+      pruneExpiredKnown(now);
       for (const [uid, status] of known) {
         if (status.projectId !== key) continue;
         if (status.expiresAt < now) continue;

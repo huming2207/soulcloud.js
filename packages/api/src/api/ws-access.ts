@@ -4,9 +4,9 @@
  * outlive it — a user removed from a project would otherwise keep
  * receiving realtime frames until reconnect. This schedules a periodic
  * re-check for the lifetime of the socket; a missing membership link
- * closes it with 4403 and the client hook's backoff reconnect presents
- * a fresh token (which the handshake rejects if the user is really
- * gone). Token lifecycle is covered separately by the M2 expiry check.
+ * closes it with 4403. The client stops that resource stream instead of
+ * retrying a token refresh that cannot restore removed membership. Token
+ * lifecycle is covered separately by the expiry check.
  *
  * The re-check interval deliberately reuses the M2 token-expiry
  * interval of the calling stream (default 30s, injectable for tests):
@@ -20,8 +20,9 @@ import type { PrismaClient } from "@soulcloud/core";
 const ACCESS_REVOKED_CLOSE_CODE = 4403;
 
 /**
- * Re-checks project membership on a fixed interval until the socket
- * closes. A missing link closes the socket (4403 "access revoked").
+ * Re-checks project membership on a fixed interval until the socket closes.
+ * A missing link closes the socket (4403 "access revoked"). Each pass uses
+ * one batched query, and a slow query never overlaps the next interval.
  * Transient DB errors keep the connection (never kill on hiccups).
  *
  * Self-cleaning: the timer stops itself once the socket is no longer
@@ -38,7 +39,10 @@ export function scheduleMembershipCheck(
 ): () => void {
   if (projectIds.length === 0 || intervalMs <= 0) return () => {};
 
+  const uniqueProjectIds = [...new Set(projectIds)];
+
   let timer: ReturnType<typeof setInterval> | null = null;
+  let checking = false;
   const stop = () => {
     if (timer !== null) {
       clearInterval(timer);
@@ -46,33 +50,40 @@ export function scheduleMembershipCheck(
     }
   };
 
-  timer = setInterval(async () => {
+  const checkMembership = () => {
     if (timer === null) return; // already stopped
     if (socket.readyState !== 1) {
       // socket is gone (closed or closing); stop the timer
       stop();
       return;
     }
-    try {
-      for (const projectId of projectIds) {
-        const link = await prisma.userProject.findUnique({
-          where: { userId_projectId: { userId, projectId } },
-          select: { userId: true },
-        });
-        if (!link) {
+    if (checking) return;
+    checking = true;
+    void prisma.userProject
+      .findMany({
+        where: { userId, projectId: { in: uniqueProjectIds } },
+        select: { projectId: true },
+      })
+      .then((links) => {
+        const allowed = new Set(links.map((link) => link.projectId));
+        if (uniqueProjectIds.some((projectId) => !allowed.has(projectId))) {
           stop();
           try {
             socket.close(ACCESS_REVOKED_CLOSE_CODE, "access revoked");
           } catch {
             // socket is already closing
           }
-          return;
         }
-      }
-    } catch {
-      // transient DB failure: keep the connection; the next tick re-checks
-    }
-  }, intervalMs);
+      })
+      .catch(() => {
+        // Transient DB failure: keep the connection; the next tick re-checks.
+      })
+      .finally(() => {
+        checking = false;
+      });
+  };
+
+  timer = setInterval(checkMembership, intervalMs);
 
   return stop;
 }
