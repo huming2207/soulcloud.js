@@ -22,8 +22,8 @@
  */
 
 import { randomUUID, randomInt } from "node:crypto";
-import type { PrismaClient } from "../db";
-import { MAX_OTA_TARGETS, OtaError } from "./deploy";
+import type { Prisma, PrismaClient } from "../db";
+import { MAX_OTA_TARGETS, OtaError, resolveReleaseExpectedFirmware } from "./deploy";
 import { NOTIFICATIONS_CHANNEL, OTA_NOTIFY_CHANNEL } from "../queue/notify";
 
 /** Default auto-strategy ratios (cumulative; last must be 1.0). */
@@ -38,6 +38,8 @@ export const OTA_STALL_FAILURE_CODE = -6;
  * createOtaRollout / advanceRollouts / resumeRollout / rollbackRollout.
  */
 export const DEFAULT_ROLLOUT_TARGET_TTL_SECONDS = 15 * 60;
+
+type TransactionClient = Prisma.TransactionClient;
 
 export interface CreateRolloutOptions {
   projectId: string;
@@ -280,7 +282,7 @@ export async function createOtaRollout(
 
 /** Creates a plain ota_job for a device slice (shared by phase + rollback). */
 async function createPhaseJob(
-  tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0],
+  tx: TransactionClient,
   rolloutId: string,
   phaseIndex: number,
   deviceIds: string[],
@@ -299,16 +301,45 @@ async function createPhaseJob(
       createdBy: rollout.createdBy,
     },
   });
-  await tx.otaTarget.createMany({
-    data: deviceIds.map((deviceId) => ({
-      jobId,
-      deviceId,
-      expiresAt: new Date(Date.now() + ttlMs),
-    })),
-  });
+  await createTargetsForRelease(tx, jobId, rollout.releaseId, deviceIds, ttlMs);
   await tx.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
   void phaseIndex;
   return jobId;
+}
+
+/**
+ * Creates rollout/rollback targets and immediately completes devices already
+ * reporting the release identity. This is the same fast path as direct OTA
+ * deployment: without it, a device-side dedupe can ignore a redundant notice
+ * and leave a rollout phase pending until its timeout.
+ */
+async function createTargetsForRelease(
+  tx: TransactionClient,
+  jobId: string,
+  releaseId: string,
+  deviceIds: string[],
+  ttlMs: number,
+): Promise<void> {
+  const expiresAt = new Date(Date.now() + ttlMs);
+  await tx.otaTarget.createMany({
+    data: deviceIds.map((deviceId) => ({ jobId, deviceId, expiresAt })),
+  });
+
+  const expectedFirmware = await resolveReleaseExpectedFirmware(tx, releaseId);
+  if (!expectedFirmware) return;
+  const states = await tx.deviceFirmwareState.findMany({
+    where: { deviceId: { in: deviceIds }, fwHash: expectedFirmware },
+    select: { deviceId: true },
+  });
+  if (states.length === 0) return;
+  await tx.otaTarget.updateMany({
+    where: {
+      jobId,
+      deviceId: { in: states.map((state) => state.deviceId) },
+      state: "pending",
+    },
+    data: { state: "completed", confirmedAt: new Date(), resultCode: 0 },
+  });
 }
 
 // ===========================================================================
@@ -604,13 +635,7 @@ async function activatePendingPhase(
         createdBy: rollout.createdBy,
       },
     });
-    await t.otaTarget.createMany({
-      data: slice.map((deviceId) => ({
-        jobId,
-        deviceId,
-        expiresAt: new Date(Date.now() + ttlMs),
-      })),
-    });
+    await createTargetsForRelease(t, jobId, rollout.releaseId, slice, ttlMs);
     await t.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
     await t.otaRolloutPhase.update({
       where: { id: phase.id },
@@ -793,13 +818,13 @@ export async function rollbackRollout(
           createdBy: rollout.createdBy,
         },
       });
-      await tx.otaTarget.createMany({
-        data: deviceIds.map((d) => ({
-          jobId,
-          deviceId: d.deviceId,
-          expiresAt: new Date(Date.now() + ttlMs),
-        })),
-      });
+      await createTargetsForRelease(
+        tx,
+        jobId,
+        rollout.fromReleaseId!,
+        deviceIds.map((device) => device.deviceId),
+        ttlMs,
+      );
       const claimed = await tx.otaRollout.updateMany({
         where: terminalOldJobId
           ? {

@@ -126,6 +126,33 @@ export interface CreatedOtaJob {
 }
 
 /**
+ * Returns the firmware identity used by the current OTA state machine for a
+ * release. Keeping this lookup shared prevents direct deployments and
+ * rollout-created jobs from disagreeing about whether a device already runs
+ * the target.
+ *
+ * This deliberately preserves the existing release contract (artifact build
+ * id when present, otherwise bin hash). Replacing that contract with a
+ * verified runtime image identity is a separate migration.
+ */
+export async function resolveReleaseExpectedFirmware(
+  prisma: Pick<PrismaClient, "firmwareRelease" | "firmwareArtifact">,
+  releaseId: string,
+): Promise<string | null> {
+  const release = await prisma.firmwareRelease.findUnique({
+    where: { id: releaseId },
+    select: { artifactId: true, binHash: true },
+  });
+  if (!release) return null;
+  if (!release.artifactId) return release.binHash;
+  const artifact = await prisma.firmwareArtifact.findUnique({
+    where: { id: release.artifactId },
+    select: { buildId: true },
+  });
+  return artifact?.buildId ?? null;
+}
+
+/**
  * Creates an OTA job with one pending target per device, then wakes the
  * broker (lossy hint; the poll interval is the correctness fallback).
  *
@@ -193,16 +220,7 @@ export async function createOtaJob(
   // identity (ELF build id when an artifact exists, bin hash otherwise) are
   // completed without delivering anything. The reported identity must match
   // the same rule as confirmOtaTargetByFirmware.
-  let expectedFw: string | null = null;
-  if (release.artifactId) {
-    const artifact = await prisma.firmwareArtifact.findUnique({
-      where: { id: release.artifactId },
-      select: { buildId: true },
-    });
-    expectedFw = artifact?.buildId ?? null;
-  } else {
-    expectedFw = release.binHash;
-  }
+  const expectedFw = await resolveReleaseExpectedFirmware(prisma, options.releaseId);
   const alreadyRunning = new Set<string>();
   if (expectedFw) {
     const states = await prisma.deviceFirmwareState.findMany({

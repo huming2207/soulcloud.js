@@ -4,7 +4,7 @@
  * operations (pause/resume/abort/rollback).
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { prisma } from "../../src/db";
 import {
@@ -103,6 +103,14 @@ beforeAll(async () => {
   deviceIds = await freshDevices(8);
 });
 
+// Phase fast paths now deliberately consult device_firmware_state. The shared
+// fixture devices are reused by many independent cases, so clear facts left
+// by a preceding case rather than accidentally treating those devices as
+// already upgraded in the next one.
+beforeEach(async () => {
+  await prisma.deviceFirmwareState.deleteMany({ where: { deviceId: { in: deviceIds } } });
+});
+
 afterAll(async () => {
   await prisma.otaTarget.deleteMany({ where: { job: { projectId } } });
   await prisma.otaJob.deleteMany({ where: { projectId } });
@@ -118,6 +126,29 @@ afterAll(async () => {
 });
 
 describe("createOtaRollout", () => {
+  test("already-running devices are completed in the first phase", async () => {
+    const [alreadyRunning, pending] = await freshDevices(2);
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId: alreadyRunning! },
+      update: { fwHash: elfHash, reportedAt: new Date() },
+      create: { deviceId: alreadyRunning!, fwHash: elfHash },
+    });
+    const created = await createOtaRollout(prisma, {
+      projectId,
+      releaseId,
+      strategy: "grouped",
+      groups: [{ device_ids: [alreadyRunning!, pending!] }],
+      createdBy: randomUUID(),
+    });
+    const targets = await prisma.otaTarget.findMany({
+      where: { jobId: created.jobId! },
+      select: { deviceId: true, state: true },
+    });
+    expect(targets).toContainEqual({ deviceId: alreadyRunning!, state: "completed" });
+    expect(targets).toContainEqual({ deviceId: pending!, state: "pending" });
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
   test("auto: random pool, phases from ratios, phase 1 active with a job", async () => {
     const created = await createOtaRollout(prisma, {
       projectId,
@@ -414,7 +445,11 @@ describe("advance loop", () => {
     await prisma.deviceFirmwareState.upsert({
       where: { deviceId: row!.deviceId },
       update: { fwHash: "deadbeef".repeat(8), reportedAt: new Date(Date.now() - 3 * 3600_000) },
-      create: { deviceId: row!.deviceId, fwHash: "deadbeef".repeat(8) },
+      create: {
+        deviceId: row!.deviceId,
+        fwHash: "deadbeef".repeat(8),
+        reportedAt: new Date(Date.now() - 3 * 3600_000),
+      },
     });
     const s2 = await advanceRollouts(prisma);
     const after = await prisma.otaTarget.findUnique({ where: { id: row!.id } });
@@ -738,6 +773,34 @@ describe("coverage sweep (round-2)", () => {
 });
 
 describe("grouped slicing (round-2)", () => {
+  test("phase activation completes devices already running the release", async () => {
+    const [firstDevice, alreadyRunning] = await freshDevices(2);
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId: alreadyRunning! },
+      update: { fwHash: elfHash, reportedAt: new Date() },
+      create: { deviceId: alreadyRunning!, fwHash: elfHash },
+    });
+    const created = await createOtaRollout(prisma, {
+      projectId,
+      releaseId,
+      strategy: "grouped",
+      groups: [{ device_ids: [firstDevice!] }, { device_ids: [alreadyRunning!] }],
+      createdBy: randomUUID(),
+    });
+    await driveTarget(created.jobId!, (await prisma.device.findUniqueOrThrow({ where: { id: firstDevice! } })).deviceUid, "completed");
+    await advanceRollouts(prisma);
+    const phase2 = await prisma.otaRolloutPhase.findUniqueOrThrow({
+      where: { rolloutId_index: { rolloutId: created.rolloutId, index: 2 } },
+      select: { jobId: true },
+    });
+    const target = await prisma.otaTarget.findFirstOrThrow({
+      where: { jobId: phase2.jobId!, deviceId: alreadyRunning! },
+      select: { state: true },
+    });
+    expect(target.state).toBe("completed");
+    await prisma.otaRollout.delete({ where: { id: created.rolloutId } });
+  });
+
   test("phase 2 activation slices the SECOND group only", async () => {
     const g1 = deviceIds.slice(0, 2);
     const g2 = deviceIds.slice(2, 4);
