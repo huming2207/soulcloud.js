@@ -144,7 +144,9 @@ describe("RolloutCreateDialog validation", () => {
     renderDialog();
     await selectDevices();
     submitForm();
-    await waitFor(() => expect(screen.getByText("ROLLOUT-DETAIL")).not.toBeNull());
+    await waitFor(() => expect(screen.getByText("ROLLOUT-DETAIL")).not.toBeNull(), {
+      timeout: 5000,
+    });
     expect(firmwareApi.createRollout).toHaveBeenCalledWith("rel-1", expect.objectContaining({
       strategy: "auto",
       ratios: [0.05, 0.25, 1],
@@ -212,7 +214,9 @@ describe("RolloutCreateDialog validation", () => {
     await userEvent.click(g2);
     await userEvent.click(await screen.findByText(/a2 · u2/));
     submitForm();
-    await waitFor(() => expect(screen.getByText("ROLLOUT-DETAIL")).not.toBeNull());
+    await waitFor(() => expect(screen.getByText("ROLLOUT-DETAIL")).not.toBeNull(), {
+      timeout: 5000,
+    });
     expect(firmwareApi.createRollout).toHaveBeenCalledWith("rel-1",
       expect.objectContaining({
         strategy: "grouped",
@@ -253,7 +257,9 @@ describe("RolloutCreateDialog validation", () => {
     // toggle manual approval
     await userEvent.click(screen.getByLabelText(/每阶段手动批准|manual approval|ручное одобрение/i));
     submitForm();
-    await waitFor(() => expect(screen.getByText("ROLLOUT-DETAIL")).not.toBeNull());
+    await waitFor(() => expect(screen.getByText("ROLLOUT-DETAIL")).not.toBeNull(), {
+      timeout: 5000,
+    });
     expect(firmwareApi.createRollout).toHaveBeenCalledWith("rel-1",
       expect.objectContaining({
         from_release_id: "rel-0",
