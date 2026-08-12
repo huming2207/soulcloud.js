@@ -90,11 +90,18 @@ describe("OTA download JWT", () => {
     return `${header}.${payload}.${sig}`;
   }
 
-  const validExtraClaims = {
-    sub: deviceUid,
-    releaseId: "rel",
-    jobId: randomUUID(),
-  } as const;
+  // NOTE: claims must be built INSIDE each test body. deviceUid is set by
+  // beforeAll, so a describe-level constant would capture sub: undefined
+  // (JSON.stringify drops it) and the type check would mask the
+  // audience/expiry assertions.
+  function validOtaClaims(extra: Record<string, unknown>): Record<string, unknown> {
+    return {
+      sub: deviceUid,
+      releaseId: "rel",
+      jobId: randomUUID(),
+      ...extra,
+    };
+  }
 
   test("sign + verify round trip", async () => {
     const token = await signOtaToken(SECRET, { deviceUid, releaseId, jobId: randomUUID() }, 900);
@@ -103,18 +110,14 @@ describe("OTA download JWT", () => {
   });
 
   test("token without an aud claim is rejected", async () => {
-    const token = craftOtaJwt({
-      ...validExtraClaims,
-      exp: Math.floor(Date.now() / 1000) + 900,
-    });
+    const token = craftOtaJwt(
+      validOtaClaims({ exp: Math.floor(Date.now() / 1000) + 900 }),
+    );
     expect(await verifyOtaToken(SECRET, token)).toBeNull();
   });
 
   test("token without an exp claim is rejected", async () => {
-    const token = craftOtaJwt({
-      ...validExtraClaims,
-      aud: OTA_TOKEN_AUDIENCE,
-    });
+    const token = craftOtaJwt(validOtaClaims({ aud: OTA_TOKEN_AUDIENCE }));
     expect(await verifyOtaToken(SECRET, token)).toBeNull();
   });
 
@@ -127,12 +130,28 @@ describe("OTA download JWT", () => {
     expect(await verifyOtaToken(SECRET, token)).toBeNull();
   });
 
+  test("wrong-typed sub/releaseId/jobId are rejected", async () => {
+    for (const bad of [
+      { sub: 42, releaseId: "rel", jobId: randomUUID() },
+      { sub: deviceUid, releaseId: 7, jobId: randomUUID() },
+      { sub: deviceUid, releaseId: "rel", jobId: ["x"] },
+    ]) {
+      const token = craftOtaJwt({
+        ...bad,
+        aud: OTA_TOKEN_AUDIENCE,
+        exp: Math.floor(Date.now() / 1000) + 900,
+      });
+      expect(await verifyOtaToken(SECRET, token)).toBeNull();
+    }
+  });
+
   test("the access-token audience is rejected (no cross-class confusion)", async () => {
-    const token = craftOtaJwt({
-      ...validExtraClaims,
-      aud: ACCESS_TOKEN_AUDIENCE,
-      exp: Math.floor(Date.now() / 1000) + 900,
-    });
+    const token = craftOtaJwt(
+      validOtaClaims({
+        aud: ACCESS_TOKEN_AUDIENCE,
+        exp: Math.floor(Date.now() / 1000) + 900,
+      }),
+    );
     expect(await verifyOtaToken(SECRET, token)).toBeNull();
   });
 

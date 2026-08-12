@@ -266,6 +266,13 @@ describe("GET /v1/ws/logs", () => {
     expect(await waitForSettle(client)).toBe("closed");
   });
 
+  test("token in the wrong subprotocol slot: handshake rejected", async () => {
+    // the server only reads the SECOND slot for the token; putting it
+    // first must not authenticate the socket
+    const client = connectWs(wsUrl(deviceId), [accessToken, WS_PROTOCOL]);
+    expect(await waitForSettle(client)).toBe("closed");
+  });
+
   test("device outside the user's projects: handshake rejected", async () => {
     const client = connectWs(wsUrl(otherDeviceId), [WS_PROTOCOL, accessToken]);
     expect(await waitForSettle(client)).toBe("closed");
@@ -291,6 +298,11 @@ describe("GET /v1/ws/logs", () => {
         headers: {
           connection: "upgrade",
           upgrade: "websocket",
+          // full client-shaped handshake (RFC 6455 sample key): a broken
+          // server that upgrades without these would otherwise fail the
+          // probe with a 400 before ever reaching the ws handler
+          "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+          "sec-websocket-version": "13",
           ...headers,
         },
       });

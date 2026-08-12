@@ -173,6 +173,39 @@ describe("verifyAccessToken malformed-payload handling", () => {
     expect(error!.kind).toBe("invalid_token");
   });
 
+  test("rejects alg=none tokens (classic algorithm-confusion attack)", async () => {
+    const header = base64url(JSON.stringify({ alg: "none", typ: "JWT" }));
+    const payload = base64url(
+      JSON.stringify({
+        sub: "user-1",
+        username: "alice",
+        aud: ACCESS_TOKEN_AUDIENCE,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    );
+    const { error } = await capture(verifyAccessToken(CONFIG, `${header}.${payload}.`));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error!.kind).toBe("invalid_token");
+  });
+
+  test("rejects HS384-signed tokens (only HS256 is allowed)", async () => {
+    const header = base64url(JSON.stringify({ alg: "HS384", typ: "JWT" }));
+    const payload = base64url(
+      JSON.stringify({
+        sub: "user-1",
+        username: "alice",
+        aud: ACCESS_TOKEN_AUDIENCE,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    );
+    const sig = createHmac("sha384", CONFIG.secret)
+      .update(`${header}.${payload}`)
+      .digest("base64url");
+    const { error } = await capture(verifyAccessToken(CONFIG, `${header}.${payload}.${sig}`));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error!.kind).toBe("invalid_token");
+  });
+
   test("garbage/truncated/tampered tokens are rejected as invalid_token", async () => {
     for (const token of ["not-a-jwt", "a.b", "a.b.c"]) {
       const { error } = await capture(verifyAccessToken(CONFIG, token));
