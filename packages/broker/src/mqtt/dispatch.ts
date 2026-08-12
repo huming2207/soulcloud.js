@@ -29,6 +29,7 @@ import {
   recordDeviceResult,
   recordOtaResult,
   resolveDeviceId,
+  type LogContainer,
   type PrismaClient,
 } from "@soulcloud/core";
 
@@ -83,30 +84,40 @@ export function attachDispatch(
       });
       return;
     }
-    if (limiter && !limiter.tryConsume(client.id, uplinkCost(packet.topic, payload))) {
+    // A rate-limited log bundle needs structural parsing to charge one token
+    // per contained packet. Pass that result down to ingestion so a valid
+    // bundle is parsed only once on this hot path.
+    const parsedLog = limiter ? parseRateLimitedLog(packet.topic, payload) : undefined;
+    const cost = parsedLog instanceof LogContainerError
+      ? 1
+      : Math.max(1, parsedLog?.elements.length ?? 1);
+    if (limiter && !limiter.tryConsume(client.id, cost)) {
       log.warn("dropped uplink packet over rate limit", {
         deviceUid: client.id,
       });
       return;
     }
 
-    void handleUplink(prisma, client.id, packet.topic, payload, log);
+    void handleUplink(prisma, client.id, packet.topic, payload, log, parsedLog);
   });
 }
 
 /**
- * Rate-limit cost per publish: a log container costs one token per
- * contained packet (so a device cannot multiply its effective rate by
- * stuffing a bundle — WEB-03), every other uplink costs one. The
- * container is parsed twice (here and in handleLog); parsing is pure
- * CPU over a payload already bounded by maxPacketBytes.
+ * Parses a rate-limited log container once. A malformed container is kept as
+ * its original error so handleLog can report the same validation failure
+ * without a second pass. Other uplinks cost one token and need no parsing.
  */
-function uplinkCost(topic: string, payload: Uint8Array): number {
-  if (!topic.endsWith("/log")) return 1;
+function parseRateLimitedLog(
+  topic: string,
+  payload: Uint8Array,
+): LogContainer | LogContainerError | undefined {
+  if (!topic.endsWith("/log")) return undefined;
   try {
-    return Math.max(1, parseLogContainer(payload).elements.length);
-  } catch {
-    return 1; // malformed container: handleLog rejects it anyway
+    return parseLogContainer(payload);
+  } catch (error) {
+    return error instanceof LogContainerError
+      ? error
+      : new LogContainerError("invalid_msgpack", "failed to parse log container");
   }
 }
 
@@ -116,6 +127,7 @@ async function handleUplink(
   topicName: string,
   payload: Uint8Array,
   log: DispatchLog,
+  parsedLog?: LogContainer | LogContainerError,
 ): Promise<void> {
   let topic;
   try {
@@ -140,7 +152,7 @@ async function handleUplink(
       await handleStat(prisma, deviceUid, payload, log);
       break;
     case "log":
-      await handleLog(prisma, deviceUid, payload, log);
+      await handleLog(prisma, deviceUid, payload, log, parsedLog);
       break;
   }
 }
@@ -254,6 +266,7 @@ async function handleLog(
   deviceUid: string,
   payload: Uint8Array,
   log: DispatchLog,
+  parsedLog?: LogContainer | LogContainerError,
 ): Promise<void> {
   try {
     const deviceId = await resolveDeviceId(prisma, deviceUid);
@@ -261,7 +274,8 @@ async function handleLog(
       log.warn("ignored log from unknown device", { deviceUid });
       return;
     }
-    const parsed = parseLogContainer(payload);
+    if (parsedLog instanceof LogContainerError) throw parsedLog;
+    const parsed = parsedLog ?? parseLogContainer(payload);
     // bulk path: validate once, resolve the artifact once, insert all
     // elements in a single createMany, one notification for the bundle
     // (a per-element ingest would cost up to ~5 DB round trips per

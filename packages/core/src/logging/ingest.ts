@@ -75,23 +75,20 @@ async function resolveArtifactId(
   deviceId: string,
 ): Promise<string | null> {
   try {
-    const state = await prisma.deviceFirmwareState.findUnique({
-      where: { deviceId },
-      select: { fwHash: true },
-    });
-    if (!state) return null;
-    const device = await prisma.device.findUnique({
-      where: { id: deviceId },
-      select: { projectId: true },
-    });
-    if (!device) return null;
-    const artifact = await prisma.firmwareArtifact.findUnique({
-      where: {
-        projectId_buildId: { projectId: device.projectId, buildId: state.fwHash },
-      },
-      select: { id: true },
-    });
-    return artifact?.id ?? null;
+    // One indexed join instead of serial firmware-state -> device -> artifact
+    // lookups. This runs for every log bundle and the artifact may be absent;
+    // LEFT JOIN preserves the existing unknown_fw behavior in that case.
+    const rows = await prisma.$queryRaw<Array<{ id: string | null }>>`
+      SELECT artifact.id
+      FROM device_firmware_state AS state
+      INNER JOIN devices AS device ON device.id = state.device_id
+      LEFT JOIN firmware_artifacts AS artifact
+        ON artifact.project_id = device.project_id
+       AND artifact."buildId" = state.fw_hash
+      WHERE state.device_id = ${deviceId}::uuid
+      LIMIT 1
+    `;
+    return rows[0]?.id ?? null;
   } catch {
     return null;
   }
