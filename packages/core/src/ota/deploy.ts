@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { SignJWT, jwtVerify } from "jose";
+import { createSigner, createVerifier } from "fast-jwt";
 import type { PrismaClient } from "../db";
 import { OTA_NOTIFY_CHANNEL } from "../queue/notify";
 
@@ -65,14 +65,18 @@ export async function signOtaToken(
   payload: OtaTokenPayload,
   ttlSeconds: number,
 ): Promise<string> {
-  const key = new TextEncoder().encode(secret);
-  return new SignJWT({ releaseId: payload.releaseId, jobId: payload.jobId })
-    .setProtectedHeader({ alg: "HS256" })
-    .setSubject(payload.deviceUid)
-    .setAudience(OTA_TOKEN_AUDIENCE)
-    .setIssuedAt()
-    .setExpirationTime(`${ttlSeconds}s`)
-    .sign(key);
+  const signer = createSigner({
+    key: secret,
+    algorithm: "HS256",
+    // fast-jwt interprets numeric expiresIn as MILLISECONDS
+    expiresIn: ttlSeconds * 1000,
+    aud: OTA_TOKEN_AUDIENCE,
+  });
+  return signer({
+    sub: payload.deviceUid,
+    releaseId: payload.releaseId,
+    jobId: payload.jobId,
+  });
 }
 
 /**
@@ -85,11 +89,13 @@ export async function verifyOtaToken(
   token: string,
 ): Promise<OtaTokenPayload | null> {
   try {
-    const key = new TextEncoder().encode(secret);
-    const { payload } = await jwtVerify(token, key, {
+    const verifier = createVerifier({
+      key: secret,
       algorithms: ["HS256"],
-      audience: OTA_TOKEN_AUDIENCE,
+      allowedAud: OTA_TOKEN_AUDIENCE,
+      requiredClaims: ["releaseId", "jobId"],
     });
+    const payload = verifier(token);
     if (
       typeof payload.sub !== "string" ||
       typeof payload.releaseId !== "string" ||

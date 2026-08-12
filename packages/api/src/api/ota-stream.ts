@@ -33,7 +33,7 @@
 
 import { Elysia } from "elysia";
 import type { ServerWebSocket } from "bun";
-import { decodeJwt } from "jose";
+import { createDecoder } from "fast-jwt";
 import { OTA_NOTIFY_CHANNEL, type JwtConfig, type PrismaClient } from "@soulcloud/core";
 import { createPgChannelListener } from "../pg-listen";
 import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
@@ -41,6 +41,9 @@ import { authenticateRequest, userCanAccessProject, UuidParam } from "./validate
 import { createTtlCache } from "./ttl-cache";
 
 const WS_PROTOCOL = "soulcloud";
+
+/** Module-level payload decoder (no signature check; the handshake already verified). */
+const decodeTokenPayload = createDecoder();
 
 /** jobId -> project id, resolved during the handshake (a job's project
  *  never changes). Avoids a re-query per WS connection for the
@@ -355,7 +358,7 @@ export function createOtaStreamRoutes(
     let expMs = 0;
     if (token) {
       try {
-        const { exp } = decodeJwt(token);
+        const { exp } = decodeTokenPayload(token) as { exp?: unknown };
         if (typeof exp === "number") expMs = exp * 1000;
       } catch {
         // handshake already rejected invalid tokens

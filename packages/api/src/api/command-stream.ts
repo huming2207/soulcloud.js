@@ -30,7 +30,7 @@
 
 import { Elysia } from "elysia";
 import type { ServerWebSocket } from "bun";
-import { decodeJwt } from "jose";
+import { createDecoder } from "fast-jwt";
 import {
   COMMAND_RESULT_CHANNEL,
   type JwtConfig,
@@ -43,6 +43,9 @@ import { jwtSubject, scheduleMembershipCheck } from "./ws-access";
 import { createTtlCache } from "./ttl-cache";
 
 const WS_PROTOCOL = "soulcloud";
+
+/** Module-level payload decoder (no signature check; the handshake already verified). */
+const decodeTokenPayload = createDecoder();
 
 /** batchId -> target device project ids, resolved during the handshake
  *  (batches are immutable after creation). Avoids a full batch re-query
@@ -297,7 +300,7 @@ export function createCommandStreamRoutes(
     let expMs = 0;
     if (token) {
       try {
-        const { exp } = decodeJwt(token);
+        const { exp } = decodeTokenPayload(token) as { exp?: unknown };
         if (typeof exp === "number") expMs = exp * 1000;
       } catch {
         // unparsable; the handshake already rejected invalid tokens

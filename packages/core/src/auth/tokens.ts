@@ -13,7 +13,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { SignJWT, jwtVerify } from "jose";
+import { createSigner, createVerifier, TOKEN_ERROR_CODES } from "fast-jwt";
 import type { PrismaClient } from "../db";
 
 export interface JwtConfig {
@@ -48,19 +48,75 @@ export class AuthError extends Error {
 /** Audience for human access tokens (audit M5: separates token classes). */
 export const ACCESS_TOKEN_AUDIENCE = "soulcloud-api";
 
+/**
+ * Signers and verifiers are cached per JWT secret (the secret is fixed for
+ * the process lifetime; tests inject their own). The signer's expiresIn is
+ * baked in at creation, so the signer key must include the TTL (a caller
+ * asking for a different TTL must not silently reuse another one). The
+ * verifier enables fast-jwt's verified-token LRU cache (default
+ * sha256-keyed, so raw tokens are never retained in memory): a 15-minute
+ * access token is re-verified on every API/WS request, and the cache skips
+ * the repeated HMAC work. Cache entries respect the token's own `exp`, so
+ * a cached hit can never outlive the token.
+ *
+ * Types: fast-jwt's `createSigner`/`createVerifier` overload on the key
+ * style (sync key -> sync function, async key fetcher -> async function);
+ * `ReturnType` resolves to the LAST (async) overload, so the sync shapes
+ * are declared explicitly here.
+ */
+type AccessTokenSigner = (payload: Record<string, unknown>) => string;
+type AccessTokenVerifier = (token: string) => unknown;
+
+const signers = new Map<string, AccessTokenSigner>();
+const verifiers = new Map<string, AccessTokenVerifier>();
+
+/** Verifier LRU size (fast-jwt `cache: true` equals 1000). */
+const VERIFIER_CACHE_SIZE = 1000;
+
+function getSigner(config: JwtConfig): AccessTokenSigner {
+  const cacheKey = `${config.secret}:${config.accessTtlSeconds}`;
+  let signer = signers.get(cacheKey);
+  if (!signer) {
+    signer = createSigner({
+      key: config.secret,
+      algorithm: "HS256",
+      // fast-jwt interprets numeric expiresIn as MILLISECONDS (verified
+      // against the source: exp = (iat + expiresIn) / 1000; the README's
+      // "seconds" claim is outdated)
+      expiresIn: config.accessTtlSeconds * 1000,
+      aud: ACCESS_TOKEN_AUDIENCE,
+    });
+    signers.set(cacheKey, signer);
+  }
+  return signer;
+}
+
+function getVerifier(config: JwtConfig): AccessTokenVerifier {
+  // the cacheTTL is baked in at creation, so the key includes the TTL
+  // (same reasoning as the signer)
+  const cacheKey = `${config.secret}:${config.accessTtlSeconds}`;
+  let verifier = verifiers.get(cacheKey);
+  if (!verifier) {
+    verifier = createVerifier({
+      key: config.secret,
+      algorithms: ["HS256"],
+      allowedAud: ACCESS_TOKEN_AUDIENCE,
+      cache: VERIFIER_CACHE_SIZE,
+      // entries never outlive the token itself: `exp` (or a shorter
+      // cacheTTL) bounds every cached verification
+      cacheTTL: config.accessTtlSeconds * 1000,
+    });
+    verifiers.set(cacheKey, verifier);
+  }
+  return verifier;
+}
+
 /** Signs a short-lived access token. */
 export async function signAccessToken(
   config: JwtConfig,
   payload: AccessTokenPayload,
 ): Promise<string> {
-  const key = new TextEncoder().encode(config.secret);
-  return new SignJWT({ username: payload.username })
-    .setProtectedHeader({ alg: "HS256" })
-    .setSubject(payload.sub)
-    .setAudience(ACCESS_TOKEN_AUDIENCE)
-    .setIssuedAt()
-    .setExpirationTime(`${config.accessTtlSeconds}s`)
-    .sign(key);
+  return getSigner(config)({ sub: payload.sub, username: payload.username });
 }
 
 /** Verifies an access token; returns the payload. */
@@ -69,18 +125,14 @@ export async function verifyAccessToken(
   token: string,
 ): Promise<AccessTokenPayload> {
   try {
-    const key = new TextEncoder().encode(config.secret);
-    const { payload } = await jwtVerify(token, key, {
-      algorithms: ["HS256"],
-      audience: ACCESS_TOKEN_AUDIENCE,
-    });
+    const payload = getVerifier(config)(token) as Record<string, unknown>;
     if (typeof payload.sub !== "string" || typeof payload.username !== "string") {
       throw new AuthError("invalid_token", "malformed token payload");
     }
     return { sub: payload.sub, username: payload.username };
   } catch (error) {
     if (error instanceof AuthError) throw error;
-    if ((error as { code?: string }).code === "ERR_JWT_EXPIRED") {
+    if ((error as { code?: string }).code === TOKEN_ERROR_CODES.expired) {
       throw new AuthError("token_expired", "access token expired");
     }
     throw new AuthError("invalid_token", "invalid access token");
