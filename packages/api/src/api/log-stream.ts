@@ -118,11 +118,12 @@ export function getLogStreamHub(
       });
   }
 
-  // per-device in-flight guard: a flush that is still querying/sending
-  // must not run concurrently with a second one (they would both read the
-  // same high-water mark and duplicate events). If a flush is in flight,
-  // the debounce timer re-arms on the next notify and runs after it.
+  // Per-device in-flight guard: a flush that is still querying/sending must
+  // not run concurrently with a second one (they would both read the same
+  // high-water mark and duplicate events). A timer that fires mid-flush
+  // requests one follow-up pass after the current one completes.
   const flushing = new Set<string>();
+  const flushAgain = new Set<string>();
 
   /** Flushes everything above the high-water mark for a device. */
   function flush(deviceId: string) {
@@ -130,10 +131,14 @@ export function getLogStreamHub(
     pendingSince.delete(deviceId);
     const sockets = subscribers.get(deviceId);
     if (!sockets || sockets.size === 0) return;
-    if (flushing.has(deviceId)) return;
+    if (flushing.has(deviceId)) {
+      flushAgain.add(deviceId);
+      return;
+    }
     flushing.add(deviceId);
     void pushEvents(prisma, subscribers, deviceId, lastPushed, log).finally(() => {
       flushing.delete(deviceId);
+      if (flushAgain.delete(deviceId)) schedulePush(deviceId);
     });
   }
 
@@ -239,6 +244,8 @@ export function getLogStreamHub(
       for (const timer of pendingTimers.values()) clearTimeout(timer);
       pendingTimers.clear();
       pendingSince.clear();
+      flushing.clear();
+      flushAgain.clear();
       lastPushed.clear();
       subscribers.clear();
       connectionCount = 0;
@@ -261,8 +268,7 @@ async function pushEvents(
   lastPushed: Map<string, bigint>,
   log: PgListenLog,
 ): Promise<void> {
-  const sockets = subscribers.get(deviceId);
-  if (!sockets || sockets.size === 0) return;
+  if (!subscribers.get(deviceId)?.size) return;
 
   // first push for this device: establish the baseline as the current
   // max (the UI loads history via REST; only NEW events are streamed).
@@ -323,6 +329,11 @@ async function pushEvents(
     return JSON.stringify({ type: "log", device_id: row.deviceId, event });
   });
 
+  // The original subscriber set may have become empty while rows were
+  // fetched and decoded. Re-read it before emitting frames so an
+  // unsubscribed socket never receives a stale batch.
+  const sockets = subscribers.get(deviceId);
+  if (!sockets || sockets.size === 0) return;
   for (const ws of sockets) {
     if (ws.readyState !== 1) continue;
     for (const payload of payloads) {
