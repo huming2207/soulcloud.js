@@ -276,6 +276,49 @@ describe("GET /v1/ws/logs", () => {
     expect(await waitForSettle(client)).toBe("closed");
   });
 
+  // Pins the Elysia 1.4 adapter behavior that a beforeHandle rejection
+  // (4xx status) aborts the upgrade with a plain HTTP response and never
+  // returns 101. If an Elysia upgrade changed that, unauthenticated
+  // sockets could start being accepted silently.
+  describe("handshake rejection semantics (raw HTTP upgrade probes)", () => {
+    const httpBase = wsBase.replace("ws://", "http://");
+
+    function upgradeProbe(
+      path: string,
+      headers: Record<string, string>,
+    ): Promise<Response> {
+      return fetch(`${httpBase}${path}`, {
+        headers: {
+          connection: "upgrade",
+          upgrade: "websocket",
+          ...headers,
+        },
+      });
+    }
+
+    test("invalid token -> HTTP 401, no upgrade", async () => {
+      const res = await upgradeProbe(`/v1/ws/logs?device_id=${deviceId}`, {
+        "sec-websocket-protocol": "soulcloud, not-a-real-token",
+      });
+      expect(res.status).toBe(401);
+      expect(res.headers.get("upgrade")).toBeNull();
+    });
+
+    test("missing subprotocol -> HTTP 401, no upgrade", async () => {
+      const res = await upgradeProbe(`/v1/ws/logs?device_id=${deviceId}`, {});
+      expect(res.status).toBe(401);
+      expect(res.headers.get("upgrade")).toBeNull();
+    });
+
+    test("unknown device -> HTTP 404, no upgrade", async () => {
+      const res = await upgradeProbe(`/v1/ws/logs?device_id=${randomUUID()}`, {
+        "sec-websocket-protocol": `soulcloud, ${accessToken}`,
+      });
+      expect(res.status).toBe(404);
+      expect(res.headers.get("upgrade")).toBeNull();
+    });
+  });
+
   test("ping -> pong", async () => {
     const client = connectWs(wsUrl(deviceId), [WS_PROTOCOL, accessToken]);
     expect(await waitForSettle(client)).toBe("open");
