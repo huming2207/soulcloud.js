@@ -100,6 +100,10 @@ export function getOtaStreamHub(
   const subscribers = new Map<string, Set<ServerWebSocket>>();
   const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const firstNotifyAt = new Map<string, number>();
+  // Serialize full target-list snapshots per job. A new notify while a
+  // query is in flight requests exactly one follow-up snapshot.
+  const pushing = new Set<string>();
+  const pushAgain = new Set<string>();
   let connectionCount = 0;
   let closed = false;
 
@@ -126,9 +130,23 @@ export function getOtaStreamHub(
       setTimeout(() => {
         pendingTimers.delete(jobId);
         firstNotifyAt.delete(jobId);
-        void pushJobUpdate(prisma, subscribers, jobId, log);
+        flushJob(jobId);
       }, delay),
     );
+  }
+
+  /** Serializes full-snapshot refreshes for one OTA job. */
+  function flushJob(jobId: string): void {
+    if (closed) return;
+    if (pushing.has(jobId)) {
+      pushAgain.add(jobId);
+      return;
+    }
+    pushing.add(jobId);
+    void pushJobUpdate(prisma, subscribers, jobId, log).finally(() => {
+      pushing.delete(jobId);
+      if (!closed && pushAgain.delete(jobId)) schedulePush(jobId);
+    });
   }
 
   // LISTEN plumbing is shared with the log/command streams
@@ -175,6 +193,8 @@ export function getOtaStreamHub(
       for (const timer of pendingTimers.values()) clearTimeout(timer);
       pendingTimers.clear();
       firstNotifyAt.clear();
+      pushing.clear();
+      pushAgain.clear();
       connectionCount = 0;
       await listener.close();
       subscribers.clear();
@@ -241,8 +261,7 @@ async function pushJobUpdate(
   jobId: string,
   log: HubLog,
 ): Promise<void> {
-  const sockets = subscribers.get(jobId);
-  if (!sockets || sockets.size === 0) return;
+  if (!subscribers.get(jobId)?.size) return;
 
   let job: Awaited<ReturnType<typeof fetchOtaJobWithTargets>>;
   try {
@@ -253,6 +272,10 @@ async function pushJobUpdate(
   }
   if (!job) return;
 
+  // The original subscribers may have closed while the full target list was
+  // loading. Re-read the set so a closed hub never sends a stale snapshot.
+  const sockets = subscribers.get(jobId);
+  if (!sockets || sockets.size === 0) return;
   const summary: Record<string, number> = {};
   for (const t of job.targets) {
     summary[t.state] = (summary[t.state] ?? 0) + 1;

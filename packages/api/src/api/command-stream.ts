@@ -102,6 +102,10 @@ export function getCommandStreamHub(
   const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // first-notify timestamp per batch, for the max-wait bound
   const firstNotifyAt = new Map<string, number>();
+  // A full batch load can outlive another debounce window. Serialize loads
+  // per batch so a slow older snapshot cannot overtake a newer one.
+  const pushing = new Set<string>();
+  const pushAgain = new Set<string>();
   let connectionCount = 0;
 
   /**
@@ -129,9 +133,24 @@ export function getCommandStreamHub(
       setTimeout(() => {
         pendingTimers.delete(batchId);
         firstNotifyAt.delete(batchId);
-        void pushBatch(prisma, subscribers, batchId, log);
+        flushBatch(batchId);
       }, delay),
     );
+  }
+
+  /** Serializes full-snapshot refreshes for one batch. */
+  function flushBatch(batchId: string): void {
+    if (pushing.has(batchId)) {
+      // A notify arrived after the in-flight query began. Its resulting
+      // state needs one follow-up snapshot, but never a concurrent one.
+      pushAgain.add(batchId);
+      return;
+    }
+    pushing.add(batchId);
+    void pushBatch(prisma, subscribers, batchId, log).finally(() => {
+      pushing.delete(batchId);
+      if (pushAgain.delete(batchId)) schedulePush(batchId);
+    });
   }
 
   const listener = createPgChannelListener(
@@ -177,6 +196,8 @@ export function getCommandStreamHub(
       for (const timer of pendingTimers.values()) clearTimeout(timer);
       pendingTimers.clear();
       firstNotifyAt.clear();
+      pushing.clear();
+      pushAgain.clear();
       await listener.close();
       subscribers.clear();
       connectionCount = 0;
@@ -197,8 +218,7 @@ async function pushBatch(
   batchId: string,
   log: PgListenLog,
 ): Promise<void> {
-  const sockets = subscribers.get(batchId);
-  if (!sockets || sockets.size === 0) return;
+  if (!subscribers.get(batchId)?.size) return;
 
   let loaded: Awaited<ReturnType<typeof loadCommandBatchDetail>>;
   try {
@@ -211,6 +231,10 @@ async function pushBatch(
   }
   if (!loaded) return;
 
+  // The original subscribers may have closed while the full snapshot was
+  // loading. Re-read the set so a closed hub never writes stale frames.
+  const sockets = subscribers.get(batchId);
+  if (!sockets || sockets.size === 0) return;
   const payload = JSON.stringify({ type: "batch", ...loaded.detail });
   for (const ws of sockets) {
     if (ws.readyState === 1) {
