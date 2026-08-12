@@ -59,19 +59,36 @@ export interface OtaTokenPayload {
 /** Audience for OTA download credentials (audit M5: token class separation). */
 export const OTA_TOKEN_AUDIENCE = "ota-download";
 
+/**
+ * Signer/verifier caches (perf): the broker mints one token per published
+ * notice and the API verifies one per device download, so instances are
+ * reused instead of rebuilt per call. Key includes the TTL for the signer
+ * (expiresIn is baked in at creation; see auth/tokens.ts).
+ */
+type OtaSigner = (payload: Record<string, unknown>) => string;
+type OtaVerifier = (token: string) => unknown;
+
+const otaSigners = new Map<string, OtaSigner>();
+const otaVerifiers = new Map<string, OtaVerifier>();
+
 /** Signs a per-device OTA download credential (HS256, short-lived). */
 export async function signOtaToken(
   secret: string,
   payload: OtaTokenPayload,
   ttlSeconds: number,
 ): Promise<string> {
-  const signer = createSigner({
-    key: secret,
-    algorithm: "HS256",
-    // fast-jwt interprets numeric expiresIn as MILLISECONDS
-    expiresIn: ttlSeconds * 1000,
-    aud: OTA_TOKEN_AUDIENCE,
-  });
+  const cacheKey = `${secret}:${ttlSeconds}`;
+  let signer = otaSigners.get(cacheKey);
+  if (!signer) {
+    signer = createSigner({
+      key: secret,
+      algorithm: "HS256",
+      // fast-jwt interprets numeric expiresIn as MILLISECONDS
+      expiresIn: ttlSeconds * 1000,
+      aud: OTA_TOKEN_AUDIENCE,
+    });
+    otaSigners.set(cacheKey, signer);
+  }
   return signer({
     sub: payload.deviceUid,
     releaseId: payload.releaseId,
@@ -88,14 +105,20 @@ export async function verifyOtaToken(
   secret: string,
   token: string,
 ): Promise<OtaTokenPayload | null> {
-  try {
-    const verifier = createVerifier({
+  let verifier = otaVerifiers.get(secret);
+  if (!verifier) {
+    verifier = createVerifier({
       key: secret,
       algorithms: ["HS256"],
       allowedAud: OTA_TOKEN_AUDIENCE,
-      requiredClaims: ["releaseId", "jobId"],
+      // see tokens.ts: fast-jwt skips allowedAud without an aud claim;
+      // jose rejected it. Require the claims explicitly.
+      requiredClaims: ["aud", "exp", "releaseId", "jobId"],
     });
-    const payload = verifier(token);
+    otaVerifiers.set(secret, verifier);
+  }
+  try {
+    const payload = verifier(token) as Record<string, unknown>;
     if (
       typeof payload.sub !== "string" ||
       typeof payload.releaseId !== "string" ||

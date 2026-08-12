@@ -101,6 +101,11 @@ function getVerifier(config: JwtConfig): AccessTokenVerifier {
       key: config.secret,
       algorithms: ["HS256"],
       allowedAud: ACCESS_TOKEN_AUDIENCE,
+      // fast-jwt skips allowedAud when the token has NO aud claim (unlike
+      // jose, which treated aud as required). Making aud/exp required
+      // restores the jose semantics: a token without an audience (or
+      // without expiry) is rejected.
+      requiredClaims: ["aud", "exp"],
       cache: VERIFIER_CACHE_SIZE,
       // entries never outlive the token itself: `exp` (or a shorter
       // cacheTTL) bounds every cached verification
