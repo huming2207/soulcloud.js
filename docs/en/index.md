@@ -23,6 +23,7 @@ and what is deliberately left open.
 | [security.md](security.md) | Threat model, DDoS guards, audit history (3 review rounds) |
 | [testing.md](testing.md) | Test strategy, fixtures, CI |
 | [web.md](web.md) | Web console: stack, auth flow, pages, i18n, tests |
+| [undocumented-api-dependencies.md](undocumented-api-dependencies.md) | Every non-contract dependency (Elysia/Bun/Prisma/mqtt-packet internals) + the upgrade checklist |
 
 ## Quick facts
 
