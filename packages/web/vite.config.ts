@@ -20,6 +20,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // listen on all interfaces: the dev console must be reachable from
+    // other machines on the LAN (the API and broker already bind
+    // 0.0.0.0; the dev-only proxy forwards /v1 and the WS streams)
+    host: true,
     proxy,
   },
   preview: {
