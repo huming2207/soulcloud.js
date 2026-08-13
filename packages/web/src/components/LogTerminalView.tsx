@@ -239,7 +239,9 @@ export function LogTerminalView({ deviceId }: { deviceId: string }) {
         ref={containerRef}
         data-testid="log-terminal"
         sx={{
-          height: 480,
+          // taller terminal: follows the viewport (up to a cap) so it fills
+          // the screen without pushing the rest of the page below the fold
+          height: "min(65vh, 760px)",
           bgcolor: isDark ? DARK_TERMINAL_THEME.background : LIGHT_TERMINAL_THEME.background,
           borderRadius: 1,
           overflow: "hidden",
