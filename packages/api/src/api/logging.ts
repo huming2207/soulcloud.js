@@ -43,13 +43,33 @@ const EXPORT_DEFAULT_ROWS = 50_000;
 /** Rows per keyset batch (one query + one decode pass per chunk). */
 const EXPORT_BATCH_ROWS = 500;
 
-/** CSV cell escaping (RFC 4180: quote when the value contains commas,
- *  quotes or newlines; double inner quotes). */
+/**
+ * CSV cell escaping (RFC 4180: quote when the value contains commas,
+ * quotes or newlines; double inner quotes) plus formula-injection
+ * hardening (CWE-1236): tag/message are DEVICE-CONTROLLED strings and a
+ * cell starting with = + - @ (or tab/CR) is evaluated as a formula by
+ * Excel/Sheets - prefix those with a single quote.
+ */
 function csvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
-  const s = String(value);
+  let s = String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   if (!/[",\n\r]/.test(s)) return s;
   return `"${s.replace(/"/g, '""')}"`;
+}
+
+// exported for the unit tests (formula-injection / RFC 4180 pins)
+export { csvCell as __csvCellForTests };
+
+/**
+ * Safe ASCII fallback for the Content-Disposition filename: the device
+ * uid can legally contain quotes/semicolons (which break or inject the
+ * header) and non-ASCII text (which Bun rejects with 500 on the
+ * response). Replace anything outside printable ASCII plus the sane
+ * filename set with underscores.
+ */
+function safeExportFilename(deviceUid: string): string {
+  return deviceUid.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64) || "device";
 }
 
 export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
@@ -380,14 +400,18 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
 
         set.headers["content-type"] = "text/csv; charset=utf-8";
         set.headers["content-disposition"] =
-          `attachment; filename="${device.deviceUid}-logs.csv"`;
+          `attachment; filename="${safeExportFilename(device.deviceUid)}-logs.csv"`;
 
-        // Stream the export: keyset pagination over raw_log_events (id
-        // ascending within the receivedAt window) with on-demand decoding,
-        // so a large export never buffers the whole result in memory.
+        // Stream the export: (received_at, id) keyset pagination within
+        // the window, served by raw_log_events_device_time_id_idx - an
+        // id-only cursor made the planner scan every row of the device's
+        // history BEFORE the window (measured 140ms + ~120MB read per
+        // request on a 1M-row device). The tuple cursor keeps the scan an
+        // index-only range probe (~0.1ms) no matter where the window sits.
         const encoder = new TextEncoder();
         const HEADER = "received_at,device_time_ms,sequence,packet_type,level,tag,message,decode_state\n";
-        let cursor = 0n;
+        let cursorTs: Date | null = null;
+        let cursorId = 0n;
         let emitted = 0;
         let headerSent = false;
         const stream = new ReadableStream<Uint8Array>({
@@ -401,15 +425,32 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
               controller.enqueue(encoder.encode(HEADER));
             }
             const batchSize = Math.min(EXPORT_BATCH_ROWS, limit.data - emitted);
-            const events = await prisma.rawLogEvent.findMany({
-              where: {
-                deviceId: device.id,
-                id: { gt: cursor },
-                receivedAt: { gte: fromDate, lte: toDate },
-              },
-              orderBy: { id: "asc" },
-              take: batchSize,
-            });
+            let events: Awaited<ReturnType<typeof prisma.rawLogEvent.findMany>>;
+            try {
+              events = await prisma.rawLogEvent.findMany({
+                where: {
+                  deviceId: device.id,
+                  receivedAt: { gte: fromDate, lte: toDate },
+                  ...(cursorTs
+                    ? {
+                        OR: [
+                          { receivedAt: { gt: cursorTs } },
+                          { receivedAt: cursorTs, id: { gt: cursorId } },
+                        ],
+                      }
+                    : {}),
+                },
+                orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
+                take: batchSize,
+              });
+            } catch (error) {
+              // a mid-stream failure can no longer change the status code
+              // (headers are out): mark the CSV as aborted so a truncated
+              // export is never mistaken for a complete one, then error
+              controller.enqueue(encoder.encode("# export aborted: database error\n"));
+              controller.error(error as Error);
+              return;
+            }
             if (events.length === 0) {
               controller.close();
               return;
@@ -434,7 +475,8 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
               );
             }
             controller.enqueue(encoder.encode(lines.join("\n") + "\n"));
-            cursor = events[events.length - 1]!.id;
+            cursorTs = events[events.length - 1]!.receivedAt;
+            cursorId = events[events.length - 1]!.id;
             emitted += events.length;
           },
         });
@@ -442,7 +484,7 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           status: 200,
           headers: {
             "content-type": "text/csv; charset=utf-8",
-            "content-disposition": `attachment; filename="${device.deviceUid}-logs.csv"`,
+            "content-disposition": `attachment; filename="${safeExportFilename(device.deviceUid)}-logs.csv"`,
           },
         });
       } catch (error) {

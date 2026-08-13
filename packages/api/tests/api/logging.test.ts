@@ -563,6 +563,16 @@ describe("GET /v1/devices/:id/logs/export", () => {
     expect(res.status).toBe(401);
   });
 
+  test("non-member cannot export the device's logs (403)", async () => {
+    const outsider = await registerUser();
+    const res = await app.handle(
+      new Request(exportUrl("from=2026-08-01T00:00:00Z"), {
+        headers: { authorization: `Bearer ${outsider.accessToken}` },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
   test("from is required and must be ISO 8601 (400)", async () => {
     for (const qs of ["", "from=not-a-date"]) {
       const res = await app.handle(new Request(exportUrl(qs), { headers: authHeaders() }));
@@ -630,6 +640,86 @@ describe("GET /v1/devices/:id/logs/export", () => {
     await prisma.rawLogEvent.deleteMany({
       where: { deviceId, receivedAt: { gte: new Date("2026-08-12T00:00:00Z") } },
     });
+  });
+
+  test("invalid limits are rejected (400)", async () => {
+    for (const bad of ["0", "-5", "100001", "abc"]) {
+      const res = await app.handle(
+        new Request(
+          exportUrl(`from=2026-08-01T00:00:00Z&limit=${bad}`),
+          { headers: authHeaders() },
+        ),
+      );
+      expect(res.status, `limit=${bad}`).toBe(400);
+    }
+  });
+
+  test("an empty range exports only the header", async () => {
+    const res = await app.handle(
+      new Request(
+        exportUrl("from=2026-09-01T00:00:00Z&to=2026-09-01T01:00:00Z"),
+        { headers: authHeaders() },
+      ),
+    );
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text.trim().split("\n")).toHaveLength(1); // header only
+  });
+
+  test("exports more than one keyset batch (501 rows, 2 pulls)", async () => {
+    const base = new Date("2026-08-15T00:00:00Z").getTime();
+    await prisma.rawLogEvent.createMany({
+      data: Array.from({ length: 501 }, (_, i) => ({
+        deviceId,
+        deviceTimeMs: i,
+        sequence: i % 65536,
+        packetType: 0,
+        level: 3,
+        tagId: 0x40000009,
+        fmtId: 0x40000000,
+        rawPacket: new Uint8Array(24),
+        decodeState: "decodable",
+        receivedAt: new Date(base + i * 1000),
+      })),
+    });
+    const res = await app.handle(
+      new Request(
+        exportUrl("from=2026-08-15T00:00:00Z&to=2026-08-15T01:00:00Z"),
+        { headers: authHeaders() },
+      ),
+    );
+    expect(res.status).toBe(200);
+    const lines = (await res.text()).trim().split("\n");
+    expect(lines.length).toBe(502); // header + 501 rows, two 500-row batches
+    await prisma.rawLogEvent.deleteMany({
+      where: { deviceId, receivedAt: { gte: new Date("2026-08-15T00:00:00Z") } },
+    });
+  });
+});
+
+describe("csvCell escaping (export)", () => {
+  const { __csvCellForTests } = require("../../src/api/logging") as {
+    __csvCellForTests: (v: unknown) => string;
+  };
+  const cell = __csvCellForTests;
+
+  test("RFC 4180 quoting", () => {
+    expect(cell("plain")).toBe("plain");
+    expect(cell("a,b")).toBe('"a,b"');
+    expect(cell('say "hi"')).toBe('"say ""hi"""');
+    expect(cell("line1\nline2")).toBe('"line1\nline2"');
+    expect(cell(null)).toBe("");
+  });
+
+  test("formula-injection prefixes (CWE-1236)", () => {
+    expect(cell("=HYPERLINK(\"http://evil\")")).toBe("\"'=HYPERLINK(\"\"http://evil\"\")\"");
+    expect(cell("=1+1")).toBe("'=1+1");
+    expect(cell("+SUM(A1)")).toBe("'+SUM(A1)");
+    expect(cell("-cmd")).toBe("'-cmd");
+    expect(cell("@import")).toBe("'@import");
+    // benign values stay untouched
+    expect(cell("2026-08-13T00:00:00Z")).toBe("2026-08-13T00:00:00Z");
+    expect(cell("tick=3")).toBe("tick=3");
   });
 });
 
