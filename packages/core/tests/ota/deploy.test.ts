@@ -7,6 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { prisma } from "../../src/db";
+import { createPrisma } from "../../src/db";
 import {
   MAX_OTA_TARGETS,
   OTA_TOKEN_AUDIENCE,
@@ -358,6 +359,55 @@ describe("target state machine", () => {
     const row = await prisma.otaTarget.findUnique({ where: { id: targetId } });
     expect(row?.state).toBe("expired");
     expect(await leaseNextOtaTarget(prisma, 60_000)).toBeNull();
+  });
+
+  test("expire sweep never kills a target leased in flight (EvalPlanQual re-check)", async () => {
+    // Regression pin for the batched sweep: the state/time predicates must
+    // live in the OUTER where, not only the LIMIT subquery. Under READ
+    // COMMITTED, PostgreSQL re-checks only outer predicates on rows that
+    // changed while the UPDATE waited for their lock; an id-IN list alone
+    // would re-check as true and sweep a concurrently leased target.
+    const targetId = await freshTarget();
+    await prisma.otaTarget.update({
+      where: { id: targetId },
+      data: {
+        expiresAt: new Date(Date.now() - 1000),
+        availableAt: new Date(Date.now() - 1000),
+      },
+    });
+
+    // connection A: lease the target and hold the row lock uncommitted
+    // while the sweep runs on the main client
+    let releaseLease!: () => void;
+    const leaseGate = new Promise<void>((resolve) => (releaseLease = resolve));
+    let leaseHeld!: () => void;
+    const held = new Promise<void>((resolve) => (leaseHeld = resolve));
+    const concurrent = createPrisma(process.env.DATABASE_URL!);
+    const leaseDone = concurrent.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        UPDATE ota_targets
+        SET state = 'leased',
+            lease_expires_at = now() + interval '60 seconds'
+        WHERE id = ${targetId}::uuid
+      `;
+      leaseHeld(); // the row lock is now held (uncommitted)
+      await leaseGate;
+    });
+
+    // the sweep's subquery sees the uncommitted pending+expired row, then
+    // blocks on A's row lock; once A commits, the outer predicate must
+    // see leased + a live lease and skip the row
+    await held; // guarantee A holds the lock BEFORE the sweep starts
+    const sweep = expireOtaTargets(prisma);
+    await Bun.sleep(150); // let the sweep reach the lock wait
+    releaseLease();
+    await leaseDone;
+    const swept = await sweep;
+
+    expect(swept).toBe(0);
+    const row = await prisma.otaTarget.findUnique({ where: { id: targetId } });
+    expect(row?.state).toBe("leased");
+    await concurrent.$disconnect();
   });
 });
 
