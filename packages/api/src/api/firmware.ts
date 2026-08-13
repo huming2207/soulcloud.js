@@ -503,7 +503,7 @@ export function createFirmwareRoutes(
           return { error: "invalid_download_token", message: "invalid download token" };
         }
         const authHeader = request.headers.get("authorization");
-        let release: { projectId: string; binBytes: Uint8Array; binSize: number } | null = null;
+        let release: { id: string; projectId: string; binSize: number } | null = null;
         /**
          * Device download path: OTA JWT claims -> release + device checks.
          * Returns the release, or null after responding with an error.
@@ -515,7 +515,9 @@ export function createFirmwareRoutes(
           }
           const rel = await prisma.firmwareRelease.findUnique({
             where: { id: id.data },
-            select: { projectId: true, binBytes: true, binSize: true },
+            // the bin bytes are streamed from the database in chunks
+            // (see the response below), never loaded whole here
+            select: { id: true, projectId: true, binSize: true },
           });
           if (!rel) {
             set.status = 404;
@@ -543,7 +545,7 @@ export function createFirmwareRoutes(
           if (authUser) {
             release = await prisma.firmwareRelease.findUnique({
               where: { id: id.data },
-              select: { projectId: true, binBytes: true, binSize: true },
+              select: { id: true, projectId: true, binSize: true },
             });
             if (!release) {
               set.status = 404;
@@ -583,13 +585,35 @@ export function createFirmwareRoutes(
         set.status = 200;
         set.headers["content-type"] = "application/octet-stream";
         set.headers["content-length"] = String(release.binSize);
-        // Return the Prisma Buffer wrapped in an explicit Response:
-        // (a) no application-level second copy (peak memory per concurrent
-        // download is one buffer instead of two - Bun's Response
-        // construction still holds its own internal copy);
-        // (b) the explicit Response bypasses Elysia's body sniffing, which
-        // would JSON-serialize a Buffer whose first byte is '{' or '['.
-        return new Response(release.binBytes, {
+        // Stream the bin from PostgreSQL in bounded chunks instead of
+        // loading the whole row: peak memory per concurrent download is
+        // one chunk (4 MiB) instead of the full image (up to 32 MiB) plus
+        // a Response copy. The explicit Response also bypasses Elysia's
+        // body sniffing, which would JSON-serialize a Buffer whose first
+        // byte is '{' or '['.
+        const CHUNK_BYTES = 4 * 1024 * 1024;
+        let offset = 0;
+        const stream = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (offset >= release.binSize) {
+              controller.close();
+              return;
+            }
+            const rows = await prisma.$queryRaw<Array<{ chunk: Uint8Array }>>`
+              SELECT substr(bin_bytes, ${offset + 1}, ${CHUNK_BYTES}) AS chunk
+              FROM firmware_releases
+              WHERE id = ${release.id}::uuid
+            `;
+            const chunk = rows[0]?.chunk;
+            if (!chunk || chunk.byteLength === 0) {
+              controller.close();
+              return;
+            }
+            offset += chunk.byteLength;
+            controller.enqueue(Buffer.from(chunk));
+          },
+        });
+        return new Response(stream, {
           status: 200,
           headers: {
             "content-type": "application/octet-stream",
