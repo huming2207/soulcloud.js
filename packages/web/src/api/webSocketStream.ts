@@ -26,6 +26,8 @@ export interface UseWebSocketStreamOptions {
 }
 
 const RETRY_MAX_MS = 30_000;
+/** Keepalive ping cadence (matches the server-side expiry re-check). */
+const HEARTBEAT_MS = 30_000;
 /** ±25% jitter on reconnect delays so a whole fleet of tabs does not
  *  reconnect in synchronized waves after a server restart. */
 const RETRY_JITTER_RATIO = 0.25;
@@ -90,6 +92,20 @@ export function useWebSocketStream(
       const ws = new WebSocket(url, subprotocols);
       socketRef.current = ws;
 
+      // Keepalive: send a plain "ping" every 30s (the server answers
+      // {type:"pong"}). Idle sockets are otherwise prime targets for
+      // proxy idle-timeout eviction, which would surface as silent
+      // reconnect churn.
+      const heartbeat = setInterval(() => {
+        if (ws.readyState === 1) {
+          try {
+            ws.send("ping");
+          } catch {
+            // closing; the close event drives the reconnect
+          }
+        }
+      }, HEARTBEAT_MS);
+
       ws.onmessage = (ev: MessageEvent) => {
         if (disposed) return;
         let frame: unknown;
@@ -113,6 +129,7 @@ export function useWebSocketStream(
       ws.onerror = () => {};
 
       ws.onclose = (ev?: CloseEvent) => {
+        clearInterval(heartbeat);
         if (disposed) return;
         setStatus("error");
         if (ev?.code === ACCESS_REVOKED_CLOSE_CODE) {

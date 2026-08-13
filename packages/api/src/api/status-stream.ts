@@ -102,6 +102,11 @@ export function getStatusStreamHub(
     }
   }
 
+  // The known map only grew when subscribe() pruned it; without
+  // subscribers a device-status-heavy broker keeps every uid forever.
+  // Prune on a fixed cadence regardless of subscriber activity.
+  const pruneTimer = setInterval(() => pruneExpiredKnown(Date.now()), KNOWN_TTL_MS);
+
   /** Pushes the resolved status for a uid to every subscriber. */
   async function resolveAndPush(uid: string, online: boolean): Promise<void> {
     let device: { projectId: string } | null = null;
@@ -234,6 +239,7 @@ export function getStatusStreamHub(
       if (set.size === 0) subscribers.delete(projectId.toLowerCase());
     },
     async close() {
+      clearInterval(pruneTimer);
       await listener.close();
       for (const timer of pendingTimers.values()) clearTimeout(timer);
       pendingTimers.clear();
