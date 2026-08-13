@@ -40,6 +40,9 @@ const envSchema = z.object({
   /// at least concurrency so overload is rejected instead of accumulating.
   UPLINK_WORK_CONCURRENCY: z.coerce.number().int().positive().default(16),
   UPLINK_WORK_CAPACITY: z.coerce.number().int().positive().default(1024),
+  /// Total buffered payload bytes across running + queued uplinks (memory
+  /// ceiling; a count-only cap could still retain ~256MB of buffers).
+  UPLINK_WORK_MAX_BYTES: z.coerce.number().int().positive().default(32 * 1024 * 1024),
 });
 
 export type BrokerConfig = BaseConfig & z.infer<typeof envSchema>;
@@ -48,6 +51,9 @@ export function loadBrokerConfig(): BrokerConfig {
   const config = loadEnv(envSchema);
   if (config && config.UPLINK_WORK_CAPACITY < config.UPLINK_WORK_CONCURRENCY) {
     throw new Error("UPLINK_WORK_CAPACITY must be >= UPLINK_WORK_CONCURRENCY");
+  }
+  if (config && config.UPLINK_WORK_MAX_BYTES < config.UPLINK_MAX_PACKET_BYTES) {
+    throw new Error("UPLINK_WORK_MAX_BYTES must be >= UPLINK_MAX_PACKET_BYTES");
   }
   // MQTT_COMMAND_RETAIN replays the last command to any device that
   // (re)subscribes. Retained state is never cleared and the device-side

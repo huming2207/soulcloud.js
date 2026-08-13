@@ -45,19 +45,33 @@ export interface DispatchGuardOptions {
   workConcurrency?: number;
   /** Maximum executing + queued uplinks retained by this broker process. */
   workCapacity?: number;
+  /**
+   * Maximum TOTAL payload bytes retained by executing + queued uplinks.
+   * A count-only cap would still allow capacity x maxPacketBytes (e.g.
+   * 1024 x 256KB = 256MB) of buffers per process. Defaults to 32 MiB.
+   */
+  workMaxBytes?: number;
 }
 
 const DEFAULT_WORK_CONCURRENCY = 16;
 const DEFAULT_WORK_CAPACITY = 1024;
+const DEFAULT_WORK_MAX_BYTES = 32 * 1024 * 1024;
 
 export interface UplinkWork {
   deviceUid: string;
+  /** Payload size in bytes (for the byte budget below). */
+  byteSize: number;
   run: () => Promise<void>;
 }
 
 /**
  * Bounded, per-device-ordered uplink executor. Different devices may run in
  * parallel up to `concurrency`; one device never has two handlers in flight.
+ *
+ * Admission is bounded by BOTH work count (`capacity`) and total buffered
+ * bytes (`maxBytes`): a count-only cap would still let the queue retain
+ * capacity x max-packet-size (e.g. 1024 x 256KB = 256MB) of payload
+ * buffers per broker process.
  */
 export class UplinkWorkQueue {
   private readonly byDevice = new Map<string, UplinkWork[]>();
@@ -65,10 +79,12 @@ export class UplinkWorkQueue {
   private readonly readyDevices: string[] = [];
   private running = 0;
   private outstanding = 0;
+  private outstandingBytes = 0;
 
   constructor(
     private readonly concurrency: number,
     private readonly capacity: number,
+    private readonly maxBytes: number,
   ) {
     if (!Number.isInteger(concurrency) || concurrency <= 0) {
       throw new RangeError("uplink work concurrency must be a positive integer");
@@ -76,11 +92,15 @@ export class UplinkWorkQueue {
     if (!Number.isInteger(capacity) || capacity < concurrency) {
       throw new RangeError("uplink work capacity must be an integer >= concurrency");
     }
+    if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
+      throw new RangeError("uplink work maxBytes must be a positive integer");
+    }
   }
 
-  /** Returns false when accepting the work would exceed the hard capacity. */
+  /** Returns false when accepting the work would exceed a hard limit. */
   enqueue(work: UplinkWork): boolean {
     if (this.outstanding >= this.capacity) return false;
+    if (this.outstandingBytes + work.byteSize > this.maxBytes) return false;
     let queue = this.byDevice.get(work.deviceUid);
     if (!queue) {
       queue = [];
@@ -89,6 +109,7 @@ export class UplinkWorkQueue {
     const wasEmpty = queue.length === 0;
     queue.push(work);
     this.outstanding += 1;
+    this.outstandingBytes += work.byteSize;
     if (wasEmpty && !this.activeDevices.has(work.deviceUid)) {
       this.readyDevices.push(work.deviceUid);
     }
@@ -108,6 +129,7 @@ export class UplinkWorkQueue {
       void work.run().finally(() => {
         this.running -= 1;
         this.outstanding -= 1;
+        this.outstandingBytes -= work.byteSize;
         this.activeDevices.delete(deviceUid);
         if (queue.length > 0) {
           this.readyDevices.push(deviceUid);
@@ -148,6 +170,7 @@ export function attachDispatch(
   const workQueue = new UplinkWorkQueue(
     guards?.workConcurrency ?? DEFAULT_WORK_CONCURRENCY,
     guards?.workCapacity ?? DEFAULT_WORK_CAPACITY,
+    guards?.workMaxBytes ?? DEFAULT_WORK_MAX_BYTES,
   );
 
   aedes.on("publish", (packet, client) => {
@@ -183,6 +206,7 @@ export function attachDispatch(
 
     const accepted = workQueue.enqueue({
       deviceUid: client.id,
+      byteSize: payload.length,
       run: async () => {
         try {
           await handleUplink(prisma, client.id, packet.topic, payload, log, parsedLog);

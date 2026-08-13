@@ -100,7 +100,7 @@ afterAll(async () => {
 
 describe("attachDispatch guards", () => {
   test("global work queue is bounded and serializes each device", async () => {
-    const queue = new UplinkWorkQueue(2, 3);
+    const queue = new UplinkWorkQueue(2, 3, 1024);
     const order: string[] = [];
     let releaseFirst!: () => void;
     const firstBlocked = new Promise<void>((resolve) => {
@@ -109,6 +109,7 @@ describe("attachDispatch guards", () => {
 
     expect(queue.enqueue({
       deviceUid: "device-a",
+      byteSize: 1,
       run: async () => {
         order.push("a1-start");
         await firstBlocked;
@@ -117,14 +118,17 @@ describe("attachDispatch guards", () => {
     })).toBe(true);
     expect(queue.enqueue({
       deviceUid: "device-a",
+      byteSize: 1,
       run: async () => { order.push("a2"); },
     })).toBe(true);
     expect(queue.enqueue({
       deviceUid: "device-b",
+      byteSize: 1,
       run: async () => { order.push("b1"); },
     })).toBe(true);
     expect(queue.enqueue({
       deviceUid: "device-c",
+      byteSize: 1,
       run: async () => { order.push("c1"); },
     })).toBe(false);
 
@@ -133,6 +137,50 @@ describe("attachDispatch guards", () => {
     releaseFirst();
     await Bun.sleep(5);
     expect(order).toEqual(["a1-start", "b1", "a1-end", "a2"]);
+  });
+
+  test("the byte budget rejects work that would exceed it", async () => {
+    const queue = new UplinkWorkQueue(1, 100, 100);
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    expect(
+      queue.enqueue({
+        deviceUid: "device-a",
+        byteSize: 80,
+        run: async () => {
+          await firstBlocked;
+        },
+      }),
+    ).toBe(true);
+    // 80 + 30 > 100: rejected even though the count limit would allow it
+    expect(
+      queue.enqueue({
+        deviceUid: "device-b",
+        byteSize: 30,
+        run: async () => {},
+      }),
+    ).toBe(false);
+    // 80 + 20 <= 100: accepted
+    expect(
+      queue.enqueue({
+        deviceUid: "device-c",
+        byteSize: 20,
+        run: async () => {},
+      }),
+    ).toBe(true);
+    // the budget frees up when work completes
+    releaseFirst();
+    await Bun.sleep(5);
+    expect(
+      queue.enqueue({
+        deviceUid: "device-d",
+        byteSize: 100,
+        run: async () => {},
+      }),
+    ).toBe(true);
   });
 
   test("drops oversized uplink packets before any handling", async () => {

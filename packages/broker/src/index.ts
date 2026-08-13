@@ -84,6 +84,7 @@ attachDispatch(aedes, prisma, logger, {
   rateBurst: config.UPLINK_RATE_BURST,
   workConcurrency: config.UPLINK_WORK_CONCURRENCY,
   workCapacity: config.UPLINK_WORK_CAPACITY,
+  workMaxBytes: config.UPLINK_WORK_MAX_BYTES,
 });
 const poller = startCommandPoller(
   registry,
