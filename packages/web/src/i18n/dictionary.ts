@@ -551,11 +551,6 @@ export const en: Record<DictKey, string> = {
   "logs.exportTo": "To",
   "logs.exportDownload": "Download",
   "logs.exportError": "Export failed, please retry",
-  "logs.exportTitle": "导出日志",
-  "logs.exportFrom": "开始时间",
-  "logs.exportTo": "结束时间",
-  "logs.exportDownload": "下载",
-  "logs.exportError": "导出失败，请重试",
   "query.retry": "Retry",
 
   "fw.title": "Firmware",

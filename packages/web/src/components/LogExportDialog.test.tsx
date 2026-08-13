@@ -43,7 +43,7 @@ describe("LogExportDialog", () => {
         status: 200,
       }),
     );
-    globalThis.fetch = fetchMock;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
     setAccessToken("tok-123");
 
     // capture anchor clicks (happy-dom has no real download)
@@ -67,7 +67,7 @@ describe("LogExportDialog", () => {
       await waitFor(() => expect(clickMock).toHaveBeenCalled());
       expect(anchor.download).toBe("demo-device-lan-42-logs.csv");
       expect(fetchMock).toHaveBeenCalled();
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toContain("/v1/devices/dev-1/logs/export?from=");
       expect(url).toContain("&to=");
       expect((init.headers as Record<string, string>).authorization).toBe("Bearer tok-123");
@@ -80,7 +80,7 @@ describe("LogExportDialog", () => {
   });
 
   test("shows the error hint and stays open on a failed export", async () => {
-    globalThis.fetch = mock(async () => new Response("{}", { status: 403 }));
+    globalThis.fetch = mock(async () => new Response("{}", { status: 403 })) as unknown as typeof fetch;
     setAccessToken("tok-123");
     const onClose = mock(() => {});
     render(
