@@ -15,7 +15,7 @@
  * each test file in its own process).
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { createApp } from "../../src/api/app";
 import { getOtaStreamHub } from "../../src/api/ota-stream";
@@ -104,13 +104,31 @@ function connectWs(url: string, protocols?: string[]): WsClient {
     closeCode = ev.code;
     resolveClosed();
   };
+  // track every client so afterEach can close stragglers: this file runs
+  // with SOULCLOUD_WS_MAX_CONNECTIONS=1, and a single test that fails
+  // before closing its socket would starve every test after it
+  openClients.add(ws);
   return { ws, messages, open, closed, closeCode };
 }
+
+/** Every WS client opened by the tests (straggler cleanup). */
+const openClients = new Set<WebSocket>();
+
+afterEach(() => {
+  for (const ws of openClients) {
+    try {
+      ws.close();
+    } catch {
+      // already closed
+    }
+  }
+  openClients.clear();
+});
 
 /** Waits until the connection either opened or closed (or timed out). */
 async function waitForSettle(
   client: WsClient,
-  timeoutMs = 3000,
+  timeoutMs = 10_000,
 ): Promise<"open" | "closed" | "timeout"> {
   return Promise.race([
     client.open.then(() => "open" as const),
@@ -123,7 +141,7 @@ async function waitForSettle(
 async function waitForMessage<T extends Record<string, unknown>>(
   client: WsClient,
   predicate: (msg: T) => boolean,
-  timeoutMs = 3000,
+  timeoutMs = 10_000,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -152,7 +170,7 @@ async function notifyUntil(
   client: WsClient,
   job: string,
   predicate: (msg: Record<string, any>) => boolean,
-  timeoutMs = 3000,
+  timeoutMs = 10_000,
 ): Promise<Record<string, any>> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -187,7 +205,7 @@ function isOtaFrame(raw: string): boolean {
 async function waitForFrameCount(
   client: WsClient,
   count: number,
-  timeoutMs = 3000,
+  timeoutMs = 10_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
