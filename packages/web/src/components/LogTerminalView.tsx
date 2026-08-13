@@ -242,11 +242,28 @@ export function LogTerminalView({ deviceId }: { deviceId: string }) {
           // taller terminal: follows the viewport (up to a cap) so it fills
           // the screen without pushing the rest of the page below the fold
           height: "min(65vh, 760px)",
+          // color-scheme makes the BROWSER draw the xterm scrollbar in the
+          // matching shade (the default light scrollbar showed as a white
+          // stripe inside the dark terminal)
+          colorScheme: isDark ? "dark" : "light",
           bgcolor: isDark ? DARK_TERMINAL_THEME.background : LIGHT_TERMINAL_THEME.background,
           borderRadius: 1,
           overflow: "hidden",
           p: 1,
-          "& .xterm": { height: "100%" },
+          // do NOT force .xterm to 100% height: FitAddon sizes the terminal
+          // (rows x line height) and a CSS stretch leaves a gap between the
+          // canvas and the container edge
+          "& .xterm-viewport": {
+            backgroundColor: isDark ? DARK_TERMINAL_THEME.background : LIGHT_TERMINAL_THEME.background,
+            "&::-webkit-scrollbar": { width: "10px" },
+            "&::-webkit-scrollbar-track": {
+              background: isDark ? "#1e1e1e" : "#f0f0f0",
+            },
+            "&::-webkit-scrollbar-thumb": {
+              background: isDark ? "#555555" : "#b0b0b0",
+              borderRadius: "5px",
+            },
+          },
         }}
       />
     </Stack>
