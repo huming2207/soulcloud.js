@@ -480,14 +480,19 @@ async function advanceOneRollout(
     }
 
     // ---- judge the active phase ------------------------------------------
-    const job = active.jobId
-      ? await prisma.otaJob.findUnique({
-          where: { id: active.jobId },
-          select: { id: true, targets: { select: { state: true } } },
+    // Aggregate the job's target states instead of loading every target
+    // row just to count them: one groupBy returns ~9 rows regardless of
+    // whether the phase covers 10 or 1000 devices.
+    const grouped = active.jobId
+      ? await prisma.otaTarget.groupBy({
+          by: ["state"],
+          _count: { _all: true },
+          where: { jobId: active.jobId },
         })
-      : null;
-    const actual = job?.targets.length ?? 0;
-    const completed = job?.targets.filter((t) => t.state === "completed").length ?? 0;
+      : [];
+    const actual = grouped.reduce((sum, g) => sum + g._count._all, 0);
+    const completed =
+      grouped.find((g) => g.state === "completed")?._count._all ?? 0;
     const met =
       actual > 0 &&
       completed / actual >= rollout.successRatio &&
