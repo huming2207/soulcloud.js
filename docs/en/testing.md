@@ -1,7 +1,7 @@
 # Testing & Quality
 
-**Baseline**: 596 backend tests across 48 files (isolated
-`soulcloud_test` DB, `--isolate` per-file processes) + 221 web unit
+**Baseline**: 638 backend tests across 50 files (isolated
+`soulcloud_test` DB, `--isolate` per-file processes) + 226 web unit
 tests across 33 files, `tsc --noEmit` clean, oxlint clean, and a CI
 hard-coded-CJK scan (scripts/scan-hardcoded-i18n.sh) green. E2E scripts
 (command loop, log ingestion, OTA, rollout, web <-> API) pass.
@@ -83,7 +83,7 @@ packages/broker/tests/mqtt/
 parallel jobs:
 
 1. **backend** (postgres service): install → `db:generate` → `db:deploy`
-   → `bun run typecheck` → `bash scripts/test.sh` (596 tests on the
+   → `bun run typecheck` → `bash scripts/test.sh` (638 tests on the
    isolated `soulcloud_test` database) → both-process E2E
    (`scripts/run-e2e.sh`)
 2. **web** (no database): install → web typecheck → 221 unit tests

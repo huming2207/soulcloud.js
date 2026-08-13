@@ -1,6 +1,6 @@
 # SoulcloudJS — Current Status
 
-**Date**: 2026-08-10 · **Baseline**: 596 backend tests + 221 web unit tests
+**Date**: 2026-08-13 · **Baseline**: 638 backend tests + 226 web unit tests
 green, `tsc --noEmit` clean, backend + browser E2E suites pass, CI runs
 three parallel jobs (backend / web / web-e2e).
 

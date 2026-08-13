@@ -100,8 +100,8 @@ Error mapping: `400 invalid_targets`, `404 target_devices_not_found`,
 ## Quality checks
 
 ```sh
-bash scripts/test.sh              # backend: 524 tests on the isolated test DB
-bun run --cwd packages/web test   # frontend: 201 unit tests (happy-dom)
+bash scripts/test.sh              # backend: 638 tests on the isolated test DB
+bun run --cwd packages/web test   # frontend: 226 unit tests (happy-dom)
 bun run typecheck                 # tsc --noEmit (backend + frontend)
 bun run --cwd packages/web build  # production build of the web UI
 bash scripts/web-e2e-ci.sh        # browser <-> API E2E (needs agent-browser)
@@ -113,9 +113,9 @@ migrated automatically by `scripts/prepare-test-db.ts`), so the dev MQTT
 broker — whose poller leases the global command queue every ~500ms — and
 QEMU firmware E2E runs can keep going while tests execute.
 
-Frontend coverage: 94% lines (85% funcs) across 33 test files
-(`bun run --cwd packages/web test --coverage`). Backend: 524 tests /
-42 files against the isolated test database.
+Frontend coverage: 94% lines (85% funcs) across 36 test files
+(`bun run --cwd packages/web test --coverage`). Backend: 638 tests /
+50 files against the isolated test database.
 
 ## MQTT v1 topics
 
