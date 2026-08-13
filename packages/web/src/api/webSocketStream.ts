@@ -53,6 +53,7 @@ export function useWebSocketStream(
   const socketRef = useRef<WebSocket | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryDelayRef = useRef(retryBaseMs);
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /** Applies ±25% random jitter to a delay (kept >= base). */
   function withJitter(delay: number): number {
@@ -95,8 +96,9 @@ export function useWebSocketStream(
       // Keepalive: send a plain "ping" every 30s (the server answers
       // {type:"pong"}). Idle sockets are otherwise prime targets for
       // proxy idle-timeout eviction, which would surface as silent
-      // reconnect churn.
-      const heartbeat = setInterval(() => {
+      // reconnect churn. Cleared on close AND on unmount (unmounting an
+      // OPEN socket never fires onclose after we null it).
+      heartbeatRef.current = setInterval(() => {
         if (ws.readyState === 1) {
           try {
             ws.send("ping");
@@ -129,7 +131,10 @@ export function useWebSocketStream(
       ws.onerror = () => {};
 
       ws.onclose = (ev?: CloseEvent) => {
-        clearInterval(heartbeat);
+        if (heartbeatRef.current !== null) {
+          clearInterval(heartbeatRef.current);
+          heartbeatRef.current = null;
+        }
         if (disposed) return;
         setStatus("error");
         if (ev?.code === ACCESS_REVOKED_CLOSE_CODE) {
@@ -177,6 +182,10 @@ export function useWebSocketStream(
       if (retryTimerRef.current !== null) {
         clearTimeout(retryTimerRef.current);
         retryTimerRef.current = null;
+      }
+      if (heartbeatRef.current !== null) {
+        clearInterval(heartbeatRef.current);
+        heartbeatRef.current = null;
       }
       const ws = socketRef.current;
       socketRef.current = null;

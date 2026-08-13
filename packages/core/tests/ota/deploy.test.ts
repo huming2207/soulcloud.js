@@ -383,31 +383,56 @@ describe("target state machine", () => {
     let leaseHeld!: () => void;
     const held = new Promise<void>((resolve) => (leaseHeld = resolve));
     const concurrent = createPrisma(process.env.DATABASE_URL!);
-    const leaseDone = concurrent.$transaction(async (tx) => {
-      await tx.$executeRaw`
-        UPDATE ota_targets
-        SET state = 'leased',
-            lease_expires_at = now() + interval '60 seconds'
-        WHERE id = ${targetId}::uuid
-      `;
-      leaseHeld(); // the row lock is now held (uncommitted)
-      await leaseGate;
-    });
+    try {
+      const leaseDone = concurrent.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          UPDATE ota_targets
+          SET state = 'leased',
+              lease_expires_at = now() + interval '60 seconds'
+          WHERE id = ${targetId}::uuid
+        `;
+        leaseHeld(); // the row lock is now held (uncommitted)
+        await leaseGate;
+      });
 
-    // the sweep's subquery sees the uncommitted pending+expired row, then
-    // blocks on A's row lock; once A commits, the outer predicate must
-    // see leased + a live lease and skip the row
-    await held; // guarantee A holds the lock BEFORE the sweep starts
-    const sweep = expireOtaTargets(prisma);
-    await Bun.sleep(150); // let the sweep reach the lock wait
-    releaseLease();
-    await leaseDone;
-    const swept = await sweep;
+      // the sweep's subquery sees the uncommitted pending+expired row, then
+      // blocks on A's row lock; once A commits, the outer predicate must
+      // see leased + a live lease and skip the row
+      await held; // guarantee A holds the lock BEFORE the sweep starts
+      const sweep = expireOtaTargets(prisma);
+      // Confirm the sweep is ACTUALLY blocked on the row lock (instead of
+      // a fixed sleep, which a loaded CI could outlast and turn the test
+      // into a vacuous pass even with broken predicates).
+      const lockDeadline = Date.now() + 10_000;
+      let sawLockWait = false;
+      while (Date.now() < lockDeadline) {
+        const waiting = await concurrent.$queryRaw<Array<{ n: number }>>`
+          SELECT count(*)::int AS n
+          FROM pg_stat_activity
+          WHERE wait_event_type = 'Lock'
+            AND state = 'active'
+            AND query ILIKE '%ota_targets%'
+        `;
+        if (waiting[0] && waiting[0].n > 0) {
+          sawLockWait = true;
+          break;
+        }
+        await Bun.sleep(25);
+      }
+      releaseLease();
+      await leaseDone;
+      const swept = await sweep;
+      expect(sawLockWait).toBe(true);
 
-    expect(swept).toBe(0);
-    const row = await prisma.otaTarget.findUnique({ where: { id: targetId } });
-    expect(row?.state).toBe("leased");
-    await concurrent.$disconnect();
+      expect(swept).toBe(0);
+      const row = await prisma.otaTarget.findUnique({ where: { id: targetId } });
+      expect(row?.state).toBe("leased");
+    } finally {
+      // never leave the lease transaction hanging or the connection open,
+      // even when an assertion fails mid-test
+      releaseLease?.();
+      await concurrent.$disconnect();
+    }
   });
 });
 

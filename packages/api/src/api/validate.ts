@@ -96,11 +96,21 @@ function cacheGet<T>(cache: Map<string, T & { expiresAt: number }>, key: string)
     cache.delete(key);
     return null;
   }
-  return entry;
+  // return a copy of the stored value: the cache entry stays private so
+  // no caller can accidentally mutate the shared object
+  const { expiresAt: _expiresAt, ...rest } = entry;
+  void _expiresAt;
+  return rest;
 }
 
 function cacheSet<T extends { expiresAt: number }>(cache: Map<string, T>, key: string, value: Omit<T, "expiresAt">): void {
-  if (cache.size >= AUTH_CACHE_MAX_ENTRIES) cache.clear();
+  if (cache.size >= AUTH_CACHE_MAX_ENTRIES) {
+    // evict ONE arbitrary entry instead of clear()-ing everything: a
+    // clear at the cap makes the hit rate collapse exactly when the
+    // cache is most useful (large active user set)
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
   cache.set(key, { ...value, expiresAt: Date.now() + AUTH_CACHE_TTL_MS } as T);
 }
 

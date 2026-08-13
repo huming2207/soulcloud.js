@@ -118,8 +118,12 @@ export function scheduleMembershipCheck(
               }
             }
           }
-          // self-retire: no live sockets left -> stop the timer
-          if (current.entries.size === 0) {
+          // self-retire: no live sockets left -> stop the timer.
+          // Identity-guarded: if a NEW rechecker for this user was created
+          // while this query was in flight (retire/rebuild race), deleting
+          // blindly would kill the new timer and silently disable all
+          // membership re-checks for the user.
+          if (current.entries.size === 0 && recheckers.get(userId) === current) {
             if (current.timer !== null) {
               clearInterval(current.timer);
               current.timer = null;
@@ -132,7 +136,9 @@ export function scheduleMembershipCheck(
         })
         .finally(() => {
           current.checking = false;
-          if (current.pendingCheck && recheckers.get(userId)) {
+          // pending re-entry only while this rechecker is still the live
+          // one (identity guard, same race as the retire branch)
+          if (current.pendingCheck && recheckers.get(userId) === current) {
             current.pendingCheck = false;
             run();
           }

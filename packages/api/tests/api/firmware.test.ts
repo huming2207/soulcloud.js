@@ -480,6 +480,31 @@ describe("bin download", () => {
     expect([...bytes]).toEqual([...makeBin(1024, 3)]);
   });
 
+  test("a multi-chunk image (3 x 4 MiB) streams back byte-identical", async () => {
+    // ~9.5 MiB spans three 4 MiB stream chunks; pins the substr() offset
+    // math beyond the single-chunk case
+    const bigBin = makeBin(9_961_472, 13);
+    const upload = await app.handle(
+      new Request("http://localhost/v1/firmware-releases", {
+        method: "POST",
+        headers: authHeaders(),
+        body: uploadForm({ bin: bigBin, version: "big-1.0.0" }),
+      }),
+    );
+    expect(upload.status).toBe(201);
+    const { release_id } = (await upload.json()) as { release_id: string };
+
+    const res = await app.handle(
+      new Request(`http://localhost/v1/firmware-releases/${release_id}/bin`, {
+        headers: authHeaders(),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes.byteLength).toBe(bigBin.byteLength);
+    expect(binHash(bytes)).toBe(binHash(bigBin));
+  });
+
   test("non-member Bearer -> 403", async () => {
     const res = await app.handle(
       new Request(`http://localhost/v1/firmware-releases/${createdReleaseId}/bin`, {
