@@ -583,10 +583,19 @@ export function createFirmwareRoutes(
         set.status = 200;
         set.headers["content-type"] = "application/octet-stream";
         set.headers["content-length"] = String(release.binSize);
-        // return the Prisma Buffer directly: a Uint8Array(...) copy would
-        // double the peak memory per concurrent download (up to 32 MiB
-        // each) for no benefit - Elysia writes the body as-is
-        return release.binBytes;
+        // Return the Prisma Buffer wrapped in an explicit Response:
+        // (a) no application-level second copy (peak memory per concurrent
+        // download is one buffer instead of two - Bun's Response
+        // construction still holds its own internal copy);
+        // (b) the explicit Response bypasses Elysia's body sniffing, which
+        // would JSON-serialize a Buffer whose first byte is '{' or '['.
+        return new Response(release.binBytes, {
+          status: 200,
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-length": String(release.binSize),
+          },
+        });
       } catch (error) {
         return handleApiError(error, set);
       }

@@ -86,6 +86,7 @@ export async function leaseNext(
       FROM device_commands dc
       INNER JOIN devices d ON d.id = dc.device_id
       WHERE dc.available_at <= now()
+        AND (dc.delivery_expires_at IS NULL OR dc.delivery_expires_at > now())
         AND (dc.state = 'queued'
              OR (dc.state = 'leased' AND dc.lease_expires_at <= now()))
         AND NOT EXISTS (

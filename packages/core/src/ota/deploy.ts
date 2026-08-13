@@ -318,6 +318,10 @@ export async function createOtaJob(
 export async function expireOtaTargets(prisma: PrismaClient): Promise<number> {
   let total = 0;
   for (;;) {
+    // Outer predicates matter: under READ COMMITTED, EvalPlanQual only
+    // re-checks the OUTER where on concurrently modified rows - an id-IN
+    // list alone would re-check as true and sweep a live-lease target
+    // (exactly the race the state guard is meant to prevent).
     const affected = await prisma.$executeRaw`
       UPDATE ota_targets
       SET state = 'expired', lease_expires_at = NULL
@@ -329,6 +333,9 @@ export async function expireOtaTargets(prisma: PrismaClient): Promise<number> {
                OR (state = 'leased' AND lease_expires_at <= now()))
         LIMIT ${EXPIRY_BATCH_SIZE}
       )
+        AND expires_at < now()
+        AND (state = 'pending'
+             OR (state = 'leased' AND lease_expires_at <= now()))
     `;
     total += affected;
     if (affected < EXPIRY_BATCH_SIZE) break;
@@ -354,6 +361,7 @@ export async function expireStalledOtaTargets(
 ): Promise<number> {
   let total = 0;
   for (;;) {
+    // outer predicates: see expireOtaTargets (EvalPlanQual re-check)
     const affected = await prisma.$executeRaw`
       UPDATE ota_targets
       SET state = 'failed',
@@ -367,6 +375,8 @@ export async function expireStalledOtaTargets(
           AND delivered_at < now() - make_interval(secs => ${stallMinutes * 60}::double precision)
         LIMIT ${EXPIRY_BATCH_SIZE}
       )
+        AND state IN ('delivered', 'delivering', 'downloaded')
+        AND delivered_at < now() - make_interval(secs => ${stallMinutes * 60}::double precision)
     `;
     total += affected;
     if (affected < EXPIRY_BATCH_SIZE) break;
