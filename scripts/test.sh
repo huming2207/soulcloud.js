@@ -11,4 +11,4 @@ export TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgres://soulcloud:soulcloud@12
 
 bun scripts/prepare-test-db.ts
 # the web package has its own suite (happy-dom); exclude it here
-DATABASE_URL="$TEST_DATABASE_URL" bun test --path-ignore-patterns="packages/web/**" --isolate "$@"
+DATABASE_URL="$TEST_DATABASE_URL" bun test --path-ignore-patterns="packages/web/**" --isolate --timeout 30000 "$@"

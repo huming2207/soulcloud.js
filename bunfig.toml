@@ -1,7 +1,0 @@
-# Bun test runner settings.
-[test]
-# Per-test timeout (ms), raised well above Bun's 5s default: the WS
-# stream tests drive real WebSocket handshakes and PostgreSQL
-# LISTEN/NOTIFY round-trips, and on loaded CI runners a single test
-# (listener-up probe loop + debounce windows) legitimately needs > 5s.
-timeout = 30000

@@ -95,7 +95,7 @@ jobs:
         run: bash scripts/scan-hardcoded-i18n.sh
 
       - name: Web unit tests
-        run: bun run --cwd packages/web test
+        run: bun run --cwd packages/web test -- --timeout 30000
 
       - name: Web build
         run: bun run --cwd packages/web build
