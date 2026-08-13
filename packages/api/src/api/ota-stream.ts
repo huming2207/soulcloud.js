@@ -113,6 +113,12 @@ export function getOtaStreamHub(
   // carries everything. Dropped when the last subscriber leaves so a
   // re-subscribe always gets a fresh full picture.
   const lastTargets = new Map<string, Map<string, string>>();
+  // Jobs whose NEXT push must be a full snapshot: set when a NEW
+  // subscriber joins. Without it, a subscriber that joined while the old
+  // socket's close was still in flight (the close handler deletes the
+  // delta baseline) would receive a delta against a stale baseline -
+  // often EMPTY (nothing changed) - and never learn the current state.
+  const fullNext = new Set<string>();
   let connectionCount = 0;
   let closed = false;
 
@@ -152,7 +158,7 @@ export function getOtaStreamHub(
       return;
     }
     pushing.add(jobId);
-    void pushJobUpdate(prisma, subscribers, jobId, lastTargets, log).finally(() => {
+    void pushJobUpdate(prisma, subscribers, jobId, lastTargets, fullNext, log).finally(() => {
       pushing.delete(jobId);
       if (!closed && pushAgain.delete(jobId)) schedulePush(jobId);
     });
@@ -187,6 +193,9 @@ export function getOtaStreamHub(
         subscribers.set(jobId, set);
       }
       set.add(ws);
+      // a fresh subscriber needs the current state, not a delta against
+      // whatever baseline the previous subscriber left behind
+      fullNext.add(jobId);
       listener.start();
     },
     unsubscribe(jobId: string, ws: ServerWebSocket) {
@@ -292,6 +301,7 @@ async function pushJobUpdate(
   subscribers: Map<string, Set<ServerWebSocket>>,
   jobId: string,
   lastTargets: Map<string, Map<string, string>>,
+  fullNext: Set<string>,
   log: HubLog,
 ): Promise<void> {
   if (!subscribers.get(jobId)?.size) return;
@@ -305,7 +315,9 @@ async function pushJobUpdate(
   }
   if (!job) return;
 
-  const previous = lastTargets.get(jobId);
+  const forceFull = fullNext.has(jobId);
+  fullNext.delete(jobId);
+  const previous = forceFull ? undefined : lastTargets.get(jobId);
   const changed = previous
     ? job.targets.filter(
         (t) => previous.get(t.deviceId) !== targetFingerprint(t),
