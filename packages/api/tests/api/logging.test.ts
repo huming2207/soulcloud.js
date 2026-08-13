@@ -536,6 +536,103 @@ describe("audit regressions", () => {
   });
 });
 
+describe("GET /v1/devices/:id/logs/export", () => {
+  const seed = async (receivedAt: Date, deviceTimeMs: number) => {
+    await prisma.rawLogEvent.create({
+      data: {
+        deviceId,
+        artifactId,
+        deviceTimeMs,
+        sequence: 1,
+        packetType: 0,
+        level: 3,
+        tagId: 0x40000009,
+        fmtId: 0x40000000,
+        rawPacket: new Uint8Array(24),
+        decodeState: "decodable",
+        receivedAt,
+      },
+    });
+  };
+
+  const exportUrl = (qs: string) =>
+    `http://localhost/v1/devices/${deviceId}/logs/export?${qs}`;
+
+  test("requires authentication (401)", async () => {
+    const res = await app.handle(new Request(exportUrl("from=2026-08-01T00:00:00Z")));
+    expect(res.status).toBe(401);
+  });
+
+  test("from is required and must be ISO 8601 (400)", async () => {
+    for (const qs of ["", "from=not-a-date"]) {
+      const res = await app.handle(new Request(exportUrl(qs), { headers: authHeaders() }));
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test("from later than to -> 400", async () => {
+    const res = await app.handle(
+      new Request(
+        exportUrl("from=2026-08-10T00:00:00Z&to=2026-08-01T00:00:00Z"),
+        { headers: authHeaders() },
+      ),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("exports only events inside the time range as CSV", async () => {
+    const outside = new Date("2026-08-01T00:00:00Z");
+    const inside1 = new Date("2026-08-10T01:00:00Z");
+    const inside2 = new Date("2026-08-10T02:00:00Z");
+    await seed(outside, 100);
+    await seed(inside1, 200);
+    await seed(inside2, 300);
+
+    const res = await app.handle(
+      new Request(
+        exportUrl("from=2026-08-10T00:00:00Z&to=2026-08-10T03:00:00Z"),
+        { headers: authHeaders() },
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(res.headers.get("content-disposition")).toContain(
+      `${deviceUid}-logs.csv`,
+    );
+    const text = await res.text();
+    const lines = text.trim().split("\n");
+    expect(lines[0]).toBe(
+      "received_at,device_time_ms,sequence,packet_type,level,tag,message,decode_state",
+    );
+    expect(lines.length).toBe(3); // header + 2 in-range rows
+    expect(lines[1]).toContain("2026-08-10T01:00:00");
+    expect(lines[1]).toContain("200");
+    expect(lines[2]).toContain("2026-08-10T02:00:00");
+    expect(text).not.toContain("2026-08-01");
+
+    await prisma.rawLogEvent.deleteMany({
+      where: { deviceId, receivedAt: { gte: outside, lte: inside2 } },
+    });
+  });
+
+  test("limit caps the exported rows", async () => {
+    await seed(new Date("2026-08-12T00:00:00Z"), 1);
+    await seed(new Date("2026-08-12T00:00:01Z"), 2);
+    const res = await app.handle(
+      new Request(
+        exportUrl("from=2026-08-11T00:00:00Z&limit=1"),
+        { headers: authHeaders() },
+      ),
+    );
+    expect(res.status).toBe(200);
+    const lines = (await res.text()).trim().split("\n");
+    expect(lines.length).toBe(2); // header + 1 row
+    await prisma.rawLogEvent.deleteMany({
+      where: { deviceId, receivedAt: { gte: new Date("2026-08-12T00:00:00Z") } },
+    });
+  });
+});
+
 describe("H1: project membership on logging endpoints", () => {
   test("non-member cannot list artifacts, read or write firmware-state (403)", async () => {
     // register an outsider with no membership

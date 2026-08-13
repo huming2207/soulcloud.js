@@ -24,6 +24,7 @@ import {
   hashPassword,
   importArtifact,
   MAX_ELF_BYTES,
+  ON9LOG_LEVEL_NAMES,
   type JwtConfig,
   type PrismaClient,
 } from "@soulcloud/core";
@@ -35,6 +36,21 @@ import {
   handleApiError,
   userCanAccessProject,
 } from "./validate";
+
+/** Export caps: bound both the scan and the response size. */
+const EXPORT_MAX_ROWS = 100_000;
+const EXPORT_DEFAULT_ROWS = 50_000;
+/** Rows per keyset batch (one query + one decode pass per chunk). */
+const EXPORT_BATCH_ROWS = 500;
+
+/** CSV cell escaping (RFC 4180: quote when the value contains commas,
+ *  quotes or newlines; double inner quotes). */
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const s = String(value);
+  if (!/[",\n\r]/.test(s)) return s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
 
 export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
   return new Elysia({ prefix: "/v1" })
@@ -295,6 +311,140 @@ export function createLoggingRoutes(prisma: PrismaClient, jwt: JwtConfig) {
           next_cursor:
             events.length === limit.data ? events[events.length - 1]!.id.toString() : null,
         };
+      } catch (error) {
+        return handleApiError(error, set);
+      }
+    })
+
+    // --- log export (time-ranged CSV download) -----------------------------
+
+    .get("/devices/:deviceId/logs/export", async ({ params, query, request, set }) => {
+      try {
+        const authUser = await authenticateRequest(prisma, jwt, request);
+        if (!authUser) {
+          set.status = 401;
+          return { error: "unauthorized", message: "authentication required" };
+        }
+        const deviceId = UuidParam.safeParse(String(params.deviceId ?? ""));
+        if (!deviceId.success) {
+          set.status = 400;
+          return { error: "invalid_request", message: "deviceId must be a UUID" };
+        }
+        // from is REQUIRED (bounds the scan); to defaults to now
+        const from = z.iso.datetime().safeParse(String(query.from ?? ""));
+        if (!from.success) {
+          set.status = 400;
+          return { error: "invalid_request", message: "from must be an ISO 8601 timestamp" };
+        }
+        const toRaw = query.to === undefined ? undefined : String(query.to);
+        let to: Date | undefined;
+        if (toRaw !== undefined) {
+          const parsed = z.iso.datetime().safeParse(toRaw);
+          if (!parsed.success) {
+            set.status = 400;
+            return { error: "invalid_request", message: "to must be an ISO 8601 timestamp" };
+          }
+          to = new Date(parsed.data);
+        }
+        const limit = z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(EXPORT_MAX_ROWS)
+          .default(EXPORT_DEFAULT_ROWS)
+          .safeParse(query.limit);
+        if (!limit.success) {
+          set.status = 400;
+          return { error: "invalid_request", message: `limit must be an integer between 1 and ${EXPORT_MAX_ROWS}` };
+        }
+
+        const device = await prisma.device.findUnique({
+          where: { id: deviceId.data },
+          select: { id: true, projectId: true, deviceUid: true },
+        });
+        if (!device) {
+          set.status = 404;
+          return { error: "device_not_found", message: "device does not exist" };
+        }
+        if (!(await userCanAccessProject(prisma, authUser.user.id, device.projectId))) {
+          set.status = 403;
+          return { error: "forbidden", message: "not a member of this device's project" };
+        }
+
+        const fromDate = new Date(from.data);
+        const toDate = to ?? new Date();
+        if (fromDate.getTime() > toDate.getTime()) {
+          set.status = 400;
+          return { error: "invalid_request", message: "from must be earlier than to" };
+        }
+
+        set.headers["content-type"] = "text/csv; charset=utf-8";
+        set.headers["content-disposition"] =
+          `attachment; filename="${device.deviceUid}-logs.csv"`;
+
+        // Stream the export: keyset pagination over raw_log_events (id
+        // ascending within the receivedAt window) with on-demand decoding,
+        // so a large export never buffers the whole result in memory.
+        const encoder = new TextEncoder();
+        const HEADER = "received_at,device_time_ms,sequence,packet_type,level,tag,message,decode_state\n";
+        let cursor = 0n;
+        let emitted = 0;
+        let headerSent = false;
+        const stream = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (emitted >= limit.data) {
+              controller.close();
+              return;
+            }
+            if (!headerSent) {
+              headerSent = true;
+              controller.enqueue(encoder.encode(HEADER));
+            }
+            const batchSize = Math.min(EXPORT_BATCH_ROWS, limit.data - emitted);
+            const events = await prisma.rawLogEvent.findMany({
+              where: {
+                deviceId: device.id,
+                id: { gt: cursor },
+                receivedAt: { gte: fromDate, lte: toDate },
+              },
+              orderBy: { id: "asc" },
+              take: batchSize,
+            });
+            if (events.length === 0) {
+              controller.close();
+              return;
+            }
+            const decoded = await decodeEventsBatch(prisma, events);
+            const lines: string[] = [];
+            for (let i = 0; i < events.length; i++) {
+              const e = events[i]!;
+              lines.push(
+                [
+                  e.receivedAt.toISOString(),
+                  e.deviceTimeMs.toString(),
+                  e.sequence,
+                  e.packetType,
+                  e.level === null ? "" : (ON9LOG_LEVEL_NAMES[e.level] ?? e.level),
+                  decoded[i]?.tag,
+                  decoded[i]?.message,
+                  e.decodeState,
+                ]
+                  .map(csvCell)
+                  .join(","),
+              );
+            }
+            controller.enqueue(encoder.encode(lines.join("\n") + "\n"));
+            cursor = events[events.length - 1]!.id;
+            emitted += events.length;
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: {
+            "content-type": "text/csv; charset=utf-8",
+            "content-disposition": `attachment; filename="${device.deviceUid}-logs.csv"`,
+          },
+        });
       } catch (error) {
         return handleApiError(error, set);
       }
