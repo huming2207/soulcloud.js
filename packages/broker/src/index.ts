@@ -92,6 +92,7 @@ const poller = startCommandPoller(
   {
     pollIntervalMs: config.COMMAND_POLL_INTERVAL_MS,
     leaseDurationMs: config.COMMAND_LEASE_SECONDS * 1000,
+    expiryIntervalMs: config.COMMAND_EXPIRE_INTERVAL_MS,
     retain: config.MQTT_COMMAND_RETAIN,
   },
   logger,
@@ -106,6 +107,7 @@ const otaPoller = startOtaPoller(
     secret: config.JWT_SECRET,
     pollIntervalMs: config.OTA_POLL_INTERVAL_MS,
     leaseDurationMs: config.OTA_LEASE_SECONDS * 1000,
+    expiryIntervalMs: config.OTA_EXPIRE_INTERVAL_MS,
     tokenTtlSeconds: config.OTA_TOKEN_TTL_SECONDS,
     stallTimeoutMinutes: config.OTA_STALL_TIMEOUT_MINUTES,
   },

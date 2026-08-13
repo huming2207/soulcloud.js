@@ -55,7 +55,16 @@ export interface OtaPollerOptions {
    * DEFAULT_OTA_DRAIN_MAX_PER_CYCLE.
    */
   drainMaxPerCycle?: number;
+  /**
+   * Minimum interval between the OTA expiry maintenance sweeps (ms).
+   * See the command poller's expiryIntervalMs. Defaults to
+   * DEFAULT_EXPIRY_INTERVAL_MS.
+   */
+  expiryIntervalMs?: number;
 }
+
+/** Default cadence for the OTA expiry maintenance sweeps. */
+export const DEFAULT_EXPIRY_INTERVAL_MS = 15_000;
 
 export interface OtaPollerLog {
   info: (msg: string, fields?: Record<string, unknown>) => void;
@@ -83,12 +92,16 @@ export function startOtaPoller(
 ): OtaPoller {
   let running = false;
   let stopped = false;
+  let lastExpiryAt = 0;
 
   const poll = async () => {
     if (running || stopped) return;
     running = true;
     try {
-      await otaPollOnce(registry, aedes, prisma, options, log);
+      const now = Date.now();
+      const runExpiry = now - lastExpiryAt >= (options.expiryIntervalMs ?? DEFAULT_EXPIRY_INTERVAL_MS);
+      if (runExpiry) lastExpiryAt = now;
+      await otaPollOnce(registry, aedes, prisma, options, log, runExpiry);
     } catch (error) {
       log.warn("ota poll cycle failed", {
         error: (error as Error).message,
@@ -111,18 +124,23 @@ export function startOtaPoller(
   };
 }
 
-/** One OTA poll cycle: expire stale targets, then drain a bounded batch. */
+/** One OTA poll cycle: expire stale targets, then drain a bounded batch.
+ *  `runExpiry` (default true) gates the expiry maintenance sweeps so the
+ *  caller can throttle them independently of the drain cadence. */
 export async function otaPollOnce(
   registry: ConnectionRegistry,
   aedes: Aedes,
   prisma: PrismaClient,
   options: OtaPollerOptions,
   log: OtaPollerLog,
+  runExpiry = true,
 ): Promise<void> {
-  await expireOtaTargets(prisma);
-  const stalled = await expireStalledOtaTargets(prisma, options.stallTimeoutMinutes);
-  if (stalled > 0) {
-    log.info("ota targets failed by stall timeout", { count: stalled });
+  if (runExpiry) {
+    await expireOtaTargets(prisma);
+    const stalled = await expireStalledOtaTargets(prisma, options.stallTimeoutMinutes);
+    if (stalled > 0) {
+      log.info("ota targets failed by stall timeout", { count: stalled });
+    }
   }
 
   const budget = options.drainMaxPerCycle ?? DEFAULT_OTA_DRAIN_MAX_PER_CYCLE;

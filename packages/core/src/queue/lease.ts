@@ -33,19 +33,33 @@ interface ClaimCandidate {
  * `delivery_failed` terminal state (M2): the per-device queue is released
  * without a device result. Commands with a NULL deadline never expire.
  *
+ * Runs in bounded batches so a large simultaneous expiry never holds one
+ * huge row lock while concurrent lease/publish work waits on it.
+ *
  * @returns the number of commands expired.
  */
+const EXPIRY_BATCH_SIZE = 1000;
+
 export async function expireDelayedCommands(
   prisma: PrismaClient,
 ): Promise<number> {
-  const result = await prisma.deviceCommand.updateMany({
-    where: {
-      state: { in: ["queued", "leased", "broker_accepted"] },
-      deliveryExpiresAt: { lt: new Date() },
-    },
-    data: { state: "delivery_failed", leaseExpiresAt: null },
-  });
-  return result.count;
+  let total = 0;
+  for (;;) {
+    const affected = await prisma.$executeRaw`
+      UPDATE device_commands
+      SET state = 'delivery_failed', lease_expires_at = NULL
+      WHERE id IN (
+        SELECT id
+        FROM device_commands
+        WHERE state IN ('queued', 'leased', 'broker_accepted')
+          AND delivery_expires_at < now()
+        LIMIT ${EXPIRY_BATCH_SIZE}
+      )
+    `;
+    total += affected;
+    if (affected < EXPIRY_BATCH_SIZE) break;
+  }
+  return total;
 }
 
 /**

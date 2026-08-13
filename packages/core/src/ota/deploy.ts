@@ -24,6 +24,9 @@ import { OTA_NOTIFY_CHANNEL } from "../queue/notify";
 /** Maximum number of target devices per OTA job (same as command batches). */
 export const MAX_OTA_TARGETS = 1000;
 
+/** Rows expired per maintenance batch (bounded row locks). */
+const EXPIRY_BATCH_SIZE = 1000;
+
 export class OtaError extends Error {
   constructor(
     public readonly kind:
@@ -309,16 +312,28 @@ export async function createOtaJob(
  *     (a live lease means a publish is in flight; expiring it would race
  *     the publisher and produce false negatives — the device really
  *     upgraded but the target sits in `expired` forever)
+ *
+ * Runs in bounded batches (same rationale as expireDelayedCommands).
  */
 export async function expireOtaTargets(prisma: PrismaClient): Promise<number> {
-  const result = await prisma.$executeRaw`
-    UPDATE ota_targets
-    SET state = 'expired', lease_expires_at = NULL
-    WHERE expires_at < now()
-      AND (state = 'pending'
-           OR (state = 'leased' AND lease_expires_at <= now()))
-  `;
-  return result;
+  let total = 0;
+  for (;;) {
+    const affected = await prisma.$executeRaw`
+      UPDATE ota_targets
+      SET state = 'expired', lease_expires_at = NULL
+      WHERE id IN (
+        SELECT id
+        FROM ota_targets
+        WHERE expires_at < now()
+          AND (state = 'pending'
+               OR (state = 'leased' AND lease_expires_at <= now()))
+        LIMIT ${EXPIRY_BATCH_SIZE}
+      )
+    `;
+    total += affected;
+    if (affected < EXPIRY_BATCH_SIZE) break;
+  }
+  return total;
 }
 
 /**
@@ -337,16 +352,26 @@ export async function expireStalledOtaTargets(
   prisma: PrismaClient,
   stallMinutes: number,
 ): Promise<number> {
-  const result = await prisma.$executeRaw`
-    UPDATE ota_targets
-    SET state = 'failed',
-        confirmed_at = now(),
-        result_code = -7,
-        result_message = 'download window timeout'
-    WHERE state IN ('delivered', 'delivering', 'downloaded')
-      AND delivered_at < now() - make_interval(secs => ${stallMinutes * 60}::double precision)
-  `;
-  return result;
+  let total = 0;
+  for (;;) {
+    const affected = await prisma.$executeRaw`
+      UPDATE ota_targets
+      SET state = 'failed',
+          confirmed_at = now(),
+          result_code = -7,
+          result_message = 'download window timeout'
+      WHERE id IN (
+        SELECT id
+        FROM ota_targets
+        WHERE state IN ('delivered', 'delivering', 'downloaded')
+          AND delivered_at < now() - make_interval(secs => ${stallMinutes * 60}::double precision)
+        LIMIT ${EXPIRY_BATCH_SIZE}
+      )
+    `;
+    total += affected;
+    if (affected < EXPIRY_BATCH_SIZE) break;
+  }
+  return total;
 }
 
 export interface LeasedOtaTarget {

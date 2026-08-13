@@ -56,7 +56,17 @@ export interface PollerOptions {
    * to DEFAULT_DRAIN_MAX_PER_CYCLE.
    */
   drainMaxPerCycle?: number;
+  /**
+   * Minimum interval between delivery-deadline expiry sweeps (ms). The
+   * expiry sweep is a maintenance UPDATE; running it on every 500ms poll
+   * cycle would hammer the table at fleet scale while deadline precision
+   * only needs seconds. Defaults to DEFAULT_EXPIRY_INTERVAL_MS.
+   */
+  expiryIntervalMs?: number;
 }
+
+/** Default cadence for the delivery-deadline expiry sweep. */
+export const DEFAULT_EXPIRY_INTERVAL_MS = 15_000;
 
 export interface PollerLog {
   info: (msg: string, fields?: Record<string, unknown>) => void;
@@ -87,12 +97,16 @@ export function startCommandPoller(
 ): CommandPoller {
   let running = false;
   let stopped = false;
+  let lastExpiryAt = 0;
 
   const poll = async () => {
     if (running || stopped) return;
     running = true;
     try {
-      await pollOnce(registry, aedes, prisma, options, log);
+      const now = Date.now();
+      const runExpiry = now - lastExpiryAt >= (options.expiryIntervalMs ?? DEFAULT_EXPIRY_INTERVAL_MS);
+      if (runExpiry) lastExpiryAt = now;
+      await pollOnce(registry, aedes, prisma, options, log, runExpiry);
     } catch (error) {
       // pollOnce handles expected errors; this guards against unexpected
       // failures so a bad cycle never becomes an unhandled rejection.
@@ -117,17 +131,20 @@ export function startCommandPoller(
   };
 }
 
-/** One poll cycle: drain up to `drainMaxPerCycle` queued commands. */
+/** One poll cycle: drain up to `drainMaxPerCycle` queued commands.
+ *  `runExpiry` (default true) gates the delivery-deadline sweep so the
+ *  caller can throttle it independently of the drain cadence. */
 export async function pollOnce(
   registry: ConnectionRegistry,
   aedes: Aedes,
   prisma: PrismaClient,
   options: PollerOptions,
   log: PollerLog,
+  runExpiry = true,
 ): Promise<void> {
   // expire commands whose delivery deadline has passed (releases the
   // per-device queue; no-op when no deadlines are set)
-  await expireDelayedCommands(prisma);
+  if (runExpiry) await expireDelayedCommands(prisma);
 
   // bounded drain (WEB-05): the pre-drain poller published at most one
   // command per poll interval (~2/s per process with the default 500 ms),

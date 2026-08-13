@@ -19,9 +19,14 @@ const envSchema = z.object({
   BROKER_AUTH_CONCURRENCY: z.coerce.number().int().positive().default(8),
   COMMAND_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   COMMAND_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
+  /// Delivery-deadline expiry sweep cadence (independent of the drain
+  /// poll; deadlines need seconds of precision, not 500ms UPDATEs).
+  COMMAND_EXPIRE_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   // OTA delivery:
   OTA_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   OTA_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
+  /// OTA expiry maintenance cadence (targets + stall sweeps).
+  OTA_EXPIRE_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   /// Download JWT lifetime in seconds (minted at publish time)
   OTA_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(15 * 60),
   /// A delivered/delivering/downloaded target that never completes its
