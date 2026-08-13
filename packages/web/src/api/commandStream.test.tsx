@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { setAccessToken } from "./http";
 import { useCommandStream, type CommandStreamStatus } from "./commandStream";
-import type { CommandBatchDetail } from "./types";
+import type { CommandBatchSignal } from "./commandStream";
 
 // --- mock WebSocket ----------------------------------------------------------
 
@@ -61,41 +61,12 @@ afterEach(() => {
   globalThis.WebSocket = originalWebSocket;
 });
 
-const sampleDetail: CommandBatchDetail = {
+/** Signal frame shape (the per-command array no longer rides the socket). */
+const sampleSignal: CommandBatchSignal = {
   batch_id: "batch-1",
   device_count: 2,
-  created_at: "2026-08-06T10:00:00.000Z",
   summary: { queued: 1, device_completed: 1 },
-  commands: [
-    {
-      command_id: "cmd-1",
-      device_id: "dev-1",
-      device_uid: "dev-uid-1",
-      batch_id: "batch-1",
-      sequence: "1",
-      command: { cmd: "getConfig", args: null },
-      state: "device_completed",
-      result_code: 0,
-      result: { code: 0, payload: null },
-      created_at: "2026-08-06T10:00:00.000Z",
-      delivery_expires_at: null,
-      device_completed_at: "2026-08-06T10:00:01.000Z",
-    },
-    {
-      command_id: "cmd-2",
-      device_id: "dev-2",
-      device_uid: "dev-uid-2",
-      batch_id: "batch-1",
-      sequence: "2",
-      command: { cmd: "getConfig", args: null },
-      state: "queued",
-      result_code: null,
-      result: null,
-      created_at: "2026-08-06T10:00:00.000Z",
-      delivery_expires_at: null,
-      device_completed_at: null,
-    },
-  ],
+  updated: 2,
 };
 
 describe("useCommandStream", () => {
@@ -126,18 +97,18 @@ describe("useCommandStream", () => {
   });
 
   test('forwards {type:"batch"} frames to onUpdate', () => {
-    const onUpdate = mock<(detail: CommandBatchDetail) => void>();
+    const onUpdate = mock<(signal: CommandBatchSignal) => void>();
     renderHook(() => useCommandStream("batch-1", { onUpdate }));
     act(() => {
       MockWebSocket.instances[0]!.message(
-        JSON.stringify({ type: "batch", ...sampleDetail }),
+        JSON.stringify({ type: "batch", ...sampleSignal }),
       );
     });
-    expect(onUpdate).toHaveBeenCalledWith(sampleDetail);
+    expect(onUpdate).toHaveBeenCalledWith(sampleSignal);
   });
 
   test("ignores pong frames", () => {
-    const onUpdate = mock<(detail: CommandBatchDetail) => void>();
+    const onUpdate = mock<(signal: CommandBatchSignal) => void>();
     const { result } = renderHook(() => useCommandStream("batch-1", { onUpdate }));
     act(() => {
       MockWebSocket.instances[0]!.message(JSON.stringify({ type: "pong" }));
@@ -171,7 +142,7 @@ describe("useCommandStream", () => {
   });
 
   test("unmount closes the socket and stops reconnects/callbacks", async () => {
-    const onUpdate = mock<(detail: CommandBatchDetail) => void>();
+    const onUpdate = mock<(signal: CommandBatchSignal) => void>();
     const { unmount } = renderHook(() =>
       useCommandStream("batch-1", { onUpdate, retryBaseMs: 10 }),
     );
@@ -180,7 +151,7 @@ describe("useCommandStream", () => {
     expect(ws.closed).toBe(true);
     act(() => {
       ws.closeConnection();
-      ws.message(JSON.stringify({ type: "batch", ...sampleDetail }));
+      ws.message(JSON.stringify({ type: "batch", ...sampleSignal }));
     });
     expect(onUpdate).not.toHaveBeenCalled();
     // well past retryBaseMs: no reconnect must have been scheduled

@@ -214,9 +214,12 @@ export function getCommandStreamHub(
 }
 
 /**
- * Re-queries the batch (REST detail shape) and pushes it to every
- * subscriber. Failures are logged and skipped (the batch stays queryable
- * via REST).
+ * Re-queries the batch and pushes a SIGNAL frame. The frontend treats the
+ * frame as a "something changed, re-fetch via REST" trigger
+ * (CommandPanel.onUpdate -> refreshHistory), so the per-command array is
+ * NOT transmitted - a 1000-command batch in a result burst used to push
+ * ~200KB per debounce window per subscriber. summary stays (cheap) for
+ * diagnostics and potential lightweight consumers.
  */
 async function pushBatch(
   prisma: PrismaClient,
@@ -237,11 +240,17 @@ async function pushBatch(
   }
   if (!loaded) return;
 
-  // The original subscribers may have closed while the full snapshot was
+  // The original subscribers may have closed while the snapshot was
   // loading. Re-read the set so a closed hub never writes stale frames.
   const sockets = subscribers.get(batchId);
   if (!sockets || sockets.size === 0) return;
-  const payload = JSON.stringify({ type: "batch", ...loaded.detail });
+  const payload = JSON.stringify({
+    type: "batch",
+    batch_id: loaded.detail.batch_id,
+    device_count: loaded.detail.device_count,
+    summary: loaded.detail.summary,
+    updated: Object.values(loaded.detail.summary).reduce((a, b) => a + b, 0),
+  });
   for (const ws of sockets) {
     if (ws.readyState === 1) {
       try {

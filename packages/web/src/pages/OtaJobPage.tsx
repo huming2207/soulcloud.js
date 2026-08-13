@@ -70,12 +70,20 @@ export function OtaJobPage() {
     refetchInterval: 30_000,
   });
 
-  // Live updates: WS frames mirror the REST detail (plus a derived
-  // job-level `state` the page does not render), so the update replaces
-  // the query cache entry as-is. REST stays the initial load.
+  // Live updates: WS frames are DELTAS (only the targets whose state
+  // changed since the previous push); summary/state are complete. Merge
+  // the changed targets into the cached detail by device_id. REST stays
+  // the initial load.
   useOtaStream(jobId, {
     onUpdate: (update) => {
-      queryClient.setQueryData<OtaJobDetail>(["ota-job", jobId], update);
+      queryClient.setQueryData<OtaJobDetail>(["ota-job", jobId], (old) => {
+        if (!old || !old.targets.length) return update as OtaJobDetail;
+        const byDevice = new Map(old.targets.map((t) => [t.device_id, t]));
+        for (const target of update.targets) {
+          byDevice.set(target.device_id, target);
+        }
+        return { ...update, targets: [...byDevice.values()] } as OtaJobDetail;
+      });
     },
   });
 

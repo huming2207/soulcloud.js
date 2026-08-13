@@ -107,6 +107,12 @@ export function getOtaStreamHub(
   // query is in flight requests exactly one follow-up snapshot.
   const pushing = new Set<string>();
   const pushAgain = new Set<string>();
+  // Delta push state: per job, the last known fingerprint of each target
+  // (state|result|firmware). A push only carries the targets whose
+  // fingerprint changed since the last push - the first push for a job
+  // carries everything. Dropped when the last subscriber leaves so a
+  // re-subscribe always gets a fresh full picture.
+  const lastTargets = new Map<string, Map<string, string>>();
   let connectionCount = 0;
   let closed = false;
 
@@ -138,7 +144,7 @@ export function getOtaStreamHub(
     );
   }
 
-  /** Serializes full-snapshot refreshes for one OTA job. */
+  /** Serializes delta pushes for one OTA job. */
   function flushJob(jobId: string): void {
     if (closed) return;
     if (pushing.has(jobId)) {
@@ -146,7 +152,7 @@ export function getOtaStreamHub(
       return;
     }
     pushing.add(jobId);
-    void pushJobUpdate(prisma, subscribers, jobId, log).finally(() => {
+    void pushJobUpdate(prisma, subscribers, jobId, lastTargets, log).finally(() => {
       pushing.delete(jobId);
       if (!closed && pushAgain.delete(jobId)) schedulePush(jobId);
     });
@@ -190,7 +196,12 @@ export function getOtaStreamHub(
       // by the connection cap was never added)
       const removed = set.delete(ws);
       if (removed) connectionCount = Math.max(0, connectionCount - 1);
-      if (set.size === 0) subscribers.delete(jobId);
+      if (set.size === 0) {
+        subscribers.delete(jobId);
+        // drop the delta baseline so a later re-subscribe gets a full
+        // picture (the REST fetch already refreshed the client anyway)
+        lastTargets.delete(jobId);
+      }
     },
     async close() {
       closed = true;
@@ -200,6 +211,7 @@ export function getOtaStreamHub(
       firstNotifyAt.clear();
       pushing.clear();
       pushAgain.clear();
+      lastTargets.clear();
       connectionCount = 0;
       await listener.close();
       subscribers.clear();
@@ -260,10 +272,26 @@ function fetchOtaJobWithTargets(prisma: PrismaClient, jobId: string) {
   });
 }
 
+/** Stable fingerprint of one target row (state + result + firmware). */
+function targetFingerprint(t: {
+  state: string;
+  resultCode: number | null;
+  device: { firmwareState: { fwHash: string } | null };
+}): string {
+  return `${t.state}|${t.resultCode ?? ""}|${t.device.firmwareState?.fwHash ?? ""}`;
+}
+
+/**
+ * Re-reads the job and pushes a DELTA frame: only the targets whose
+ * fingerprint changed since the previous push (the first push for a job
+ * carries everything). No changes -> no frame. The client merges the
+ * targets into its cached detail (summary/state are always complete).
+ */
 async function pushJobUpdate(
   prisma: PrismaClient,
   subscribers: Map<string, Set<ServerWebSocket>>,
   jobId: string,
+  lastTargets: Map<string, Map<string, string>>,
   log: HubLog,
 ): Promise<void> {
   if (!subscribers.get(jobId)?.size) return;
@@ -277,8 +305,19 @@ async function pushJobUpdate(
   }
   if (!job) return;
 
-  // The original subscribers may have closed while the full target list was
-  // loading. Re-read the set so a closed hub never sends a stale snapshot.
+  const previous = lastTargets.get(jobId);
+  const changed = previous
+    ? job.targets.filter(
+        (t) => previous.get(t.deviceId) !== targetFingerprint(t),
+      )
+    : job.targets;
+  if (changed.length === 0) return; // nothing new since the last push
+  const next = previous ?? new Map<string, string>();
+  for (const t of job.targets) next.set(t.deviceId, targetFingerprint(t));
+  lastTargets.set(jobId, next);
+
+  // The original subscribers may have closed while the target list was
+  // loading. Re-read the set so a closed hub never sends a stale frame.
   const sockets = subscribers.get(jobId);
   if (!sockets || sockets.size === 0) return;
   const summary: Record<string, number> = {};
@@ -291,7 +330,8 @@ async function pushJobUpdate(
     release_id: job.releaseId,
     created_at: job.createdAt,
     state: deriveJobState(job.targets),
-    targets: job.targets.map((t) => ({
+    // DELTA: only the changed targets; the client merges by device_id
+    targets: changed.map((t) => ({
       device_id: t.deviceId,
       device_uid: t.device.deviceUid,
       state: t.state,

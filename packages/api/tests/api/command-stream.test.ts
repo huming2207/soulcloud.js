@@ -382,7 +382,7 @@ describe("GET /v1/ws/commands", () => {
       batch_id: string;
       device_count: number;
       summary: Record<string, number>;
-      commands: Array<Record<string, unknown>>;
+      updated: number;
     }>(
       client,
       (m) =>
@@ -391,15 +391,28 @@ describe("GET /v1/ws/commands", () => {
         typeof m.summary?.device_completed === "number",
     );
 
-    // frame shape matches the REST batch detail response
+    // signal frame: batch identity + summary + updated count; the
+    // per-command array is NOT transmitted (clients re-fetch via REST)
     expect(msg!.type).toBe("batch");
     expect(msg!.batch_id).toBe(batchId);
     expect(msg!.device_count).toBe(2);
     expect(msg!.summary).toEqual({ queued: 1, device_completed: 1 });
-    expect(msg!.commands).toHaveLength(2);
+    expect(msg!.updated).toBe(2);
+    expect("commands" in msg!).toBe(false);
 
-    const completed = msg!.commands.find(
-      (c: Record<string, unknown>) => c.command_id === row.id,
+    // the full detail (that the signal points at) still carries the
+    // per-command rows over REST
+    const rest = await app.handle(
+      new Request(`http://localhost/v1/command-batches/${batchId}`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }),
+    );
+    expect(rest.status).toBe(200);
+    const detail = (await rest.json()) as {
+      commands: Array<Record<string, unknown>>;
+    };
+    const completed = detail.commands.find(
+      (c) => c.command_id === row.id,
     );
     expect(completed).toMatchObject({
       command_id: row.id,
@@ -416,8 +429,8 @@ describe("GET /v1/ws/commands", () => {
     // timestamps serialize to ISO strings (JSON)
     expect(typeof completed!.created_at).toBe("string");
 
-    const pending = msg!.commands.find(
-      (c: Record<string, unknown>) => c.command_id !== row.id,
+    const pending = detail.commands.find(
+      (c) => c.command_id !== row.id,
     );
     expect(pending).toMatchObject({ state: "queued", result_code: null, result: null });
 

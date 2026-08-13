@@ -23,6 +23,11 @@ import { createOtaJob, OTA_NOTIFY_CHANNEL, prisma, signAccessToken } from "@soul
 
 const WS_PROTOCOL = "soulcloud";
 
+/** Firmware hashes for fingerprint-flip deltas (64 hex chars each). */
+const HASH_A = "a".repeat(64);
+const HASH_B = "b".repeat(64);
+const HASH_C = "c".repeat(64);
+
 // M2/M3 test knobs: short expiry-check interval and a tight connection
 // cap. Set before createApp so the hub picks them up; the main app still
 // runs every other test with these values (a 200ms check interval is
@@ -314,7 +319,11 @@ describe("GET /v1/ws/ota", () => {
 
   test("a sustained notify burst is bounded by max-wait (push during the burst)", async () => {
     // debounceMs=25 (app options), so maxWaitMs=100: a continuous burst
-    // must still push ~every 100ms instead of deferring forever
+    // must still push ~every 100ms instead of deferring forever.
+    // Delta pushes only fire on REAL fingerprint changes; the target is
+    // terminal by now (the previous test completed it), so each notify
+    // flips the device's reported firmware hash instead (part of the
+    // target fingerprint).
     const client = connectWs(wsUrl(jobId), [WS_PROTOCOL, accessToken]);
     expect(await waitForSettle(client)).toBe("open");
     await waitForMessage(client, (m) => m.type === "ready");
@@ -324,7 +333,14 @@ describe("GET /v1/ws/ota", () => {
     const before = client.messages.filter(isOtaFrame).length;
     const deadline = Date.now() + 250;
     let sawPushDuringBurst = false;
+    let flip = false;
     while (Date.now() < deadline) {
+      flip = !flip;
+      await prisma.deviceFirmwareState.upsert({
+        where: { deviceId },
+        update: { fwHash: flip ? HASH_A : HASH_B, reportedAt: new Date() },
+        create: { deviceId, fwHash: flip ? HASH_A : HASH_B },
+      });
       await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
       await Bun.sleep(15);
       if (client.messages.filter(isOtaFrame).length > before) {
@@ -334,6 +350,8 @@ describe("GET /v1/ws/ota", () => {
     }
     expect(sawPushDuringBurst).toBe(true);
     client.ws.close();
+    // clean up the fingerprint flips so later tests see a fresh device
+    await prisma.deviceFirmwareState.deleteMany({ where: { deviceId } });
   });
 
   test("connection cap: the second socket is refused (M3)", async () => {
@@ -400,7 +418,13 @@ describe("GET /v1/ws/ota", () => {
     const msg = await notifyUntil(
       client,
       jobId,
-      (m) => m?.type === "ota" && m?.job_id === jobId,
+      // only accept the frame that actually reflects the delivered
+      // transition (a stale frame from the previous test's tail could
+      // still show the pre-transition state)
+      (m) =>
+        m?.type === "ota" &&
+        m?.job_id === jobId &&
+        m?.targets?.[0]?.state === "delivered",
     );
 
     expect(msg).toMatchObject({ type: "ota", job_id: jobId, release_id: releaseId });
@@ -450,8 +474,20 @@ describe("GET /v1/ws/ota", () => {
     const before = frameCount();
 
     // a) two notifies inside the debounce window (25ms) -> one merged frame
+    // (delta pushes fire on fingerprint changes: the target is terminal by
+    // now, so flip the device's reported firmware hash twice)
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId },
+      update: { fwHash: HASH_A, reportedAt: new Date() },
+      create: { deviceId, fwHash: HASH_A },
+    });
     await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
     await Bun.sleep(10);
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId },
+      update: { fwHash: HASH_B, reportedAt: new Date() },
+      create: { deviceId, fwHash: HASH_B },
+    });
     await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
     await waitForFrameCount(client, before + 1);
     // ...and no second frame for the burst
@@ -459,9 +495,16 @@ describe("GET /v1/ws/ota", () => {
     expect(frameCount()).toBe(before + 1);
 
     // b) a notify after the window -> a fresh frame
+    await prisma.deviceFirmwareState.upsert({
+      where: { deviceId },
+      update: { fwHash: HASH_C, reportedAt: new Date() },
+      create: { deviceId, fwHash: HASH_C },
+    });
     await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
     await waitForFrameCount(client, before + 2);
     client.ws.close();
+    // clean up the fingerprint flips so later tests see a fresh device
+    await prisma.deviceFirmwareState.deleteMany({ where: { deviceId } });
   });
 
   test("no subprotocol: handshake rejected", async () => {
