@@ -60,7 +60,7 @@ export function LogsPage() {
       </TextField>
 
       {selected ? (
-        <LogsView deviceId={selected.device_id} />
+        <LogsView deviceId={selected.device_id} deviceUid={selected.device_uid} />
       ) : devices.error ? null : (
         <Alert severity="info">{t("logs.selectDevice")}</Alert>
       )}

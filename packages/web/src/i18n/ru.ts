@@ -174,6 +174,12 @@ export const ru: Record<DictKey, string> = {
   "logs.raw": "raw: {{packet}}",
   "logs.loadEarlier": "Загрузить ранее",
   "logs.backToLatest": "К последним",
+  "logs.export": "Экспорт журналов",
+  "logs.exportTitle": "Экспорт журналов",
+  "logs.exportFrom": "С",
+  "logs.exportTo": "По",
+  "logs.exportDownload": "Скачать",
+  "logs.exportError": "Ошибка экспорта, попробуйте снова",
   "query.retry": "Повторить",
 
   "fw.title": "Прошивка",

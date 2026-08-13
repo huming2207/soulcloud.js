@@ -174,6 +174,12 @@ export const it: Record<DictKey, string> = {
   "logs.raw": "raw: {{packet}}",
   "logs.loadEarlier": "Carica precedenti",
   "logs.backToLatest": "Ai più recenti",
+  "logs.export": "Esporta log",
+  "logs.exportTitle": "Esporta log",
+  "logs.exportFrom": "Da",
+  "logs.exportTo": "A",
+  "logs.exportDownload": "Scarica",
+  "logs.exportError": "Esportazione non riuscita, riprova",
   "query.retry": "Riprova",
 
   "fw.title": "Firmware",

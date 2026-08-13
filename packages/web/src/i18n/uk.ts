@@ -174,6 +174,12 @@ export const uk: Record<DictKey, string> = {
   "logs.raw": "raw: {{packet}}",
   "logs.loadEarlier": "Завантажити раніше",
   "logs.backToLatest": "До останніх",
+  "logs.export": "Експорт журналів",
+  "logs.exportTitle": "Експорт журналів",
+  "logs.exportFrom": "Від",
+  "logs.exportTo": "До",
+  "logs.exportDownload": "Завантажити",
+  "logs.exportError": "Помилка експорту, спробуйте ще раз",
   "query.retry": "Повторити",
 
   "fw.title": "Прошивка",

@@ -12,8 +12,11 @@ import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 import { fetchDeviceLogs } from "../api/logs";
 import { alpha } from "@mui/material/styles";
+import DownloadIcon from "@mui/icons-material/Download";
+import IconButton from "@mui/material/IconButton";
 import { ListSkeleton } from "./QueryState";
 import { LogTerminalView } from "./LogTerminalView";
+import { LogExportDialog } from "./LogExportDialog";
 import type { LogEvent } from "../api/types";
 import { useI18n } from "../i18n/I18nContext";
 
@@ -46,11 +49,12 @@ function formatTime(iso: string): string {
  * every 5s; browsing older pages (cursor set) disables the auto-refresh.
  * Two views: the paginated table (default) and the live xterm terminal.
  */
-export function LogsView({ deviceId }: { deviceId: string }) {
+export function LogsView({ deviceId, deviceUid }: { deviceId: string; deviceUid?: string }) {
   const { t } = useI18n();
   const [view, setView] = useState<"table" | "terminal">("table");
   const [cursor, setCursor] = useState<string | null>(null);
   const [includeRaw, setIncludeRaw] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ["logs", deviceId, cursor, includeRaw],
@@ -103,7 +107,22 @@ export function LogsView({ deviceId }: { deviceId: string }) {
             {t("logs.refreshing")}
           </Typography>
         )}
+        <IconButton
+          size="small"
+          aria-label={t("logs.export")}
+          title={t("logs.export")}
+          onClick={() => setExportOpen(true)}
+        >
+          <DownloadIcon fontSize="small" />
+        </IconButton>
       </Stack>
+
+      <LogExportDialog
+        deviceId={deviceId}
+        deviceUid={deviceUid ?? deviceId}
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+      />
 
       {view === "terminal" ? (
         <LogTerminalView deviceId={deviceId} />
