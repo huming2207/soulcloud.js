@@ -1,6 +1,6 @@
 # Undocumented API Dependencies
 
-**Status**: 2026-08-13 · This page lists every place the codebase depends on
+**Status**: 2026-08-21 · This page lists every place the codebase depends on
 behavior that is NOT part of a dependency's documented public contract:
 internal object shapes, implementation-specific event ordering, or
 under-documented runtime semantics. Before upgrading Bun / Elysia / Aedes /
@@ -54,3 +54,7 @@ Prisma, walk this list and verify each item against the new version.
 ## History
 
 - 2026-08-13: Aedes internals cleared (connection registry). Page created.
+- 2026-08-21: Bun 1.4 verification confirmed B1; API WS tests now observe
+  strict 4403 close codes and `stop(true)` cleanup completes. The Bun-native
+  MQTT adapter remains required because `mqtt.js` still calls the unsupported
+  `createWebSocketStream` path under Bun 1.4.

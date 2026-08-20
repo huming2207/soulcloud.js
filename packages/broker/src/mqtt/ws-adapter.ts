@@ -26,7 +26,7 @@ export interface WsBrokerOptions {
 }
 
 export interface WsBrokerHandle {
-  server: { stop: (closeActive?: boolean) => void };
+  server: { stop: (closeActive?: boolean) => Promise<void> };
   port: number;
 }
 

@@ -15,8 +15,9 @@ three external audit rounds (Kimi) whose findings were verified and fixed.
   dispatch limit (`UPLINK_MAX_PACKET_BYTES`, 64 KB)
 - **Auth throttling**: failed authentication waits 100 ms; DB failures
   return CONNACK code 3 (server unavailable)
-- **Backpressure**: `ws.send() < 0` (full socket buffer) reports a stream
-  error so QoS 1 frames are never silently dropped
+- **Backpressure**: `ws.send() === 0` (unusable connection) reports a stream
+  error; `-1` means the frame was queued under backpressure and is not an
+  error
 
 ### 2. Parsing layer
 

@@ -111,7 +111,7 @@ function connectWs(url: string, protocols?: string[]): WsClient {
   // with SOULCLOUD_WS_MAX_CONNECTIONS=1, and a single test that fails
   // before closing its socket would starve every test after it
   openClients.add(ws);
-  return { ws, messages, open, closed, closeCode };
+  return { ws, messages, open, closed, get closeCode() { return closeCode; } };
 }
 
 /** Every WS client opened by the tests (straggler cleanup). */
@@ -266,14 +266,7 @@ afterAll(async () => {
   await prisma.deviceCommand.deleteMany({
     where: { batchId: { in: [batchId, otherBatchId] } },
   });
-  // NOTE: server.stop() is intentionally NOT called here. Bun 1.4.0's
-  // stop() hangs on connections the SERVER closed (the M2 expiry kick and
-  // the M3 cap rejection close(4401) from the subscribe handler), even
-  // after the client observed close and closed its side. Every socket in
-  // this file is closed explicitly in its test; the leftover server just
-  // dies with the process (bun test --isolate gives this file its own
-  // process, so nothing leaks to other files). Same workaround as
-  // log-stream.test.ts.
+  await server.stop(true);
   await prisma.commandBatch.deleteMany({
     where: { id: { in: [batchId, otherBatchId] } },
   });
@@ -557,15 +550,11 @@ describe("GET /v1/ws/commands", () => {
         Bun.sleep(2000).then(() => false),
       ]);
       expect(closed).toBe(true);
-      // Bun 1.4.0 often delivers close code 0 on server-initiated
-      // closes (same quirk family as the stop() hang); when a code IS
-      // present it must be the 4403 access-revoked code
-      expect([0, 4403]).toContain(client.closeCode);
+      expect(client.closeCode).toBe(4403);
       client.ws.close();
       await Bun.sleep(100);
     } finally {
-      // restore the membership for the rest of the suite; skip
-      // server.stop() (Bun server-initiated-close quirk)
+      // restore the membership for the rest of the suite
       await prisma.userProject.upsert({
         where: { userId_projectId: { userId, projectId } },
         update: {},

@@ -224,16 +224,14 @@ export async function startBroker(
     aedes,
     registry,
     server,
-    close: () =>
-      new Promise<void>((resolve) => {
-        try {
-          server.stop(true);
-        } catch {
-          // already stopped
-        }
-        aedes.close();
-        resolve();
-      }),
+    close: async () => {
+      try {
+        await server.stop(true);
+      } catch {
+        // already stopped
+      }
+      aedes.close();
+    },
   };
 }
 

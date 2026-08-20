@@ -11,7 +11,7 @@ broker 在 `ws://host:port/mqtt` 提供 **MQTT 3.1.1 over WebSocket**（端口�
 - 将 Bun 原生 WebSocket 消息桥接为 Node 风格的 `Duplex`，供 `aedes.handle` 消费
 - 将 mqtt-packet 的多段 `write()` 输出重组为**每个 MQTT 包一个 WS 帧**（MQTT-over-WS 规范要求如此）
 - 当 aedes 销毁流时关闭 WS（aedes 使用 `destroy()`，触发 `'close'` 而非 `'final'`）
-- 将 `ws.send() < 0`（socket 缓冲区满）报告为流错误，使 aedes 永远不会在 QoS 1 帧被丢弃时误认为已投递（背压，审计修复）
+- 将 `ws.send() === 0`（连接不可用）报告为流错误，同时允许 `-1`（因背压排队）正常完成，避免 aedes 在负载下错误拆除健康的 QoS 1 连接
 
 握手（handshake）、掩码、分片和 ping/pong 由 Bun 原生 WebSocket（uWS 内核）处理。
 

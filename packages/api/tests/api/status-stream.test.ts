@@ -147,6 +147,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await server.stop(true);
   await (await getStatusStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
   await prisma.device.deleteMany({ where: { projectId } });
   await prisma.userProject.deleteMany({ where: { projectId } });

@@ -72,7 +72,7 @@ console.log(
 async function shutdown(signal: string) {
   console.log(`[soulcloud-api] received ${signal}, shutting down`);
   rolloutPoller.stop();
-  app.stop();
+  await app.stop(true);
   // close the per-stream pg LISTEN connections and pending debounce
   // timers so the process can exit without relying on process.exit()
   await Promise.allSettled([

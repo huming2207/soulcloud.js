@@ -17,9 +17,9 @@ supported under Bun** (`createWebSocketStream` throws). The adapter:
   MQTT packet** (the MQTT-over-WS spec requires this)
 - closes the WS when aedes destroys the stream (aedes uses `destroy()`,
   which fires `'close'`, not `'final'`)
-- reports `ws.send() < 0` (socket buffer full) as a stream error so aedes
-  never believes a QoS 1 frame was delivered when it was dropped
-  (backpressure, audit fix)
+- treats `ws.send() === 0` (connection unusable) as a stream error while
+  allowing `-1` (queued under backpressure) to complete normally, so aedes
+  does not tear down healthy QoS 1 connections under load
 
 Handshake, masking, fragmentation and ping/pong are handled by Bun's native
 WebSocket (uWS core).

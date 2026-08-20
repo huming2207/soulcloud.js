@@ -90,7 +90,7 @@ function connectWs(url: string, protocols?: string[]): WsClient {
     closeCode = ev.code;
     resolveClosed();
   };
-  return { ws, messages, open, closed, closeCode };
+  return { ws, messages, open, closed, get closeCode() { return closeCode; } };
 }
 
 /** Waits until the connection either opened or closed (or timed out). */
@@ -166,8 +166,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // stop(true): Bun's server.stop() defaults to waiting for active
-  // connections, which would hang on lingering WebSockets
+  // Force-close active WebSockets so shutdown does not wait on test clients.
   await server.stop(true);
   // close the process-wide LISTEN session (the singleton is reset to null,
   // so a fresh hub is created if anything else subscribes later)
@@ -617,8 +616,6 @@ describe("GET /v1/ws/logs", () => {
       client.ws.close();
       await Bun.sleep(100); // let the server process the close
     } finally {
-      // same Bun 1.4.0 quirk as the M3 test: server.stop() hangs when a
-      // connection was closed by the server (the 4401 expiry close)
       await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
     }
   });
@@ -654,11 +651,6 @@ describe("GET /v1/ws/logs", () => {
       second.ws.close();
       await Bun.sleep(100); // let the server process the closes
     } finally {
-      // NOTE: server.stop() hangs in Bun 1.4.0 when a connection was
-      // closed by the SERVER (the cap's 4401 close here): stop keeps
-      // waiting on the server-initiated close. Both sockets are already
-      // closed explicitly and the process exits right after the suite,
-      // so we skip stop for this server.
       await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
     }
   });
@@ -688,15 +680,11 @@ describe("GET /v1/ws/logs", () => {
         Bun.sleep(2000).then(() => false),
       ]);
       expect(closed).toBe(true);
-      // Bun 1.4.0 often delivers close code 0 on server-initiated
-      // closes (same quirk family as the stop() hang); when a code IS
-      // present it must be the 4403 access-revoked code
-      expect([0, 4403]).toContain(client.closeCode);
+      expect(client.closeCode).toBe(4403);
       client.ws.close();
       await Bun.sleep(100);
     } finally {
-      // restore the membership for the rest of the suite (and skip
-      // server.stop(): same Bun server-initiated-close quirk as M2/M3)
+      // restore the membership for the rest of the suite
       await prisma.userProject.upsert({
         where: { userId_projectId: { userId: registeredUserId, projectId } },
         update: {},
