@@ -28,6 +28,10 @@ export interface MqttTestClientOptions {
   keepalive?: number;
   /** clean session flag (default true; false = persistent session). */
   clean?: boolean;
+  /** Test-only: split CONNECT into WS messages of at most this many bytes. */
+  connectFragmentBytes?: number;
+  /** WebSocket subprotocols offered during the opening handshake. */
+  protocols?: string[];
 }
 
 export class MqttTestClient extends EventEmitter {
@@ -35,6 +39,10 @@ export class MqttTestClient extends EventEmitter {
   private packetId = 1;
   private pendingSub: { packetId: number; resolve: () => void; reject: (e: Error) => void } | null = null;
   connected = false;
+
+  get protocol(): string {
+    return this.ws?.protocol ?? "";
+  }
 
   constructor(
     private readonly url: string,
@@ -46,7 +54,7 @@ export class MqttTestClient extends EventEmitter {
   /** Connects (sends CONNECT, resolves on CONNACK returnCode 0). */
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url);
+      const ws = new WebSocket(this.url, this.options.protocols);
       this.ws = ws;
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {};
@@ -90,19 +98,25 @@ export class MqttTestClient extends EventEmitter {
       const timeout = setTimeout(() => reject(new Error("connect timeout")), 5000);
 
       ws.onopen = () => {
-        ws.send(
-          generate({
-            cmd: "connect",
-            protocolId: "MQTT",
-            protocolVersion: 4,
-            clean: this.options.clean ?? true,
-            clientId: this.options.clientId,
-            keepalive: this.options.keepalive ?? 30,
-            ...(this.options.username !== undefined
-              ? { username: this.options.username, password: Buffer.from(this.options.password ?? "") }
-              : {}),
-          }),
-        );
+        const connectPacket = generate({
+          cmd: "connect",
+          protocolId: "MQTT",
+          protocolVersion: 4,
+          clean: this.options.clean ?? true,
+          clientId: this.options.clientId,
+          keepalive: this.options.keepalive ?? 30,
+          ...(this.options.username !== undefined
+            ? { username: this.options.username, password: Buffer.from(this.options.password ?? "") }
+            : {}),
+        });
+        const fragmentBytes = this.options.connectFragmentBytes;
+        if (fragmentBytes && fragmentBytes > 0) {
+          for (let offset = 0; offset < connectPacket.length; offset += fragmentBytes) {
+            ws.send(connectPacket.subarray(offset, offset + fragmentBytes));
+          }
+        } else {
+          ws.send(connectPacket);
+        }
       };
 
       ws.onmessage = (ev) => {

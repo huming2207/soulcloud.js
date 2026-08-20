@@ -168,6 +168,19 @@ describe("device authentication", () => {
     device.end();
   });
 
+  test("accepts CONNECT split across WebSocket messages", async () => {
+    const device = connectDevice({ connectFragmentBytes: 1 });
+    await waitForConnect(device);
+    device.end();
+  });
+
+  test("negotiates the standard mqtt WebSocket subprotocol", async () => {
+    const device = connectDevice({ protocols: ["mqtt"] });
+    await waitForConnect(device);
+    expect(device.protocol).toBe("mqtt");
+    device.end();
+  });
+
   test("rejects wrong password", async () => {
     const result = await tryConnect({ password: "wrong" });
     expect(result.startsWith("error")).toBe(true);

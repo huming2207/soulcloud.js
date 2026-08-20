@@ -32,6 +32,8 @@ export interface WsBrokerHandle {
 
 interface WsConnectionData {
   duplex: Duplex | null;
+  /** Completes the active Duplex write when Bun reports the socket drained. */
+  resumeWrite: ((error?: Error) => void) | null;
   /** Partial MQTT bytes carried across WS message boundaries. */
   partial: { chunks: Buffer[]; length: number } | null;
   /** Absolute ceiling for one declared MQTT frame (early DoS guard). */
@@ -94,7 +96,7 @@ export function startWsBroker(
           return new Response("not found", { status: 404 });
         }
         if (!srv.upgrade(req, {
-          data: { duplex: null, partial: null, maxPacketBytes },
+          data: { duplex: null, resumeWrite: null, partial: null, maxPacketBytes },
         })) {
           return new Response("upgrade failed", { status: 400 });
         }
@@ -134,18 +136,6 @@ export function startWsBroker(
           if (partial && partial.chunks.length > 0) {
             partial.chunks.push(bytes);
             partial.length += bytes.length;
-            // A well-formed varint completes within 5 bytes; a partial
-            // buffer beyond maxPacketBytes + 5 means the peer is dribbling
-            // an over-limit frame. Refuse instead of accumulating.
-            if (partial.length > ws.data.maxPacketBytes + 5) {
-              ws.data.partial = null;
-              try {
-                ws.close();
-              } catch {
-                // already closing
-              }
-              return;
-            }
             buf = Buffer.concat(partial.chunks);
           } else {
             buf = bytes;
@@ -165,23 +155,32 @@ export function startWsBroker(
               }
               return;
             }
+            if (scan.total > rest.length) break;
             offset += scan.total;
           }
 
           if (offset === 0) {
             // no complete frame yet: buffer everything for the next message
-            ws.data.partial = partial ?? { chunks: [], length: 0 };
-            ws.data.partial.chunks.push(bytes);
-            ws.data.partial.length += bytes.length;
+            if (!partial) {
+              ws.data.partial = { chunks: [bytes], length: bytes.length };
+            }
             return;
           }
-          ws.data.partial =
-            offset < buf.length
-              ? { chunks: [buf.subarray(offset)], length: buf.length - offset }
-              : null;
+          if (offset < buf.length) {
+            // Copy only the incomplete tail. Keeping a subarray would retain
+            // the entire (possibly large) WS message until the next fragment.
+            const tail = Buffer.from(buf.subarray(offset));
+            ws.data.partial = { chunks: [tail], length: tail.length };
+          } else {
+            ws.data.partial = null;
+          }
           if (!duplex.push(buf.subarray(0, offset))) {
             // readable side is saturated; aedes backpressure will drain it
           }
+        },
+        drain(ws: ServerWebSocket) {
+          const resumeWrite = ws.data.resumeWrite;
+          if (resumeWrite) resumeWrite();
         },
         close(ws: ServerWebSocket, code: number, reason: string) {
           // code 0 = the peer went away without a close frame (TCP
@@ -192,6 +191,10 @@ export function startWsBroker(
           const duplex = ws.data.duplex;
           ws.data.duplex = null;
           ws.data.partial = null;
+          const resumeWrite = ws.data.resumeWrite;
+          if (resumeWrite) {
+            resumeWrite(new Error("websocket closed before buffered data drained"));
+          }
           if (duplex) {
             duplex.destroy();
           }
@@ -222,10 +225,12 @@ export function startWsBroker(
  * complete packets before they are sent.
  */
 class MqttFrameBuffer {
-  private buf = Buffer.alloc(0);
+  private buf: Buffer<ArrayBufferLike> = Buffer.alloc(0);
 
   push(chunk: Buffer, onFrame: (frame: Buffer) => void): void {
-    this.buf = this.buf.length === 0 ? Buffer.from(chunk) : Buffer.concat([this.buf, chunk]);
+    // createWsDuplex already gives us an owned copy, so copying the first
+    // chunk again only adds allocation and memory bandwidth on every frame.
+    this.buf = this.buf.length === 0 ? chunk : Buffer.concat([this.buf, chunk]);
     for (;;) {
       const frameLen = mqttFrameLength(this.buf);
       if (frameLen === null) break; // incomplete
@@ -249,7 +254,8 @@ function mqttFrameLength(buf: Buffer): number | null {
 }
 
 /** Bridges a Bun server WebSocket to a Duplex for aedes.handle. */
-function createWsDuplex(ws: ServerWebSocket): Duplex {
+/** @internal Exported for transport-level backpressure regression tests. */
+export function createWsDuplex(ws: ServerWebSocket): Duplex {
   const framer = new MqttFrameBuffer();
   const duplex = new Duplex({
     read() {
@@ -259,17 +265,35 @@ function createWsDuplex(ws: ServerWebSocket): Duplex {
       try {
         const data = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array);
         let sendError: Error | null = null;
+        let backpressured = false;
         framer.push(data, (frame) => {
           // Bun's ws.send returns: >=0 bytes queued, -1 when the message was
           // queued with backpressure (NOT a failure - the frame is still
           // sent once the socket drains), and 0 when the connection is
           // unusable (closed). Only 0 is a real failure; reporting -1 as an
           // error made aedes tear down healthy connections under load.
-          if (sendError === null && ws.send(frame) === 0) {
+          if (sendError !== null) return;
+          const sent = ws.send(frame);
+          if (sent === 0) {
             sendError = new Error("websocket send failed; connection unusable");
+          } else if (sent === -1) {
+            backpressured = true;
           }
         });
-        callback(sendError);
+        if (sendError) {
+          callback(sendError);
+        } else if (backpressured) {
+          // Node Writable streams serialize _write calls until callback.
+          // Holding it until Bun's drain event prevents Aedes from growing
+          // the per-connection WebSocket queue without bound.
+          ws.data.resumeWrite = (error?: Error) => {
+            if (!ws.data.resumeWrite) return;
+            ws.data.resumeWrite = null;
+            callback(error ?? null);
+          };
+        } else {
+          callback(null);
+        }
       } catch (error) {
         callback(error as Error);
       }
@@ -278,7 +302,10 @@ function createWsDuplex(ws: ServerWebSocket): Duplex {
 
   // aedes destroys the stream on protocol errors and disconnects; that
   // fires the 'close' event, not 'final', so the WS must be closed here
+  let wsClosing = false;
   const closeWs = (why: string) => {
+    if (wsClosing) return;
+    wsClosing = true;
     console.log(`[soulcloud-broker] duplex closed (${why}); closing ws`);
     try {
       ws.close();
