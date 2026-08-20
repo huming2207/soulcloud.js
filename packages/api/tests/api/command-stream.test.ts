@@ -12,8 +12,7 @@
  * detail shape) and pushes { type: "batch", ... } to subscribers.
  *
  * The hub's pg LISTEN session is a process-wide singleton; afterAll closes
- * it so the listener does not outlive this file (bun test --isolate runs
- * each test file in its own process).
+ * it explicitly rather than relying on bun test --isolate handle cleanup.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
@@ -106,12 +105,19 @@ function connectWs(url: string, protocols?: string[]): WsClient {
     closeCode = ev.code;
     resolveClosed();
   };
-  ws.onerror = () => {};
   // track every client so afterEach can close stragglers: this file runs
   // with SOULCLOUD_WS_MAX_CONNECTIONS=1, and a single test that fails
   // before closing its socket would starve every test after it
   openClients.add(ws);
-  return { ws, messages, open, closed, get closeCode() { return closeCode; } };
+  return {
+    ws,
+    messages,
+    open,
+    closed,
+    get closeCode() {
+      return closeCode;
+    },
+  };
 }
 
 /** Every WS client opened by the tests (straggler cleanup). */
@@ -318,8 +324,7 @@ describe("GET /v1/ws/commands", () => {
   test("expired access token: the connection is closed (M2)", async () => {
     // sign a short-lived (1s) access token for the existing test user
     // with the same secret the app verifies with; the expiry check must
-    // close the connection once the token expires (Bun's CloseEvent does
-    // not expose the code, so "closed" is the observable evidence)
+    // close the connection once the token expires
     const shortToken = await signAccessToken(
       { ...TEST_JWT, accessTtlSeconds: 1 },
       { sub: userId, username: "cmdstream-user" },
@@ -331,6 +336,7 @@ describe("GET /v1/ws/commands", () => {
       Bun.sleep(4000).then(() => "timeout" as const),
     ]);
     expect(closed).toBeUndefined(); // closed promise resolved
+    expect(client.closeCode).toBe(4401);
     client.ws.close();
     await client.closed.catch(() => {});
   });
@@ -347,6 +353,7 @@ describe("GET /v1/ws/commands", () => {
       // right after open is the observable evidence)
       expect(await waitForSettle(second)).not.toBe("timeout");
       await second.closed;
+      expect(second.closeCode).toBe(4401);
       second.ws.close();
     } finally {
       first.ws.close();
@@ -554,6 +561,7 @@ describe("GET /v1/ws/commands", () => {
       client.ws.close();
       await Bun.sleep(100);
     } finally {
+      await server6.stop(true);
       // restore the membership for the rest of the suite
       await prisma.userProject.upsert({
         where: { userId_projectId: { userId, projectId } },

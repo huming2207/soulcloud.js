@@ -52,7 +52,7 @@ afterAll(async () => {
 
 // Each test starts with an empty command queue for THIS test's devices and
 // fresh sequences, so tests are independent of each other and never touch
-// rows created by other test files (bun test runs files in parallel).
+// rows created by other test files.
 beforeEach(async () => {
   await prisma.deviceCommand.deleteMany({
     where: { deviceId: { in: deviceIds } },

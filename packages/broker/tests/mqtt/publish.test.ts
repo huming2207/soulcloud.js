@@ -1,7 +1,6 @@
 /**
  * Command poller tests: startCommandPoller drives pollOnce on wake and
- * stops cleanly. A real broker is started on a dedicated port (the test
- * suite runs files in parallel on the isolated test database).
+ * stops cleanly. A real broker is started on a dedicated port.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
@@ -13,7 +12,7 @@ import { MqttTestClient } from "../helpers/mqtt-client";
 
 // pollOnce leases ANY queued command (global scan), so this file must be
 // serialized against the other lease-touching files (queue/broker/ota)
-// or parallel tests can steal the commands under test
+// if this file is selected in a parallel test run
 await acquireLeaseLock(prisma);
 
 const silentLog = { info: () => {}, warn: () => {}, debug: () => {} };

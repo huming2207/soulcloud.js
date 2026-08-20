@@ -71,7 +71,15 @@ function connectWs(url: string, protocols?: string[]): WsClient {
     closeCode = ev.code;
     resolveClosed();
   };
-  return { ws, messages, open, closed, closeCode };
+  return {
+    ws,
+    messages,
+    open,
+    closed,
+    get closeCode() {
+      return closeCode;
+    },
+  };
 }
 
 async function waitForSettle(
@@ -244,10 +252,12 @@ describe("GET /v1/ws/notifications", () => {
         Bun.sleep(2000).then(() => false),
       ]);
       expect(closed).toBe(true);
+      expect(second.closeCode).toBe(4401);
       first.ws.close();
       second.ws.close();
       await Bun.sleep(100);
     } finally {
+      await server2.stop(true);
       await (await getNotificationsHub("unused", { warn: () => {} })).close().catch(() => {});
     }
   });

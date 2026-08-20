@@ -7,8 +7,8 @@
  * user. A real listening socket is required for the WS upgrade
  * (`port: 0` -> a free random port).
  *
- * The hub's pg LISTEN session is a process-wide singleton; afterAll
- * closes it (bun test --isolate runs each file in its own process).
+ * The hub's pg LISTEN session is a process-wide singleton; afterAll closes
+ * it explicitly rather than relying on bun test --isolate handle cleanup.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -75,7 +75,15 @@ function connectWs(url: string, protocols?: string[]): WsClient {
     closeCode = ev.code;
     resolveClosed();
   };
-  return { ws, messages, open, closed, closeCode };
+  return {
+    ws,
+    messages,
+    open,
+    closed,
+    get closeCode() {
+      return closeCode;
+    },
+  };
 }
 
 async function waitForSettle(

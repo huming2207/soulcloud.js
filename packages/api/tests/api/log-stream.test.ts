@@ -12,8 +12,7 @@
  * returns the app instance itself).
  *
  * The hub's pg LISTEN session is a process-wide singleton; afterAll closes
- * it so the listener does not outlive this file (bun test --isolate runs
- * each test file in its own process).
+ * it explicitly rather than relying on bun test --isolate handle cleanup.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -90,7 +89,15 @@ function connectWs(url: string, protocols?: string[]): WsClient {
     closeCode = ev.code;
     resolveClosed();
   };
-  return { ws, messages, open, closed, get closeCode() { return closeCode; } };
+  return {
+    ws,
+    messages,
+    open,
+    closed,
+    get closeCode() {
+      return closeCode;
+    },
+  };
 }
 
 /** Waits until the connection either opened or closed (or timed out). */
@@ -613,9 +620,11 @@ describe("GET /v1/ws/logs", () => {
         Bun.sleep(3000).then(() => false),
       ]);
       expect(closed).toBe(true);
+      expect(client.closeCode).toBe(4401);
       client.ws.close();
       await Bun.sleep(100); // let the server process the close
     } finally {
+      await server4.stop(true);
       await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
     }
   });
@@ -647,10 +656,12 @@ describe("GET /v1/ws/logs", () => {
         Bun.sleep(2000).then(() => false),
       ]);
       expect(closed).toBe(true);
+      expect(second.closeCode).toBe(4401);
       first.ws.close();
       second.ws.close();
       await Bun.sleep(100); // let the server process the closes
     } finally {
+      await server5.stop(true);
       await (await getLogStreamHub(prisma, "unused", { warn: () => {} })).close().catch(() => {});
     }
   });
@@ -684,6 +695,7 @@ describe("GET /v1/ws/logs", () => {
       client.ws.close();
       await Bun.sleep(100);
     } finally {
+      await server6.stop(true);
       // restore the membership for the rest of the suite
       await prisma.userProject.upsert({
         where: { userId_projectId: { userId: registeredUserId, projectId } },

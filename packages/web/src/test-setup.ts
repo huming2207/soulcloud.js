@@ -113,11 +113,3 @@ if (!nav.clipboard) {
     configurable: true,
   });
 }
-
-// happy-dom's navigator may lack `language`
-if (!window.navigator.language) {
-  Object.defineProperty(window.navigator, "language", {
-    value: "en-US",
-    configurable: true,
-  });
-}
