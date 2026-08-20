@@ -27,7 +27,7 @@ and what is deliberately left open.
 
 ## Quick facts
 
-- **Runtime**: Bun 1.3, TypeScript strict, zero native deps (only `jose`, `pg`,
+- **Runtime**: Bun 1.4, TypeScript strict, zero native deps (only `jose`, `pg`,
   `elysia`, `zod`, `aedes`, `@msgpack/msgpack`, `mqtt-packet` as test helper).
 - **Processes**: `@soulcloud/api` (REST, :8080), `@soulcloud/broker`
   (MQTT over WebSocket, :1883/mqtt) and `@soulcloud/web` (SPA, Vite :5173

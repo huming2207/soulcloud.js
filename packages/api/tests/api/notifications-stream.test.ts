@@ -248,7 +248,7 @@ describe("GET /v1/ws/notifications", () => {
       second.ws.close();
       await Bun.sleep(100);
     } finally {
-      // Bun 1.3.13: server.stop() hangs after a server-initiated close;
+      // Bun 1.4.0: server.stop() hangs after a server-initiated close;
       // sockets are closed explicitly, the process cleans up the rest
       await (await getNotificationsHub("unused", { warn: () => {} })).close().catch(() => {});
     }

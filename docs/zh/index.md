@@ -27,7 +27,7 @@ SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平
 
 ## 快速事实
 
-- **运行时**: Bun 1.3, TypeScript strict, 零原生依赖（只有 `jose`、`pg`、
+- **运行时**: Bun 1.4, TypeScript strict, 零原生依赖（只有 `jose`、`pg`、
   `elysia`、`zod`、`aedes`、`@msgpack/msgpack`、`mqtt-packet` 作为测试辅助）。
 - **进程**: `@soulcloud/api` (REST, :8080)、`@soulcloud/broker`
   （MQTT over WebSocket, :1883/mqtt）和 `@soulcloud/web`（SPA, Vite :5173

@@ -4,7 +4,7 @@
  * loopback RTT. Run with: bun scripts/bench-aedes.ts
  *
  * Uses the same WebSocket transport and test client as the broker test
- * suite, so the numbers reflect the real runtime (Bun 1.3 + Aedes 1.1 +
+ * suite, so the numbers reflect the real runtime (Bun 1.4 + Aedes 1.1 +
  * mqtt-packet codec) rather than an idealized socket benchmark.
  */
 

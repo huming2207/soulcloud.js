@@ -298,7 +298,7 @@ afterAll(async () => {
   await (
     await getOtaStreamHub(prisma, process.env.DATABASE_URL ?? "", { warn: () => {} })
   ).close();
-  // NOTE: server.stop() is intentionally NOT called here. Bun 1.3.13's
+  // NOTE: server.stop() is intentionally NOT called here. Bun 1.4.0's
   // stop() hangs on connections the SERVER closed (the M2 expiry kick and
   // the M3 cap rejection close(4401) from the subscribe handler), even
   // after the client observed close and closed its side. Every socket in
@@ -601,7 +601,7 @@ describe("GET /v1/ws/ota", () => {
         Bun.sleep(2000).then(() => false),
       ]);
       expect(closed).toBe(true);
-      // Bun 1.3.13 often delivers close code 0 on server-initiated
+      // Bun 1.4.0 often delivers close code 0 on server-initiated
       // closes (same quirk family as the stop() hang); when a code IS
       // present it must be the 4403 access-revoked code
       expect([0, 4403]).toContain(client.closeCode);
