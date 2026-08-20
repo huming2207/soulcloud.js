@@ -9,9 +9,9 @@ broker 在 `ws://host:port/mqtt` 提供 **MQTT 3.1.1 over WebSocket**（端口�
 为什么自定义 WS 适配器（`packages/broker/src/mqtt/ws-adapter.ts`）：`ws` npm 包（aedes-server-factory / websocket-stream 所用）在 Bun 下**不受支持**（`createWebSocketStream` 会抛异常）。该适配器：
 
 - 将 Bun 原生 WebSocket 消息桥接为 Node 风格的 `Duplex`，供 `aedes.handle` 消费
-- 将 mqtt-packet 的多段 `write()` 输出重组为**每个 MQTT 包一个 WS 帧**（MQTT-over-WS 规范要求如此）
+- 按 MQTT 3.1.1 的要求接收跨 WS 消息的多个或不完整 MQTT 包，同时将 mqtt-packet 的多段 `write()` 输出合并为每个包一个出站消息，以减少帧开销和设备唤醒
 - 当 aedes 销毁流时关闭 WS（aedes 使用 `destroy()`，触发 `'close'` 而非 `'final'`）
-- 将 `ws.send() === 0`（连接不可用）报告为流错误，同时允许 `-1`（因背压排队）正常完成，避免 aedes 在负载下错误拆除健康的 QoS 1 连接
+- 将 `ws.send() === 0`（连接不可用）报告为流错误；遇到 `-1`（因背压排队）时保持 Duplex 写入回调，直到 Bun 的 `drain` 回调，避免 aedes 填满 Bun 的每连接队列
 
 握手（handshake）、掩码、分片和 ping/pong 由 Bun 原生 WebSocket（uWS 内核）处理。
 

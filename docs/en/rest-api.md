@@ -1,9 +1,8 @@
 # REST API
 
 The API (`packages/api/src/api/`) is an Elysia server. Body validation is
-done manually with Zod inside handlers (Elysia's `onError` hook is
-unreliable under Bun and its ValidationError response shape does not match
-our `{error, message}` contract). All handlers wrap unexpected failures with
+done manually with Zod inside handlers to preserve the established
+`{error, message}` contract and route-specific typed mappings. All handlers wrap unexpected failures with
 `handleApiError` → uniform `500 {error:"internal"}` — internal messages
 never leak.
 

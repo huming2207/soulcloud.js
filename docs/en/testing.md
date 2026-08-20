@@ -1,8 +1,8 @@
 # Testing & Quality
 
-**Baseline**: 638 backend tests across 50 files (isolated
-`soulcloud_test` DB, `--isolate` per-file processes) + 226 web unit
-tests across 33 files, `tsc --noEmit` clean, oxlint clean, and a CI
+**Baseline**: 642 backend tests across 51 files (isolated
+`soulcloud_test` DB, serial `--isolate` execution) + 226 web unit
+tests across 36 files, `tsc --noEmit` clean, oxlint clean, and a CI
 hard-coded-CJK scan (scripts/scan-hardcoded-i18n.sh) green. E2E scripts
 (command loop, log ingestion, OTA, rollout, web <-> API) pass.
 
@@ -69,9 +69,11 @@ packages/broker/tests/mqtt/
 - **No fixed sleeps** for asynchronous DB assertions: `waitFor()` polls a
   predicate with a timeout (except genuine reconnect delays, which are
   polled too)
-- **Test isolation**: cleanup is scoped to test devices/projects — no
-  global `DELETE FROM ...` that would race across files (bun test runs
-  files in parallel)
+- **Test isolation**: cleanup is scoped to test devices/projects. Bun 1.4's
+  `--isolate` supplies fresh globals between files in the same process; the
+  backend suite remains serial because its queue workers intentionally scan
+  shared database rows, so separate `--parallel` workers can lease another
+  test's commands.
 - **Skipped tests do not exist**: every test runs for real (fixtures are
   checked in)
 - Tests fail on internal error leaks (`500` responses assert the body does
@@ -83,10 +85,10 @@ packages/broker/tests/mqtt/
 parallel jobs:
 
 1. **backend** (postgres service): install → `db:generate` → `db:deploy`
-   → `bun run typecheck` → `bash scripts/test.sh` (638 tests on the
+   → `bun run typecheck` → `bash scripts/test.sh` (642 tests on the
    isolated `soulcloud_test` database) → both-process E2E
    (`scripts/run-e2e.sh`)
-2. **web** (no database): install → web typecheck → 221 unit tests
+2. **web** (no database): install → web typecheck → 226 unit tests
    (`bun run --cwd packages/web test`) → production build
 3. **web-e2e** (postgres service): install → `db:generate`/`db:deploy`
    → install agent-browser (Chrome for Testing) →
@@ -97,8 +99,8 @@ parallel jobs:
 
 - **Unit tests**: `bun run --cwd packages/web test` — bun:test with
   happy-dom globals (injected by `src/test-setup.ts`), React Testing
-  Library + user-event. Files run with `--isolate` so module mocks
-  (`mock.module`) do not leak across files.
+  Library + user-event. Files run serially with `--isolate`; Bun resets
+  globals between files so module mocks (`mock.module`) do not leak.
 - **Coverage**: `bun run --cwd packages/web test --coverage` — 94% lines /
   85% funcs across 33 files (i18n dictionary, axios auth flow,
   contexts, every page/dialog, API helpers, theme).

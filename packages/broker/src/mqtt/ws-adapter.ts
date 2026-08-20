@@ -219,10 +219,11 @@ export function startWsBroker(
 /**
  * MQTT-over-WebSocket framing buffer.
  *
- * The spec requires one complete MQTT control packet per WS data frame,
- * but mqtt-packet's writeToStream emits a packet as several stream.write()
- * calls (header, flags, payload). This buffer reassembles the writes into
- * complete packets before they are sent.
+ * MQTT permits packets to cross WS message boundaries. We nevertheless
+ * coalesce mqtt-packet's several stream.write() calls (header, flags,
+ * payload) into one outbound message. This reduces WS framing and receiver
+ * wakeups for embedded clients; it is an optimization, not a protocol
+ * requirement.
  */
 class MqttFrameBuffer {
   private buf: Buffer<ArrayBufferLike> = Buffer.alloc(0);

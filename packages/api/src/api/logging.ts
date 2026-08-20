@@ -8,8 +8,7 @@
  *
  * Every path/query parameter is validated with Zod before use and all
  * handlers are wrapped with `handleApiError` so unexpected failures never
- * leak internal error messages (Elysia's onError hook is unreliable under
- * Bun, see app.ts).
+ * leak internal error messages (see app.ts).
  */
 
 import { Elysia } from "elysia";

@@ -1,10 +1,10 @@
 /**
  * Shared request-validation helpers for the API.
  *
- * Elysia 1.4's onError hook is unreliable under Bun, so every handler wraps
- * its logic with `handleApiError` which maps unknown failures to a uniform
- * `500 { error: "internal" }` without leaking internal messages. All path
- * and query parameters are validated with Zod before use.
+ * Handlers use `handleApiError` to preserve the API's uniform
+ * `500 { error: "internal" }` contract without leaking internal messages,
+ * while keeping typed domain-error mapping local to each route. All path and
+ * query parameters are validated with Zod before use.
  */
 
 import { z } from "zod";

@@ -2,7 +2,7 @@
 
 > 本文档是 `docs/en/web.md` 的中文翻译，与英文版一一对应。
 
-**日期**：2026-08-09 · **基线**：221 个单元测试 / 33 个文件全绿，`tsc --noEmit` 干净，web <-> API 浏览器 E2E 通过，CI 并行运行三个任务（backend / web / web-e2e）。
+**日期**：2026-08-21 · **基线**：226 个单元测试 / 36 个文件全绿，`tsc --noEmit` 干净，web <-> API 浏览器 E2E 通过，CI 并行运行三个任务（backend / web / web-e2e）。
 
 Web 控制台（`packages/web`）是 SoulcloudJS 平台的人机界面：设备管理、解码日志、固件版本发布（release）与 OTA 滚动发布（rollout）。它是纯 SPA，只与 Elysia REST API（`:8080`）通信——绝不触碰 MQTT 或消息代理（broker）。
 
@@ -58,7 +58,7 @@ Web 控制台（`packages/web`）是 SoulcloudJS 平台的人机界面：设备�
 
 ## 测试
 
-- **221 个单元测试 / 33 个文件**（`bun run --cwd packages/web test`）：i18n 字典不变量、axios 认证流程（mock axios：Bearer 注入、单飞 401 刷新、豁免列表、登出跳转）、认证/项目 contexts、每个页面与对话框（渲染、校验、流程）、API 层 URL/body 构造、主题 LinkBehavior。
+- **226 个单元测试 / 36 个文件**（`bun run --cwd packages/web test`）：i18n 字典不变量、axios 认证流程（mock axios：Bearer 注入、单飞 401 刷新、豁免列表、登出跳转）、认证/项目 contexts、每个页面与对话框（渲染、校验、流程）、API 层 URL/body 构造、主题 LinkBehavior。
 - **覆盖率**：94% 行 / 85% 函数（33 个文件）。
 - **浏览器 E2E**（`scripts/web-e2e-ci.sh`）：启动 API + 生产构建（vite build + preview）、播种用户、通过 API 创建设备，然后在真实浏览器中验证前端渲染真实后端数据（登录页、已认证仪表盘、设备行、固件/滚动发布空状态，以及日志页：设备选择器 → 表格 → 带实时 WS"已连接"状态的 xterm 终端）。所有浏览器调用共享一个 agent-browser 会话；交互是确定性的（业务操作走 API 层，页面状态用 `wait --text` 条件）。
 - CI：`web` 任务在无数据库情况下运行 typecheck + 单元测试 + 构建；`web-e2e` 任务安装 agent-browser 并对全新数据库运行浏览器 E2E。

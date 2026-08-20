@@ -11,8 +11,8 @@
  *
  * Note: body validation is done manually with Zod inside the handler instead
  * of Elysia's schema validation, because (a) Elysia's ValidationError
- * response shape does not match our { error, message } contract, and (b) the
- * onError lifecycle hook is not reliably invoked under Bun in this version.
+ * response shape does not match our { error, message } contract. Route-local
+ * error mapping also keeps typed domain errors explicit at their call sites.
  */
 
 import { Elysia } from "elysia";

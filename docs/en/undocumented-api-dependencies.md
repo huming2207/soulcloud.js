@@ -28,7 +28,8 @@ Prisma, walk this list and verify each item against the new version.
 
 | # | Dependency | Where | What breaks if it changes |
 | --- | --- | --- | --- |
-| B1 | `ws.send()` return value: `0` = connection unusable (real failure), `-1` = queued with backpressure (NOT a failure), `> 0` = bytes queued — the WS adapter only treats `0` as an error. Bun's docs now document this in the WebSocket "Backpressure" section; the adapter comment still pins the behavior for this codebase | `packages/broker/src/mqtt/ws-adapter.ts` (write side) | Healthy connections torn down under load (`-1` misread as failure) or dead connections not detected (`0` ignored) |
+| B1 | `ws.send()` return value: `0` = connection unusable (real failure), `-1` = queued with backpressure, `> 0` = bytes queued. The adapter treats `0` as an error and defers the stream write callback after `-1` until Bun's `drain` callback | `packages/broker/src/mqtt/ws-adapter.ts` (write side) | Healthy connections torn down (`-1` misread as failure), dead connections ignored (`0` ignored), or the 16 MiB per-socket queue overfilled (write callback released before `drain`) |
+| B2 | Bun 1.4 `--isolate` resets globals between test files in the same process; only explicit `--parallel` adds worker processes | Root and web test scripts | Assuming process isolation hides leaked handles; enabling `--parallel` lets independent backend workers lease another test's shared queue rows |
 
 ### Prisma 7
 
@@ -41,11 +42,11 @@ Prisma, walk this list and verify each item against the new version.
 
 | # | Dependency | Where | What breaks if it changes |
 | --- | --- | --- | --- |
-| M1 | `writeToStream` emits one MQTT control packet as SEVERAL `stream.write()` calls (header, flags, payload); the WS adapter's `MqttFrameBuffer` reassembles them into one complete frame per WS message (MQTT-over-WS framing requirement) | `packages/broker/src/mqtt/ws-adapter.ts` | Malformed WS frames sent to devices → device-side parser failures |
+| M1 | `writeToStream` emits one MQTT control packet as several `stream.write()` calls (header, flags, payload); the adapter coalesces them into one outbound WS message to reduce framing and embedded-client wakeups (MQTT itself permits partial/multiple packets per message) | `packages/broker/src/mqtt/ws-adapter.ts` | More WS frames and receiver wakeups if mqtt-packet's write pattern changes; protocol correctness is unaffected |
 
 ## Upgrade checklist
 
-1. **Bun**: verify B1 against the new version's docs/changelog; run the broker WS tests (`broker.test.ts`, `publish.test.ts`, `connection-registry.test.ts`) plus a real device connect/disconnect smoke.
+1. **Bun**: verify B1/B2 against the new version's docs/changelog; run the broker WS tests (`ws-adapter.test.ts`, `broker.test.ts`, `publish.test.ts`, `connection-registry.test.ts`) plus a real device connect/disconnect smoke. Do not enable backend `--parallel` without first removing its shared queue-row interference.
 2. **Elysia**: verify E1–E5 by running `log-stream.test.ts` (handshake rejection probes + full WS flows). If the major version bumps, re-read BOTH the compose short-circuit and the bun adapter source (the `beforeHandle` abort lives in compose; the adapter discards return values on the success path and wraps each event in a new ElysiaWS).
 3. **Aedes**: no internal structures read; only the event contract (`client` after auth, `clientDisconnect` ordering vs. same-clientId replacement, `subscribe`/`unsubscribe` payload shapes) matters — the connection-registry tests pin all of it.
 4. **Prisma**: P1's driver-adapter shape is best-effort; confirm the fallback path works if the shape changed (test: create a device with a duplicate `device_uid` and expect `device_uid_taken`).
@@ -54,7 +55,8 @@ Prisma, walk this list and verify each item against the new version.
 ## History
 
 - 2026-08-13: Aedes internals cleared (connection registry). Page created.
-- 2026-08-21: Bun 1.4 verification confirmed B1; API WS tests now observe
-  strict 4403 close codes and `stop(true)` cleanup completes. The Bun-native
-  MQTT adapter remains required because `mqtt.js` still calls the unsupported
-  `createWebSocketStream` path under Bun 1.4.
+- 2026-08-21: Bun 1.4 verification confirmed B1/B2; adapter tests now pin
+  fragmented inbound MQTT packets and write-callback backpressure. API WS
+  tests observe strict close codes and await `stop(true)` cleanup. The
+  Bun-native MQTT adapter remains required because `mqtt.js` still calls the
+  unsupported `createWebSocketStream` path under Bun 1.4.

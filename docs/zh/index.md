@@ -2,7 +2,7 @@
 
 > 本文档是 [docs/en/index.md](../en/index.md) 的中文翻译，与英文版结构一一对应；如内容冲突，以英文版为准。
 
-**日期**: 2026-08-10 · **基线**: 596 个后端测试 + 221 个 web 单元测试全绿，
+**日期**: 2026-08-21 · **基线**: 642 个后端测试 + 226 个 web 单元测试全绿，
 `tsc --noEmit` 干净，后端 + 浏览器 E2E 套件通过，CI 运行三个并行 job
 （backend / web / web-e2e）。
 
@@ -40,6 +40,6 @@ SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平
 - **认证**: 人类用户使用 JWT 双令牌（访问令牌 + 服务端刷新令牌）；设备
   使用按会话（per-session）MQTT 认证（绝不用 JWT）。
 - **Web UI**: React 19 + Material UI 9，五种语言（zh/en/ru/uk/it），
-  221 个单元测试 + 浏览器 E2E。
+  226 个单元测试 + 浏览器 E2E。
 - **OTA**: 版本发布（release）→ 部署（per-device JWT over MQTT、HTTP 拉取）→
   三层目标状态机 → 带门控（gating）/停滞（stall）判定/回滚的分阶段滚动发布（phased rollout）。

@@ -16,8 +16,8 @@ three external audit rounds (Kimi) whose findings were verified and fixed.
 - **Auth throttling**: failed authentication waits 100 ms; DB failures
   return CONNACK code 3 (server unavailable)
 - **Backpressure**: `ws.send() === 0` (unusable connection) reports a stream
-  error; `-1` means the frame was queued under backpressure and is not an
-  error
+  error; `-1` holds the stream write callback until Bun reports `drain`,
+  bounding the producer at the WebSocket queue
 
 ### 2. Parsing layer
 

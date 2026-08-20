@@ -12,7 +12,7 @@
 - **每设备限流**：令牌桶（持续 20 msg/s，突发 100），可通过 `UPLINK_RATE_*` 配置；超限直接丢弃，绝不缓冲
 - **包大小上限**：`authorizePublish` 中的早期拒绝（256 KB）以及分派（dispatch）层的限制（`UPLINK_MAX_PACKET_BYTES`，64 KB）
 - **认证节流**：认证失败等待 100 ms；数据库故障返回 CONNACK code 3（服务器不可用）
-- **背压（backpressure）**：`ws.send() === 0`（连接不可用）上报流错误；`-1` 表示帧已在背压下排队，不是错误
+- **背压（backpressure）**：`ws.send() === 0`（连接不可用）上报流错误；`-1` 时暂停 stream 写入回调，直到 Bun 报告 `drain`，从 WebSocket 队列处限制生产速度
 
 ### 2. 解析层
 

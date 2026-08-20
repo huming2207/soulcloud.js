@@ -13,13 +13,14 @@ supported under Bun** (`createWebSocketStream` throws). The adapter:
 
 - bridges Bun-native WebSocket messages to a Node-style `Duplex` that
   `aedes.handle` consumes
-- reassembles mqtt-packet's multi-`write()` output into **one WS frame per
-  MQTT packet** (the MQTT-over-WS spec requires this)
+- accepts multiple or partial MQTT packets across WS messages, as required by
+  MQTT 3.1.1, while coalescing mqtt-packet's multi-`write()` output into one
+  outbound message per packet to reduce framing and device wakeups
 - closes the WS when aedes destroys the stream (aedes uses `destroy()`,
   which fires `'close'`, not `'final'`)
-- treats `ws.send() === 0` (connection unusable) as a stream error while
-  allowing `-1` (queued under backpressure) to complete normally, so aedes
-  does not tear down healthy QoS 1 connections under load
+- treats `ws.send() === 0` (connection unusable) as a stream error and holds
+  the Duplex write callback after `-1` (queued under backpressure) until
+  Bun's `drain` callback, so aedes cannot overfill Bun's per-socket queue
 
 Handshake, masking, fragmentation and ping/pong are handled by Bun's native
 WebSocket (uWS core).

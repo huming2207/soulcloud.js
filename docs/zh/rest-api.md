@@ -2,7 +2,7 @@
 
 > 本文档是 `docs/en/rest-api.md` 的中文翻译，结构与其一一对应；如有出入以英文版为准。
 
-API（`packages/api/src/api/`）是一个 Elysia 服务器。请求体校验在 handler 内用 Zod 手工完成（Elysia 的 `onError` 钩子在 Bun 下不可靠，且其 ValidationError 响应形状与我们的 `{error, message}` 契约不符）。所有 handler 用 `handleApiError` 包装意外故障 → 统一的 `500 {error:"internal"}`——内部消息永不泄露。
+API（`packages/api/src/api/`）是一个 Elysia 服务器。请求体校验在 handler 内用 Zod 手工完成，以保持既有的 `{error, message}` 契约和各路由的类型化错误映射。所有 handler 用 `handleApiError` 包装意外故障 → 统一的 `500 {error:"internal"}`——内部消息永不泄露。
 
 ## 端点（Endpoints）
 

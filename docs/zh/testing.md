@@ -2,7 +2,7 @@
 
 > 本文档是 `docs/en/testing.md` 的中文翻译，与英文版一一对应。
 
-**基线**：后端 596 个测试、48 个文件（隔离的 `soulcloud_test` 数据库，`--isolate` 按文件独立进程）+ 前端 221 个单元测试、35 个文件，`tsc --noEmit` 干净，oxlint 干净，CI 硬编码中文（CJK）扫描（scripts/scan-hardcoded-i18n.sh）通过。E2E 脚本（命令循环、日志摄取、OTA、滚动发布、web <-> API）全部通过。
+**基线**：后端 642 个测试、51 个文件（隔离的 `soulcloud_test` 数据库，串行 `--isolate` 执行）+ 前端 226 个单元测试、36 个文件，`tsc --noEmit` 干净，oxlint 干净，CI 硬编码中文（CJK）扫描（scripts/scan-hardcoded-i18n.sh）通过。E2E 脚本（命令循环、日志摄取、OTA、滚动发布、web <-> API）全部通过。
 
 ## 策略
 
@@ -45,7 +45,7 @@ packages/broker/tests/mqtt/
 ## 可靠性实践
 
 - **异步数据库断言不用固定 sleep**：`waitFor()` 带超时轮询谓词（真正的重连延迟也用轮询）
-- **测试隔离**：清理范围限定在测试设备/项目——没有会跨文件竞争的全局 `DELETE FROM ...`（bun test 并行运行文件）
+- **测试隔离**：清理范围限定在测试设备/项目。Bun 1.4 的 `--isolate` 在同一进程内为各文件提供新的全局对象；后端套件保持串行，因为队列 worker 会有意扫描共享数据库行，使用独立的 `--parallel` worker 时可能租走其他测试的命令。
 - **被跳过的测试不存在**：每个测试都真实运行（fixture 已入库）
 - 内部错误泄漏会使测试失败（`500` 响应断言响应体不含内部消息）
 
@@ -53,13 +53,13 @@ packages/broker/tests/mqtt/
 
 `.github/workflows/ci.yml`（GitHub Actions，`master` 分支）并行运行三个任务：
 
-1. **backend**（postgres 服务）：install → `db:generate` → `db:deploy` → `bun run typecheck` → `bash scripts/test.sh`（在隔离的 `soulcloud_test` 数据库上 596 个测试）→ 双进程 E2E（`scripts/run-e2e.sh`）
-2. **web**（无数据库）：install → web typecheck → 221 个单元测试（`bun run --cwd packages/web test`）→ 生产构建
+1. **backend**（postgres 服务）：install → `db:generate` → `db:deploy` → `bun run typecheck` → `bash scripts/test.sh`（在隔离的 `soulcloud_test` 数据库上 642 个测试）→ 双进程 E2E（`scripts/run-e2e.sh`）
+2. **web**（无数据库）：install → web typecheck → 226 个单元测试（`bun run --cwd packages/web test`）→ 生产构建
 3. **web-e2e**（postgres 服务）：install → `db:generate`/`db:deploy` → 安装 agent-browser（Chrome for Testing）→ `bash scripts/web-e2e-ci.sh`（浏览器 <-> API 对全新数据库的 E2E）
 
 ## 前端测试
 
-- **单元测试**：`bun run --cwd packages/web test`——bun:test + happy-dom 全局对象（由 `src/test-setup.ts` 注入），React Testing Library + user-event。文件以 `--isolate` 运行，模块 mock（`mock.module`）不会跨文件泄漏。
+- **单元测试**：`bun run --cwd packages/web test`——bun:test + happy-dom 全局对象（由 `src/test-setup.ts` 注入），React Testing Library + user-event。文件以串行 `--isolate` 运行；Bun 会在文件之间重置全局对象，因此模块 mock（`mock.module`）不会跨文件泄漏。
 - **覆盖率**：`bun run --cwd packages/web test --coverage`——33 个文件 94% 行 / 85% 函数（i18n 字典、axios 认证流程、contexts、每个页面/对话框、API 辅助、主题）。
 - **浏览器 E2E**：`scripts/web-e2e-ci.sh`（需要 agent-browser 在 PATH 中）——启动 API + Vite，播种用户，通过 API 创建设备，然后在真实浏览器中验证前端渲染真实后端数据。所有浏览器调用共享一个 agent-browser 会话；等待基于条件（`wait --text`），无固定 sleep。
 
