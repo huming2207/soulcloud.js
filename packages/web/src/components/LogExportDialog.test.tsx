@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "../i18n/I18nContext";
 import { setAccessToken } from "../api/http";
@@ -49,7 +49,6 @@ describe("LogExportDialog", () => {
     // capture anchor clicks (happy-dom has no real download)
     const clickMock = mock(() => {});
     const anchor = { href: "", download: "", click: clickMock };
-    const createAnchor = mock(() => anchor);
     const createUrl = mock(() => "blob:mock");
     const revokeUrl = mock(() => {});
     const origCreate = document.createElement.bind(document);
