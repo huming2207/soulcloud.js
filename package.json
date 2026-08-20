@@ -21,10 +21,10 @@
     "db:generate": "bun run --cwd packages/core db:generate"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@types/bun": "1.4.0",
     "@types/node": "^26.2.0",
     "agent-browser": "^0.33.2",
-    "bun-types": "^1.4.0",
+    "bun-types": "1.4.0",
     "mqtt": "^5.15.2",
     "typescript": "^7.0.2"
   }

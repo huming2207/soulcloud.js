@@ -4,7 +4,7 @@
 # web and MQTT ports directly and the proxy in front (traefik in the
 # reference deployment) routes /v1 + /health to the api service and
 # terminates TLS.
-FROM oven/bun:1.4-debian AS build
+FROM oven/bun:1.4.0-debian AS build
 WORKDIR /app
 
 COPY package.json bun.lock ./
