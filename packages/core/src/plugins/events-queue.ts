@@ -44,6 +44,8 @@ export interface PluginEventRow {
   state: PluginEventState;
   attemptCount: number;
   installationConfig: unknown;
+  /** Database-assigned enqueue timestamp, stable across retry attempts. */
+  createdAt: Date;
 }
 
 interface LeaseCandidate {
@@ -60,6 +62,7 @@ interface LeaseCandidate {
   schema_version: number;
   payload: unknown;
   attempt_count: number;
+  created_at: Date;
   config_json: unknown;
   installation_config: unknown;
 }
@@ -281,7 +284,7 @@ export async function leaseNextPluginEvent(
     RETURNING pe.id, pe.plugin_installation_id, pe.project_id, pe.device_id, pe.device_uid,
               pe.plugin_id, pe.plugin_version, pe.profile_id, pe.profile_version,
               pe.event_kind, pe.schema_version, pe.payload,
-              pe.attempt_count, pe.installation_config
+              pe.attempt_count, pe.installation_config, pe.created_at
   `;
   const row = candidates[0];
   if (!row) return null;
@@ -300,6 +303,7 @@ export async function leaseNextPluginEvent(
     state: "leased",
     attemptCount: row.attempt_count,
     installationConfig: row.installation_config,
+    createdAt: row.created_at,
   };
 }
 

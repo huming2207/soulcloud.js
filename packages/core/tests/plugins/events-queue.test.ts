@@ -196,6 +196,7 @@ describe("leasing", () => {
     expect(first?.attemptCount).toBe(1);
     expect(first?.pluginId).toBe(chaosTestPlugin.id);
     expect(first?.deviceUid).toBeTruthy();
+    expect(first?.createdAt).toBeInstanceOf(Date);
     const second = await leaseNextPluginEvent(prisma, {
       pluginInstallationId: installationId,
       leaseDurationMs: 60_000,

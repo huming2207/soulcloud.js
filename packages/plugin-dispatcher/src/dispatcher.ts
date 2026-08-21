@@ -318,7 +318,9 @@ export function startDispatcher(
               projectId: event.projectId,
               config: event.installationConfig,
             },
-            receivedAt: new Date().toISOString(),
+            // This is the event's enqueue time, not dispatch/attempt time;
+            // retries must present the same logical receive timestamp.
+            receivedAt: event.createdAt.toISOString(),
           },
           options.eventTimeoutMs,
         );
