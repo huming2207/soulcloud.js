@@ -149,6 +149,7 @@ model Device {
   entityRegistrations EntityRegistry[]
 
   @@unique([projectId, assignedId], map: "devices_project_assigned_id_unique")
+  @@index([pluginInstallationId], map: "devices_plugin_installation_id_idx")
   @@map("devices")
 }
 
