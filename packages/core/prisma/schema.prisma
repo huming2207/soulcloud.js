@@ -613,5 +613,6 @@ model PluginEvent {
   @@index([deviceId, idempotencyKey], map: "plugin_events_device_idempotency_idx")
   @@index([state, availableAt], map: "plugin_events_state_available_idx")
   @@index([pluginInstallationId, state, availableAt], map: "plugin_events_installation_state_idx")
+  @@index([finishedAt], map: "plugin_events_finished_at_idx")
   @@map("plugin_events")
 }
