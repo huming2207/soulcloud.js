@@ -28,7 +28,7 @@ const envSchema = z.object({
   /// In-flight events per installation — the fairness floor (§6.4: one
   /// factory's flood must not starve another).
   PLUGIN_PER_INSTALLATION_CONCURRENCY: z.coerce.number().int().positive().default(4),
-  /// Maximum serialized HTTP JSON-RPC request/response body shared with hosts.
+  /// Maximum serialized HTTP MessagePack-RPC request/response body shared with hosts.
   PLUGIN_HOST_MAX_FRAME_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
   /// Rapid-crash circuit: after this many host exits inside the window the
   /// plugin is benched for the cooldown.

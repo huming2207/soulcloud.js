@@ -99,6 +99,7 @@
       "name": "@soulcloud/plugin-sdk",
       "version": "0.1.0",
       "dependencies": {
+        "@msgpack/msgpack": "^3.1.3",
         "zod": "^4.4.3",
       },
       "devDependencies": {

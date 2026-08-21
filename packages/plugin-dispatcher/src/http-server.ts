@@ -1,20 +1,27 @@
 /**
- * Dispatcher-side synchronous HTTP endpoint for action encoding (§6.1:
- * "确实需要同步 RPC 时必须设置 deadline、response size limit 和 circuit
- * breaker").
+ * Dispatcher-side synchronous HTTP MessagePack-RPC endpoint for action
+ * encoding (§6.1: "确实需要同步 RPC 时必须设置 deadline、response size
+ * limit 和 circuit breaker").
  *
  * The API never executes plugin encoders (container isolation, review fix)
  * and does not know host URLs — it calls THIS endpoint; the dispatcher
  * routes to the right host through the same supervised client used for
  * events (handshake, deadline, frame cap, bench circuit).
  *
- *   POST /encode-action  {plugin_id, action_id, input}
- *   → {cmd, args, schema_version} | mapped JSON-RPC error
+ *   POST /encode-action  MessagePack-RPC(action.encode)
+ *   → MessagePack-RPC result {cmd, args, schemaVersion} | error
  */
 
 import {
   ENCODE_ACTION_METHOD,
+  RPC_CONTENT_TYPE,
+  RPC_VERSION,
+  decodeRpcMessage,
+  encodeRpcMessage,
+  isRpcRequest,
   type EncodeActionParams,
+  type RpcError,
+  type RpcResponse,
 } from "@soulcloud/plugin-sdk";
 import { pluginManifests } from "@soulcloud/plugins";
 import { findAction, validateEncodedAction } from "@soulcloud/core";
@@ -38,6 +45,25 @@ export interface DispatcherHttpHandle {
   close(): Promise<void>;
 }
 
+function errorResponse(
+  id: number,
+  code: RpcError["code"],
+  message: string,
+): RpcResponse {
+  return { version: RPC_VERSION, id, ok: false, error: { code, message } };
+}
+
+function rpcResponse(
+  value: RpcResponse,
+  maxFrameBytes: number,
+  status = 200,
+): Response {
+  return new Response(encodeRpcMessage(value, maxFrameBytes), {
+    status,
+    headers: { "content-type": RPC_CONTENT_TYPE },
+  });
+}
+
 export function startDispatcherHttp(
   supervisor: HostSupervisor,
   options: DispatcherHttpOptions,
@@ -50,33 +76,85 @@ export function startDispatcherHttp(
     async fetch(request): Promise<Response> {
       const url = new URL(request.url);
       if (url.pathname !== "/encode-action" || request.method !== "POST") {
-        return jsonResponse({ error: "not_found", message: "not found" }, 404);
+        return new Response("not found", { status: 404 });
       }
       if (
         options.authToken &&
         request.headers.get("authorization") !== `Bearer ${options.authToken}`
       ) {
-        return jsonResponse({ error: "unauthorized", message: "authentication required" }, 401);
+        return rpcResponse(
+          errorResponse(0, "unauthorized", "authentication required"),
+          options.maxFrameBytes,
+          401,
+        );
       }
-      let body: { plugin_id?: unknown; action_id?: unknown; input?: unknown };
+      if (
+        !request.headers
+          .get("content-type")
+          ?.toLowerCase()
+          .startsWith(RPC_CONTENT_TYPE)
+      ) {
+        return new Response("MessagePack content required", { status: 415 });
+      }
+      let body: Uint8Array;
       try {
-        body = (await request.json()) as typeof body;
+        body = new Uint8Array(await request.arrayBuffer());
       } catch {
-        return jsonResponse({ error: "invalid_request", message: "invalid JSON" }, 400);
+        return rpcResponse(
+          errorResponse(0, "parse_error", "invalid MessagePack"),
+          options.maxFrameBytes,
+          400,
+        );
       }
-      const pluginId = typeof body.plugin_id === "string" ? body.plugin_id : "";
-      const actionId = typeof body.action_id === "string" ? body.action_id : "";
+      let parsed: unknown;
+      try {
+        parsed = decodeRpcMessage(body, options.maxFrameBytes);
+      } catch {
+        return rpcResponse(
+          errorResponse(0, "parse_error", "invalid MessagePack"),
+          options.maxFrameBytes,
+          400,
+        );
+      }
+      if (!isRpcRequest(parsed)) {
+        return rpcResponse(
+          errorResponse(0, "invalid_request", "invalid MessagePack-RPC request"),
+          options.maxFrameBytes,
+          400,
+        );
+      }
+      const requestId = parsed.id;
+      if (parsed.method !== ENCODE_ACTION_METHOD) {
+        return rpcResponse(
+          errorResponse(requestId, "method_not_found", "unknown dispatcher method"),
+          options.maxFrameBytes,
+          404,
+        );
+      }
+      const params = parsed.params as {
+        pluginId?: unknown;
+        actionId?: unknown;
+        input?: unknown;
+      } | undefined;
+      const pluginId = typeof params?.pluginId === "string" ? params.pluginId : "";
+      const actionId = typeof params?.actionId === "string" ? params.actionId : "";
       if (!pluginId || !actionId) {
-        return jsonResponse(
-          { error: "invalid_request", message: "plugin_id and action_id are required" },
+        return rpcResponse(
+          errorResponse(requestId, "invalid_params", "pluginId and actionId are required"),
+          options.maxFrameBytes,
           400,
         );
       }
       const manifest = pluginManifests.get(pluginId);
       const action = manifest ? findAction(manifest, actionId) : null;
       if (!manifest || !action) {
-        return jsonResponse(
-          { error: "unknown_action", message: `plugin ${pluginId} does not declare action "${actionId}"` },
+        return rpcResponse(
+          errorResponse(
+            requestId,
+            "unknown_action",
+            `plugin ${pluginId} does not declare action "${actionId}"`,
+          ),
+          options.maxFrameBytes,
           404,
         );
       }
@@ -88,38 +166,65 @@ export function startDispatcherHttp(
           manifest.version,
           manifest.apiVersion,
         );
-        const params: EncodeActionParams = {
+        const hostParams: EncodeActionParams = {
           actionId,
-          input: body.input ?? {},
+          input: params?.input ?? {},
         };
-        result = await client.request(ENCODE_ACTION_METHOD, params, options.encodeTimeoutMs);
+        result = await client.request(
+          ENCODE_ACTION_METHOD,
+          hostParams,
+          options.encodeTimeoutMs,
+        );
       } catch (error) {
         if (error instanceof PluginHostTimeoutError) {
           supervisor.killHost(manifest.id);
-          return jsonResponse(
-            { error: "encode_timeout", message: `plugin host did not answer within ${options.encodeTimeoutMs}ms` },
+          return rpcResponse(
+            errorResponse(
+              requestId,
+              "encode_timeout",
+              `plugin host did not answer within ${options.encodeTimeoutMs}ms`,
+            ),
+            options.maxFrameBytes,
             504,
           );
         }
         if (error instanceof PluginHostUnavailableError) {
           supervisor.killHost(manifest.id);
-          return jsonResponse(
-            { error: "plugin_unavailable", message: (error as Error).message },
+          return rpcResponse(
+            errorResponse(requestId, "plugin_unavailable", (error as Error).message),
+            options.maxFrameBytes,
             503,
           );
         }
         const coded = error as Error & { code?: string };
         if (coded.code === "invalid_params") {
-          return jsonResponse({ error: "invalid_action_input", message: coded.message }, 400);
+          return rpcResponse(
+            errorResponse(requestId, "invalid_action_input", coded.message ?? "invalid action input"),
+            options.maxFrameBytes,
+            400,
+          );
         }
         if (coded.code === "overloaded") {
-          return jsonResponse({ error: "overloaded", message: "plugin host overloaded" }, 503);
+          return rpcResponse(
+            errorResponse(requestId, "overloaded", "plugin host overloaded"),
+            options.maxFrameBytes,
+            503,
+          );
         }
         if (coded.code === "response_too_large") {
-          return jsonResponse({ error: "response_too_large", message: coded.message }, 413);
+          return rpcResponse(
+            errorResponse(requestId, "response_too_large", coded.message ?? "response too large"),
+            options.maxFrameBytes,
+            413,
+          );
         }
-        return jsonResponse(
-          { error: "handler_error", message: `plugin handler error: ${coded.message}` },
+        return rpcResponse(
+          errorResponse(
+            requestId,
+            "handler_error",
+            `plugin handler error: ${coded.message ?? "unknown error"}`,
+          ),
+          options.maxFrameBytes,
           502,
         );
       }
@@ -136,11 +241,19 @@ export function startDispatcherHttp(
           args: encoded.args,
           schemaVersion: typeof encoded.schemaVersion === "number" ? encoded.schemaVersion : 0,
         });
-        return jsonResponse({
-          cmd: validated.command.cmd,
-          args: validated.command.args ?? [],
-          schema_version: validated.schemaVersion,
-        });
+        return rpcResponse(
+          {
+            version: RPC_VERSION,
+            id: requestId,
+            ok: true,
+            result: {
+              cmd: validated.command.cmd,
+              args: validated.command.args ?? [],
+              schemaVersion: validated.schemaVersion,
+            },
+          },
+          options.maxFrameBytes,
+        );
       } catch (error) {
         // The host returned a structurally invalid encoding — deterministic
         // plugin bug, not a transport problem.
@@ -149,8 +262,9 @@ export function startDispatcherHttp(
           actionId,
           error: (error as Error).message,
         });
-        return jsonResponse(
-          { error: "invalid_action_output", message: (error as Error).message },
+        return rpcResponse(
+          errorResponse(requestId, "invalid_action_output", (error as Error).message),
+          options.maxFrameBytes,
           502,
         );
       }
@@ -170,11 +284,4 @@ export function startDispatcherHttp(
       server.stop(true);
     },
   };
-}
-
-function jsonResponse(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
 }

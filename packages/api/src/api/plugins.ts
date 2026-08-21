@@ -45,7 +45,16 @@ import {
   type PrismaClient,
 } from "@soulcloud/core";
 import { pluginManifests } from "@soulcloud/plugins";
-import { findProfile, validateActionInputSchema } from "@soulcloud/plugin-sdk";
+import {
+  ENCODE_ACTION_METHOD,
+  RPC_CONTENT_TYPE,
+  RPC_VERSION,
+  decodeRpcMessage,
+  encodeRpcMessage,
+  isRpcResponse,
+  findProfile,
+  validateActionInputSchema,
+} from "@soulcloud/plugin-sdk";
 import {
   authenticateRequest,
   handleApiError,
@@ -123,59 +132,94 @@ function mapPluginError(
  * the encoder is plugin code and runs in the plugin host, never here
  * (review fix). Deadline + bearer token per §6.1 sync-RPC rules.
  */
+let nextDispatcherRequestId = 1;
+
+function codedDispatcherError(code: string, message: string): Error & { code: string } {
+  const error = new Error(message) as Error & { code: string };
+  error.code = code;
+  return error;
+}
+
 async function encodeViaDispatcher(
   dispatch: PluginDispatchOptions,
   params: { pluginId: string; actionId: string; input: unknown },
 ): Promise<{ cmd: string; args: unknown; schemaVersion: number }> {
   if (!dispatch.dispatcherUrl) {
-    throw new PluginSystemError(
-      "unknown_action",
+    throw codedDispatcherError(
+      "plugin_unavailable",
       "action invocation is unavailable: PLUGIN_DISPATCHER_URL is not configured",
     );
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), dispatch.encodeTimeoutMs);
-  let payload: { cmd?: unknown; args?: unknown; schema_version?: unknown };
+  const requestId = nextDispatcherRequestId++;
+  const rpcRequest = {
+    version: RPC_VERSION,
+    id: requestId,
+    method: ENCODE_ACTION_METHOD,
+    params: {
+      pluginId: params.pluginId,
+      actionId: params.actionId,
+      input: params.input,
+    },
+    deadlineMs: dispatch.encodeTimeoutMs,
+  };
   try {
-    const headers: Record<string, string> = { "content-type": "application/json" };
+    const headers: Record<string, string> = { "content-type": RPC_CONTENT_TYPE };
     if (dispatch.dispatcherAuthToken) {
       headers.authorization = `Bearer ${dispatch.dispatcherAuthToken}`;
     }
     const res = await fetch(`${dispatch.dispatcherUrl}/encode-action`, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        plugin_id: params.pluginId,
-        action_id: params.actionId,
-        input: params.input,
-      }),
+      body: encodeRpcMessage(rpcRequest),
       signal: controller.signal,
     });
-    payload = (await res.json()) as typeof payload;
-    if (!res.ok) {
-      const err = new Error(
-        (payload as { message?: string }).message ?? `dispatcher returned HTTP ${res.status}`,
-      ) as Error & { status?: number; code?: string };
-      err.status = res.status;
-      err.code = (payload as { error?: string }).error;
-      throw err;
+    const payload = new Uint8Array(await res.arrayBuffer());
+    const decoded = decodeRpcMessage(payload);
+    if (!isRpcResponse(decoded) || decoded.id !== requestId) {
+      throw codedDispatcherError(
+        "plugin_unavailable",
+        "dispatcher returned an invalid MessagePack-RPC response",
+      );
     }
+    if (!decoded.ok) {
+      throw codedDispatcherError(decoded.error.code, decoded.error.message);
+    }
+    if (!res.ok) {
+      throw codedDispatcherError(
+        "plugin_unavailable",
+        `dispatcher returned HTTP ${res.status}`,
+      );
+    }
+    const result = decoded.result as {
+      cmd?: unknown;
+      args?: unknown;
+      schemaVersion?: unknown;
+    };
+    return {
+      cmd: typeof result.cmd === "string" ? result.cmd : "",
+      args: result.args,
+      schemaVersion:
+        typeof result.schemaVersion === "number" ? result.schemaVersion : 0,
+    };
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new PluginSystemError(
-        "invalid_action_output",
+      throw codedDispatcherError(
+        "encode_timeout",
         `action encoding timed out after ${dispatch.encodeTimeoutMs}ms`,
       );
     }
-    throw error;
+    if (error && typeof (error as { code?: unknown }).code === "string") {
+      throw error;
+    }
+    throw codedDispatcherError(
+      "plugin_unavailable",
+      `dispatcher request failed: ${(error as Error).message}`,
+    );
   } finally {
     clearTimeout(timer);
   }
-  return {
-    cmd: typeof payload.cmd === "string" ? payload.cmd : "",
-    args: payload.args,
-    schemaVersion: typeof payload.schema_version === "number" ? payload.schema_version : 0,
-  };
 }
 
 /** Deployed manifest lookup for a plugin id (404 when absent). */
@@ -788,6 +832,61 @@ export function createPluginRoutes(
         // Enqueue and audit commit atomically (review fix): the
         // transaction-core of enqueueBatch shares this transaction.
         const batch = await prisma.$transaction(async (tx) => {
+          // The encoder RPC can take several seconds. Re-lock and re-check
+          // the binding after it returns so a concurrent unbind, rebind or
+          // installation disable cannot enqueue a command for stale state.
+          if (install !== null) {
+            const lockedInstall = await tx.$queryRaw<
+              { state: string; configured_plugin_version: string }[]
+            >`
+              SELECT state, configured_plugin_version
+              FROM plugin_installations
+              WHERE id = ${install.id}
+              FOR UPDATE
+            `;
+            const currentInstall = lockedInstall[0];
+            if (!currentInstall || currentInstall.state !== "enabled") {
+              throw new PluginSystemError(
+                "installation_not_enabled",
+                `installation ${install.id} is no longer enabled`,
+              );
+            }
+            if (currentInstall.configured_plugin_version !== manifest.version) {
+              throw new PluginSystemError(
+                "version_mismatch",
+                `installation ${install.id} changed version while the action was being encoded`,
+              );
+            }
+          }
+          const lockedDevices = await tx.$queryRaw<
+            {
+              project_id: string;
+              plugin_installation_id: string | null;
+              plugin_id: string | null;
+              profile_id: string | null;
+              profile_version: number | null;
+            }[]
+          >`
+            SELECT project_id, plugin_installation_id, plugin_id,
+                   profile_id, profile_version
+            FROM devices
+            WHERE id = ${params.deviceId}
+            FOR UPDATE
+          `;
+          const currentDevice = lockedDevices[0];
+          if (
+            !currentDevice ||
+            currentDevice.project_id !== device.projectId ||
+            currentDevice.plugin_installation_id !== binding.installationId ||
+            currentDevice.plugin_id !== binding.pluginId ||
+            currentDevice.profile_id !== binding.profileId ||
+            currentDevice.profile_version !== binding.profileVersion
+          ) {
+            throw new PluginSystemError(
+              "binding_mismatch",
+              "device binding changed while the action was being encoded",
+            );
+          }
           const enqueued = await enqueueBatchInTransaction(
             tx,
             [params.deviceId],

@@ -10,7 +10,7 @@
  *                     Used by BOTH the Plugin Host (pre-check plugin output)
  *                     and the Dispatcher (authoritative check) — the host is
  *                     untrusted-side, the dispatcher re-validates everything.
- *   - `rpc.ts`        the Dispatcher <-> Plugin Host HTTP JSON-RPC message
+ *   - `rpc.ts`        the Dispatcher <-> Plugin Host HTTP MessagePack-RPC message
  *                     contract (§6.5).
  *
  * The SDK never imports Prisma, the database or anything from the API/broker:

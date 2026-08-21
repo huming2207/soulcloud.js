@@ -1,5 +1,5 @@
 /**
- * Containerised Plugin Host HTTP JSON-RPC server.
+ * Containerised Plugin Host HTTP MessagePack-RPC server.
  *
  * One container serves one compile-time plugin. The host has no database or
  * application credentials. Docker/Kubernetes is responsible for process
@@ -9,10 +9,14 @@
 import { pluginManifests, pluginWorkerLoaders } from "@soulcloud/plugins";
 import {
   DEFAULT_MAX_FRAME_BYTES,
+  RPC_CONTENT_TYPE,
   ENCODE_ACTION_METHOD,
   HANDLE_EVENT_METHOD,
   HANDSHAKE_METHOD,
   RPC_VERSION,
+  decodeRpcMessage,
+  encodeRpcMessage,
+  isRpcRequest,
   validateActionInput,
   validateEventUpdates,
   type EncodeActionParams,
@@ -52,9 +56,9 @@ const MAX_LOG_FIELDS_BYTES = 16 * 1024;
 
 type HostEventResult = HandleEventResult & { logs?: LogNotificationParams[] };
 
-function serializedBytes(value: unknown): number {
+function encodedBytes(value: unknown, maxFrameBytes: number): number {
   try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
+    return encodeRpcMessage(value, maxFrameBytes).byteLength;
   } catch {
     return Number.POSITIVE_INFINITY;
   }
@@ -65,13 +69,24 @@ function errorResponse(
   code: RpcError["code"],
   message: string,
 ): RpcResponse {
-  return { id, ok: false, error: { code, message } };
+  return { version: RPC_VERSION, id, ok: false, error: { code, message } };
 }
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+function rpcResponse(
+  value: RpcResponse,
+  maxFrameBytes: number,
+  status = 200,
+): Response {
+  return new Response(encodeRpcMessage(value, maxFrameBytes), {
+    status,
+    headers: { "content-type": RPC_CONTENT_TYPE },
   });
 }
 
@@ -111,6 +126,14 @@ export async function startPluginHost(
           headers: { allow: "POST" },
         });
       }
+      if (
+        !request.headers
+          .get("content-type")
+          ?.toLowerCase()
+          .startsWith(RPC_CONTENT_TYPE)
+      ) {
+        return new Response("MessagePack content required", { status: 415 });
+      }
       if (options.authToken) {
         const authorization = request.headers.get("authorization");
         if (authorization !== `Bearer ${options.authToken}`) {
@@ -121,23 +144,29 @@ export async function startPluginHost(
       if (contentLength !== null && Number(contentLength) > maxFrameBytes) {
         return new Response("request too large", { status: 413 });
       }
-      let body: string;
+      let body: Uint8Array;
       try {
-        body = await request.text();
+        body = new Uint8Array(await request.arrayBuffer());
       } catch {
         return new Response("request too large", { status: 413 });
       }
-      if (Buffer.byteLength(body, "utf8") > maxFrameBytes) {
+      if (body.byteLength > maxFrameBytes) {
         return new Response("request too large", { status: 413 });
       }
       let parsed: unknown;
       try {
-        parsed = JSON.parse(body);
+        parsed = decodeRpcMessage(body, maxFrameBytes);
       } catch {
-        return jsonResponse(errorResponse(0, "parse_error", "invalid JSON"));
+        return rpcResponse(
+          errorResponse(0, "parse_error", "invalid MessagePack"),
+          maxFrameBytes,
+        );
       }
-      if (!isRequest(parsed)) {
-        return jsonResponse(errorResponse(0, "invalid_request", "invalid JSON-RPC request"));
+      if (!isRpcRequest(parsed)) {
+        return rpcResponse(
+          errorResponse(0, "invalid_request", "invalid MessagePack-RPC request"),
+          maxFrameBytes,
+        );
       }
       return handleRequest(parsed, worker, manifest, {
         maxFrameBytes,
@@ -168,21 +197,6 @@ export async function startPluginHost(
   };
 }
 
-function isRequest(value: unknown): value is RpcRequest {
-  if (!value || typeof value !== "object") return false;
-  const request = value as Partial<RpcRequest>;
-  return (
-    typeof request.id === "number" &&
-    Number.isSafeInteger(request.id) &&
-    request.id >= 0 &&
-    typeof request.method === "string" &&
-    request.method.length > 0 &&
-    typeof request.deadlineMs === "number" &&
-    Number.isFinite(request.deadlineMs) &&
-    request.deadlineMs > 0
-  );
-}
-
 interface HandlerEnv {
   maxFrameBytes: number;
   maxConcurrent: number;
@@ -197,8 +211,12 @@ async function handleRequest(
   manifest: PluginManifest,
   env: HandlerEnv,
 ): Promise<Response> {
+  const respond = (value: RpcResponse): Response =>
+    rpcResponse(value, env.maxFrameBytes);
+
   if (request.method === HANDSHAKE_METHOD) {
-    return jsonResponse({
+    return respond({
+      version: RPC_VERSION,
       id: request.id,
       ok: true,
       result: {
@@ -215,7 +233,7 @@ async function handleRequest(
     // deadline with event handling; a broken encoder blocks at most this
     // host's own event loop (container health checks own the restart).
     if (env.getRunning() >= env.maxConcurrent) {
-      return jsonResponse(
+      return respond(
         errorResponse(request.id, "overloaded", "too many concurrent executions"),
       );
     }
@@ -223,11 +241,11 @@ async function handleRequest(
     try {
       const params = request.params as EncodeActionParams | undefined;
       if (!params || typeof params.actionId !== "string") {
-        return jsonResponse(errorResponse(request.id, "invalid_params", "missing action parameters"));
+        return respond(errorResponse(request.id, "invalid_params", "missing action parameters"));
       }
       const action = manifest.actions.find((a) => a.id === params.actionId);
       if (!action) {
-        return jsonResponse(
+        return respond(
           errorResponse(request.id, "invalid_params", `unknown action "${params.actionId}"`),
         );
       }
@@ -237,7 +255,7 @@ async function handleRequest(
         const detail = inputCheck.failures
           .map((f) => `${f.field} ${f.error}`)
           .join("; ");
-        return jsonResponse(
+        return respond(
           errorResponse(request.id, "invalid_params", `invalid action input — ${detail}`),
         );
       }
@@ -245,7 +263,7 @@ async function handleRequest(
       try {
         args = action.wire.encode(input);
       } catch (error) {
-        return jsonResponse(
+        return respond(
           errorResponse(
             request.id,
             "handler_error",
@@ -254,13 +272,13 @@ async function handleRequest(
         );
       }
       if (!Array.isArray(args) || args.length > 256) {
-        return jsonResponse(
+        return respond(
           errorResponse(request.id, "invalid_params", "encoder returned no array or too many arguments"),
         );
       }
       for (const [index, arg] of args.entries()) {
         if (!arg || typeof arg !== "object" || Array.isArray(arg) || Object.keys(arg).length !== 1) {
-          return jsonResponse(
+          return respond(
             errorResponse(request.id, "invalid_params", `encoder argument #${index} must be a single-key map`),
           );
         }
@@ -273,7 +291,7 @@ async function handleRequest(
           value instanceof Uint8Array ||
           (typeof value === "number" && Number.isFinite(value));
         if (!scalar) {
-          return jsonResponse(
+          return respond(
             errorResponse(request.id, "invalid_params", `encoder argument #${index} has a non-scalar value`),
           );
         }
@@ -283,14 +301,14 @@ async function handleRequest(
         args,
         schemaVersion: action.wire.schemaVersion,
       };
-      if (serializedBytes(result) > env.maxFrameBytes) {
-        return jsonResponse(
+      if (encodedBytes(result, env.maxFrameBytes) > env.maxFrameBytes) {
+        return respond(
           errorResponse(request.id, "response_too_large", "encoded action exceeds the frame ceiling"),
         );
       }
-      return jsonResponse({ id: request.id, ok: true, result });
+      return respond({ version: RPC_VERSION, id: request.id, ok: true, result });
     } catch (error) {
-      return jsonResponse(
+      return respond(
         errorResponse(request.id, "handler_error", (error as Error).message ?? "action encoder threw"),
       );
     } finally {
@@ -298,12 +316,12 @@ async function handleRequest(
     }
   }
   if (request.method !== HANDLE_EVENT_METHOD) {
-    return jsonResponse(
+    return respond(
       errorResponse(request.id, "method_not_found", `unknown method "${request.method}"`),
     );
   }
   if (env.getRunning() >= env.maxConcurrent) {
-    return jsonResponse(
+    return respond(
       errorResponse(request.id, "overloaded", "too many concurrent handler executions"),
     );
   }
@@ -312,7 +330,7 @@ async function handleRequest(
   try {
     const params = request.params as HandleEventParams | undefined;
     if (!params || typeof params.eventId !== "string") {
-      return jsonResponse(errorResponse(request.id, "invalid_params", "missing event parameters"));
+      return respond(errorResponse(request.id, "invalid_params", "missing event parameters"));
     }
     const deadlineMs = Math.min(request.deadlineMs, 10 * 60 * 1000);
     const logs: LogNotificationParams[] = [];
@@ -327,7 +345,9 @@ async function handleRequest(
         : message;
       let boundedFields = fields;
       if (fields !== undefined) {
-        if (serializedBytes(fields) > MAX_LOG_FIELDS_BYTES) boundedFields = { truncated: true };
+        if (encodedBytes(fields, MAX_LOG_FIELDS_BYTES) > MAX_LOG_FIELDS_BYTES) {
+          boundedFields = { truncated: true };
+        }
       }
       const entry: LogNotificationParams = {
         level,
@@ -367,7 +387,7 @@ async function handleRequest(
         candidate.version === params.device.profileVersion,
     );
     if (!profile) {
-      return jsonResponse(
+      return respond(
         errorResponse(
           request.id,
           "internal_error",
@@ -381,14 +401,14 @@ async function handleRequest(
         .slice(0, 5)
         .map((failure) => `${failure.entityKey}: ${failure.error}`)
         .join("; ");
-      return jsonResponse(
+      return respond(
         errorResponse(request.id, "invalid_params", `invalid plugin output — ${detail}`),
       );
     }
     const payload: HostEventResult = { updates, logs };
-    const bytes = serializedBytes(payload);
+    const bytes = encodedBytes(payload, env.maxFrameBytes);
     if (bytes > env.maxFrameBytes) {
-      return jsonResponse(
+      return respond(
         errorResponse(
           request.id,
           "response_too_large",
@@ -396,9 +416,9 @@ async function handleRequest(
         ),
       );
     }
-    return jsonResponse({ id: request.id, ok: true, result: payload });
+    return respond({ version: RPC_VERSION, id: request.id, ok: true, result: payload });
   } catch (error) {
-    return jsonResponse(
+    return respond(
       errorResponse(request.id, "handler_error", (error as Error).message ?? "plugin handler threw"),
     );
   } finally {

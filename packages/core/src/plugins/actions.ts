@@ -7,7 +7,7 @@
  *
  * Trust boundary (review fix): the manifest's `wire.encode` is PLUGIN CODE
  * and executes ONLY inside the Plugin Host container, reached through the
- * dispatcher's supervised JSON-RPC channel (`action.encode`). This module
+ * dispatcher's supervised MessagePack-RPC channel (`action.encode`). This module
  * never calls it — it validates the host's ENCODED OUTPUT before anything
  * reaches the command queue:
  *   1. structurally here (single-key scalar maps, bounded count),
@@ -85,6 +85,12 @@ export function validateEncodedAction(params: {
     throw new PluginSystemError(
       "invalid_action_output",
       `host encoded "${params.cmd}" but action "${action.id}" declares "${action.wire.command}"`,
+    );
+  }
+  if (params.schemaVersion !== action.wire.schemaVersion) {
+    throw new PluginSystemError(
+      "invalid_action_output",
+      `host encoded action "${action.id}" with schema version ${params.schemaVersion}, expected ${action.wire.schemaVersion}`,
     );
   }
   if (!Array.isArray(params.args) || params.args.length > 256) {

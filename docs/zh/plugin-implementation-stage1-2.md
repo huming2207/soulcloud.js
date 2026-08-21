@@ -13,8 +13,8 @@
 
 ```
 packages/
-  plugin-sdk/          # 共享契约：类型 + 纯校验器 + HTTP JSON-RPC 消息（无 DB、无 secret）
-  plugin-host/         # 不可信侧容器：每容器一个插件，HTTP JSON-RPC 服务端
+  plugin-sdk/          # 共享契约：类型 + 纯校验器 + HTTP MessagePack-RPC 消息（无 DB、无 secret）
+  plugin-host/         # 不可信侧容器：每容器一个插件，HTTP MessagePack-RPC 服务端
   plugin-dispatcher/   # 可信进程：租约事件、HTTP client、公平调度、权威校验
   core/src/plugins/    # 共享服务层：installation / entity / 事件队列
 
@@ -38,7 +38,7 @@ plugins/
 设备 /event envelope（阶段 5 接入 broker）
   → plugin_events（durable 行）
   → dispatcher 租约 + 路由（由 device → installation 绑定推导，不信任设备声明）
-  → 容器网络 HTTP JSON-RPC → plugin-host → 插件 worker
+  → 容器网络 HTTP MessagePack-RPC → plugin-host → 插件 worker
   → 响应（updates）回到 dispatcher
   → 权威校验 → 与事件完成同一事务内写入 entity_current_state / entity_history
 ```
@@ -80,7 +80,7 @@ CHECK 约束按仓库惯例以原始 SQL 附在迁移内（state 枚举、attemp
 | --- | --- |
 | `types.ts` | manifest / profile / `EntityDescriptor` / `EntityUpdate` / action wire encoder / `PluginContext` / worker 接口 |
 | `validation.ts` | 纯校验器：manifest zod schema（注册期 fail-fast）、entity 值类型/枚举/base64/大小上限、`validateEventUpdates`（updates 数量、未声明 entity、重复 key、ISO 时间戳、序列化字节上限） |
-| `rpc.ts` | 标准 HTTP JSON-RPC 请求/响应消息类型；握手、`plugin.handleEvent` 和有界日志结果 |
+| `rpc.ts` | HTTP MessagePack-RPC 请求/响应消息类型；握手、`plugin.handleEvent` 和有界日志结果 |
 | `define.ts` | `definePlugin()`：manifest 在模块加载时校验；manifest 与 worker 刻意分离定义 |
 
 关键设计：校验器在**两侧**运行——host 用它快速拒绝自己的错误输出，dispatcher
@@ -88,7 +88,7 @@ CHECK 约束按仓库惯例以原始 SQL 附在迁移内（state 枚举、attemp
 包也没有凭据可滥用。
 
 分层上限（§15）：每值 64KB JSON / binary 64KB / 每事件 100 条 update /
-事件 payload 256KB / HTTP JSON-RPC body 1MB（可配）。
+事件 payload 256KB / HTTP MessagePack-RPC body 1MB（可配）。
 
 ## 插件（`plugins/`，workspace 包）
 
@@ -126,8 +126,8 @@ History 策略：`none` 不记历史；`changes` 值/质量/告警指纹任一�
 通过 `PLUGIN_ID`、`PLUGIN_HOST_PORT`、`PLUGIN_HOST_BIND` 和可选的
 `PLUGIN_HOST_AUTH_TOKEN` 环境变量配置。
 
-- HTTP JSON-RPC 服务端，每容器一个插件；`GET /health` 供容器编排器探活，`POST /rpc`
-  承载标准 JSON 请求/响应。
+- HTTP MessagePack-RPC 服务端，每容器一个插件；`GET /health` 供容器编排器探活，`POST /rpc`
+  承载带 `id/method/params/result/error` 语义的 MessagePack 请求/响应。
 - `host.handshake`：返回 rpcVersion/pluginId/pluginVersion/apiVersion，供
   dispatcher 校验路由正确性。
 - `plugin.handleEvent`：deadline 派生 `AbortSignal` 传给 worker；handler 并发
@@ -181,7 +181,7 @@ History 策略：`none` 不记历史；`changes` 值/质量/告警指纹任一�
 
 | 套件 | 文件 | 覆盖 |
 | --- | --- | --- |
-| SDK 单元 | `plugin-sdk/tests/validation.test.ts` | manifest 规则、entity 值校验、JSON-RPC 消息可序列化 |
+| SDK 单元 | `plugin-sdk/tests/validation.test.ts` | manifest 规则、entity 值校验、MessagePack-RPC 编解码（含 binary/bigint、边界） |
 | Entity 集成 | `core/tests/plugins/entity.test.ts` | revision 幂等/演进、四种 history 策略、keyset 分页、非法值拒绝 |
 | 事件队列集成 | `core/tests/plugins/events-queue.test.ts` | 绑定解析、幂等 key、租约 FIFO、退避/dead-letter、租约恢复、版本漂移 sweep、绑定校验（错误插件/未声明 profile 拒绝、同事务实体注册）、reconcile（漂移热修建新 revision + 弃用移除 key + 旧 revision 存活、版本不匹配拒绝、缺失 profile 只上报） |
 | 熔断器单元 | `plugin-dispatcher/tests/breaker.test.ts` | 阈值开闸、冷却期阻断、**冷却后无 dispatch 的重复求值仍放行（H1 回归，假时钟确定性）**、冷却后继续失败再开闸、success 复位 |
