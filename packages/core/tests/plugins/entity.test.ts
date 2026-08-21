@@ -223,6 +223,26 @@ describe("applyEntityUpdate policies", () => {
     expect(changed.historyAppended).toBe(true);
   });
 
+  test("sampled spacing uses the database clock, not the application clock", async () => {
+    await applyEntityUpdate(prisma, {
+      deviceId,
+      pluginId: PLUGIN_ID,
+      update: { entityKey: "fixture.sampled", value: 33 },
+    });
+    const applicationNow = Date.now;
+    Date.now = () => applicationNow() + 7 * 86_400_000;
+    try {
+      const suppressed = await applyEntityUpdate(prisma, {
+        deviceId,
+        pluginId: PLUGIN_ID,
+        update: { entityKey: "fixture.sampled", value: 33 },
+      });
+      expect(suppressed.skippedReason).toBe("sample_suppressed");
+    } finally {
+      Date.now = applicationNow;
+    }
+  });
+
   test("batches registry, current-state, and history writes", async () => {
     const results = await applyEntityUpdates(prisma, {
       deviceId,
