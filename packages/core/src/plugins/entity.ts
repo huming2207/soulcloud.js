@@ -668,36 +668,57 @@ export async function getDeviceEntityHistory(
     pluginId?: string;
     /** Keyset cursor: return rows with id strictly greater than this. */
     afterId?: bigint;
+    /** Descending keyset cursor: return rows with id strictly less than this. */
+    beforeId?: bigint;
+    /** Defaults to ascending for backwards compatibility. */
+    direction?: "asc" | "desc";
     limit?: number;
   },
 ): Promise<EntityHistoryView[]> {
   const limit = Math.min(Math.max(params.limit ?? 100, 1), 1000);
-  const afterId = params.afterId ?? 0n;
-  const rows = await prisma.$queryRaw<
-    Array<{
-      id: bigint;
-      entity_key: string;
-      value: unknown;
-      quality: string;
-      source_timestamp: Date | null;
-      ingested_at: Date;
-      alarm_level: string | null;
-      alarm_code: string | null;
-      revision: number;
-    }>
-  >`
-    SELECT eh.id, er.entity_key, eh.value, eh.quality, eh.source_timestamp,
-           eh.ingested_at, eh.alarm_level, eh.alarm_code, rev.revision
-    FROM entity_history eh
-    INNER JOIN entity_registry er ON er.id = eh.entity_registry_id
-    INNER JOIN entity_descriptor_revisions rev ON rev.id = eh.descriptor_revision_id
-    WHERE eh.device_id = ${params.deviceId}
-      AND eh.id > ${afterId}
-      AND (${params.entityKey ?? null}::text IS NULL OR er.entity_key = ${params.entityKey ?? null})
-      AND (${params.pluginId ?? null}::text IS NULL OR er.plugin_id = ${params.pluginId ?? null})
-    ORDER BY eh.id
-    LIMIT ${limit}
+  if (params.afterId !== undefined && params.beforeId !== undefined) {
+    throw new Error("entity history cannot use afterId and beforeId together");
+  }
+  type HistoryRow = {
+    id: bigint;
+    entity_key: string;
+    value: unknown;
+    quality: string;
+    source_timestamp: Date | null;
+    ingested_at: Date;
+    alarm_level: string | null;
+    alarm_code: string | null;
+    revision: number;
+  };
+  const filters = Prisma.sql`
+    AND (${params.entityKey ?? null}::text IS NULL OR er.entity_key = ${params.entityKey ?? null})
+    AND (${params.pluginId ?? null}::text IS NULL OR er.plugin_id = ${params.pluginId ?? null})
   `;
+  const rows = params.direction === "desc"
+    ? await prisma.$queryRaw<HistoryRow[]>`
+        SELECT eh.id, er.entity_key, eh.value, eh.quality, eh.source_timestamp,
+               eh.ingested_at, eh.alarm_level, eh.alarm_code, rev.revision
+        FROM entity_history eh
+        INNER JOIN entity_registry er ON er.id = eh.entity_registry_id
+        INNER JOIN entity_descriptor_revisions rev ON rev.id = eh.descriptor_revision_id
+        WHERE eh.device_id = ${params.deviceId}
+          ${params.beforeId === undefined ? Prisma.empty : Prisma.sql`AND eh.id < ${params.beforeId}`}
+          ${filters}
+        ORDER BY eh.id DESC
+        LIMIT ${limit}
+      `
+    : await prisma.$queryRaw<HistoryRow[]>`
+        SELECT eh.id, er.entity_key, eh.value, eh.quality, eh.source_timestamp,
+               eh.ingested_at, eh.alarm_level, eh.alarm_code, rev.revision
+        FROM entity_history eh
+        INNER JOIN entity_registry er ON er.id = eh.entity_registry_id
+        INNER JOIN entity_descriptor_revisions rev ON rev.id = eh.descriptor_revision_id
+        WHERE eh.device_id = ${params.deviceId}
+          AND eh.id > ${params.afterId ?? 0n}
+          ${filters}
+        ORDER BY eh.id ASC
+        LIMIT ${limit}
+      `;
   return rows.map((row) => ({
     id: row.id.toString(),
     entityKey: row.entity_key,

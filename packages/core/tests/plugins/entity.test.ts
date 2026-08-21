@@ -323,6 +323,23 @@ describe("queries", () => {
     expect(page[0]!.id).toBe(all[1]!.id);
   });
 
+  test("keyset pagination can fetch newest history first", async () => {
+    const newest = await getDeviceEntityHistory(prisma, {
+      deviceId,
+      direction: "desc",
+      limit: 2,
+    });
+    expect(newest).toHaveLength(2);
+    expect(BigInt(newest[0]!.id)).toBeGreaterThan(BigInt(newest[1]!.id));
+    const older = await getDeviceEntityHistory(prisma, {
+      deviceId,
+      direction: "desc",
+      beforeId: BigInt(newest[1]!.id),
+      limit: 2,
+    });
+    expect(older.every((row) => BigInt(row.id) < BigInt(newest[1]!.id))).toBe(true);
+  });
+
   test("states cover all registered entities of the device", async () => {
     const states = await getDeviceEntityStates(prisma, deviceId);
     const keys = states.map((s) => s.entityKey).sort();
