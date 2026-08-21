@@ -3,8 +3,8 @@
 > 本文档记录 `plugin-and-station-architecture.md` 中阶段 1（架构与 SDK 骨架）和
 > 阶段 2（容器化插件隔离原型）的落地实现。设计动机和完整背景见该提案文档。
 
-**日期**：2026-08-21 · **基线**：711 个后端非 E2E 测试全绿（新增插件测试与评审修复
-回归）、`tsc --noEmit` 干净、`docker compose config` 校验通过。
+**日期**：2026-08-22 · **基线**：733 个后端非 E2E 测试全绿（Bun 1.4，含插件测试与
+评审修复回归）、`tsc --noEmit` 干净、`docker compose config` 校验通过。
 评审修复（H1/H2）见文末「评审修复记录」。
 
 ## 概览
@@ -13,8 +13,8 @@
 
 ```
 packages/
-  plugin-sdk/          # 共享契约：类型 + 纯校验器 + HTTP JSON-RPC 消息（无 DB、无 secret）
-  plugin-host/         # 不可信侧容器：每容器一个插件，HTTP JSON-RPC 服务端
+  plugin-sdk/          # 共享契约：类型 + 纯校验器 + HTTP MessagePack-RPC 消息（无 DB、无 secret）
+  plugin-host/         # 不可信侧容器：每容器一个插件，HTTP MessagePack-RPC 服务端
   plugin-dispatcher/   # 可信进程：租约事件、HTTP client、公平调度、权威校验
   core/src/plugins/    # 共享服务层：installation / entity / 事件队列
 
@@ -38,7 +38,7 @@ plugins/
 设备 /event envelope（阶段 5 接入 broker）
   → plugin_events（durable 行）
   → dispatcher 租约 + 路由（由 device → installation 绑定推导，不信任设备声明）
-  → 容器网络 HTTP JSON-RPC → plugin-host → 插件 worker
+  → 容器网络 HTTP MessagePack-RPC → plugin-host → 插件 worker
   → 响应（updates）回到 dispatcher
   → 权威校验 → 与事件完成同一事务内写入 entity_current_state / entity_history
 ```
@@ -80,7 +80,7 @@ CHECK 约束按仓库惯例以原始 SQL 附在迁移内（state 枚举、attemp
 | --- | --- |
 | `types.ts` | manifest / profile / `EntityDescriptor` / `EntityUpdate` / action wire encoder / `PluginContext` / worker 接口 |
 | `validation.ts` | 纯校验器：manifest zod schema（注册期 fail-fast）、entity 值类型/枚举/base64/大小上限、`validateEventUpdates`（updates 数量、未声明 entity、重复 key、ISO 时间戳、序列化字节上限） |
-| `rpc.ts` | 标准 HTTP JSON-RPC 请求/响应消息类型；握手、`plugin.handleEvent` 和有界日志结果 |
+| `rpc.ts` | HTTP MessagePack-RPC 请求/响应消息类型；握手、`plugin.handleEvent` 和有界日志结果 |
 | `define.ts` | `definePlugin()`：manifest 在模块加载时校验；manifest 与 worker 刻意分离定义 |
 
 关键设计：校验器在**两侧**运行——host 用它快速拒绝自己的错误输出，dispatcher
@@ -88,7 +88,7 @@ CHECK 约束按仓库惯例以原始 SQL 附在迁移内（state 枚举、attemp
 包也没有凭据可滥用。
 
 分层上限（§15）：每值 64KB JSON / binary 64KB / 每事件 100 条 update /
-事件 payload 256KB / HTTP JSON-RPC body 1MB（可配）。
+事件 payload 256KB / HTTP MessagePack-RPC body 1MB（可配）。
 
 ## 插件（`plugins/`，workspace 包）
 
@@ -126,8 +126,8 @@ History 策略：`none` 不记历史；`changes` 值/质量/告警指纹任一�
 通过 `PLUGIN_ID`、`PLUGIN_HOST_PORT`、`PLUGIN_HOST_BIND` 和可选的
 `PLUGIN_HOST_AUTH_TOKEN` 环境变量配置。
 
-- HTTP JSON-RPC 服务端，每容器一个插件；`GET /health` 供容器编排器探活，`POST /rpc`
-  承载标准 JSON 请求/响应。
+- HTTP MessagePack-RPC 服务端，每容器一个插件；`GET /health` 供容器编排器探活，`POST /rpc`
+  承载带 `id/method/params/result/error` 语义的 MessagePack 请求/响应。
 - `host.handshake`：返回 rpcVersion/pluginId/pluginVersion/apiVersion，供
   dispatcher 校验路由正确性。
 - `plugin.handleEvent`：deadline 派生 `AbortSignal` 传给 worker；handler 并发
@@ -146,7 +146,10 @@ History 策略：`none` 不记历史；`changes` 值/质量/告警指纹任一�
 
 **监督**（`supervisor.ts`）：按需创建 HTTP client、连接并握手；请求失败记录到
 快速失败熔断器，超时只使本地 client 失效。Dispatcher 不 spawn、SIGKILL 或重启远端
-进程；容器编排器通过 `healthcheck`、内存限制和 `restart` 策略负责 Host 生命周期。
+进程；容器编排器通过资源限制和 restart 策略负责容器生命周期。plain Compose 只会把
+失败的 healthcheck 标为 unhealthy，因此 Host entrypoint 另有一个不持有 Docker 权限的
+liveness supervisor，在 event loop 同步卡死时终止并重启 Host 子进程；Kubernetes 等
+编排器仍应配置真正的 liveness restart policy。
 
 **调度**（`dispatcher.ts`）：
 
@@ -173,15 +176,17 @@ History 策略：`none` 不记历史；`changes` 值/质量/告警指纹任一�
 
 - `Dockerfile.backend` 新增 `plugin-dispatcher` 和 `plugin-host` targets（与 api/broker 共享 base）。
 - `compose.yaml` 新增独立的 `plugin-dispatcher` 与 `plugin-host-generic` 服务；Dispatcher
-  通过 `PLUGIN_HOST_URLS` 访问容器网络 URL，Host 通过 `mem_limit`、`healthcheck` 和
-  `restart` 由 Compose 管理，不需要共享 socket volume。
+  通过 `PLUGIN_HOST_URLS` 访问容器网络 URL。每个 Host 只加入自己的 internal 网络，
+  不加入 API/DB 网络；Host 使用非 root 用户、只读根文件系统、独立的 memory/CPU/PID
+  上限和 `no-new-privileges`，并由 liveness supervisor 处理 plain Compose 下的同步挂死。
+  全程不需要共享 socket volume 或 Docker socket。
 - `bun run dev:dispatcher` 加入根 dev 脚本。
 
 ## 测试
 
 | 套件 | 文件 | 覆盖 |
 | --- | --- | --- |
-| SDK 单元 | `plugin-sdk/tests/validation.test.ts` | manifest 规则、entity 值校验、JSON-RPC 消息可序列化 |
+| SDK 单元 | `plugin-sdk/tests/validation.test.ts` | manifest 规则、entity 值校验、MessagePack-RPC 编解码（含 binary/bigint、边界） |
 | Entity 集成 | `core/tests/plugins/entity.test.ts` | revision 幂等/演进、四种 history 策略、keyset 分页、非法值拒绝 |
 | 事件队列集成 | `core/tests/plugins/events-queue.test.ts` | 绑定解析、幂等 key、租约 FIFO、退避/dead-letter、租约恢复、版本漂移 sweep、绑定校验（错误插件/未声明 profile 拒绝、同事务实体注册）、reconcile（漂移热修建新 revision + 弃用移除 key + 旧 revision 存活、版本不匹配拒绝、缺失 profile 只上报） |
 | 熔断器单元 | `plugin-dispatcher/tests/breaker.test.ts` | 阈值开闸、冷却期阻断、**冷却后无 dispatch 的重复求值仍放行（H1 回归，假时钟确定性）**、冷却后继续失败再开闸、success 复位 |
@@ -219,7 +224,6 @@ DB 侧抛 `unknown_entity`，被归为可重试后烧完 attempt 才 dead-letter
 
 - Broker `/event` 上行 envelope 接入（阶段 5；事件队列与路由已就绪，只差
   dispatch 挂钩）。
-- Action → 现有 command queue 的 encoder 路径与 REST API（阶段 3）。
 - Station 协议、Artifact Service、provisioning identity（阶段 4+）。
 - 插件 UI / iframe 隔离（阶段 3）。
 - 跨节点 RPC 传输（v2；协议已与传输解耦）。

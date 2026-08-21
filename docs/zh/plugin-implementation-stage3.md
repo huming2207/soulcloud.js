@@ -108,7 +108,7 @@ POST   /v1/devices/:deviceId/actions/:action_id            202 {batch_id, wire_c
 **1. Action encoder 移入 Plugin Host（高）**：encoder 是插件代码，不得在 API
 进程执行。链路改为 API → Dispatcher 新增的同步 HTTP 端点
 `POST /encode-action`（bearer token、deadline、frame 上限，复用 supervisor 的
-握手/熔断/bench）→ Host 的 `action.encode` JSON-RPC（计入 handler 并发闸门，
+握手/熔断/bench）→ Host 的 `action.encode` MessagePack-RPC（计入 handler 并发闸门，
 输出结构预检 + 大小上限）。Core 的 `encodePluginAction` 删除，替换为
 `validateEncodedAction`——只校验 host 返回的编码结果（cmd 匹配、单键标量参数、
 `DeviceCommandSchema` 权威复检）。API 侧错误码映射：invalid_action_input→400、

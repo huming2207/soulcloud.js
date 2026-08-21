@@ -19,6 +19,8 @@ services:
       - postgres-data:/var/lib/postgresql
       # fresh volumes also get the isolated test database
       - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
+    networks:
+      - app
 
   api:
     build:
@@ -45,6 +47,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    networks:
+      - app
 
   broker:
     build:
@@ -72,6 +76,8 @@ services:
       timeout: 3s
       retries: 20
       start_period: 5s
+    networks:
+      - app
 
   plugin-dispatcher:
     build:
@@ -94,6 +100,9 @@ services:
         condition: service_healthy
       plugin-host-generic:
         condition: service_healthy
+    networks:
+      - app
+      - plugin_generic
 
   plugin-host-generic:
     build:
@@ -106,14 +115,34 @@ services:
       PLUGIN_HOST_PORT: 8090
       PLUGIN_HOST_AUTH_TOKEN: ${PLUGIN_HOST_AUTH_TOKEN:-soulcloud-dev-plugin-token}
       PLUGIN_HOST_MAX_FRAME_BYTES: ${PLUGIN_HOST_MAX_FRAME_BYTES:-1048576}
+      PLUGIN_HOST_HEALTH_INTERVAL_SECONDS: ${PLUGIN_HOST_HEALTH_INTERVAL_SECONDS:-5}
+      PLUGIN_HOST_HEALTH_TIMEOUT_SECONDS: ${PLUGIN_HOST_HEALTH_TIMEOUT_SECONDS:-2}
+      PLUGIN_HOST_HEALTH_FAILURES: ${PLUGIN_HOST_HEALTH_FAILURES:-3}
+      PLUGIN_HOST_HEALTH_STARTUP_GRACE_SECONDS: ${PLUGIN_HOST_HEALTH_STARTUP_GRACE_SECONDS:-15}
+      PLUGIN_HOST_RESTART_DELAY_SECONDS: ${PLUGIN_HOST_RESTART_DELAY_SECONDS:-1}
+      PLUGIN_HOST_MAX_RESTARTS: ${PLUGIN_HOST_MAX_RESTARTS:-5}
+      PLUGIN_HOST_RESTART_WINDOW_SECONDS: ${PLUGIN_HOST_RESTART_WINDOW_SECONDS:-60}
     restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     mem_limit: ${PLUGIN_HOST_MEMORY_LIMIT:-512m}
+    cpus: ${PLUGIN_HOST_CPU_LIMIT:-1.0}
+    pids_limit: ${PLUGIN_HOST_PID_LIMIT:-128}
+    stop_grace_period: 5s
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8090/health').then(r => { if (!r.ok) process.exit(1) })"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 5s
+      interval: ${PLUGIN_HOST_HEALTH_INTERVAL_SECONDS:-5}s
+      timeout: ${PLUGIN_HOST_HEALTH_TIMEOUT_SECONDS:-2}s
+      retries: ${PLUGIN_HOST_HEALTH_FAILURES:-3}
+      start_period: ${PLUGIN_HOST_HEALTH_STARTUP_GRACE_SECONDS:-15}s
+    networks:
+      - plugin_generic
 
   web:
     build:
@@ -129,6 +158,18 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    networks:
+      - app
 
 volumes:
   postgres-data:
+
+networks:
+  # API, broker, dispatcher and the reverse proxy share this network.
+  app:
+    name: ${SOULCLOUD_APP_NETWORK:-soulcloudjs_app}
+  # Each plugin host gets its own internal network with the dispatcher. Do
+  # not attach plugin hosts to `app` or to one another.
+  plugin_generic:
+    name: ${SOULCLOUD_PLUGIN_GENERIC_NETWORK:-soulcloudjs_plugin_generic}
+    internal: true

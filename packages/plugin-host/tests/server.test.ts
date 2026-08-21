@@ -2,6 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   HANDSHAKE_METHOD,
   HANDLE_EVENT_METHOD,
+  ENCODE_ACTION_METHOD,
+  RPC_CONTENT_TYPE,
+  RPC_VERSION,
+  decodeRpcMessage,
+  encodeRpcMessage,
+  isRpcResponse,
   type HandleEventParams,
   type HandleEventResult,
   type RpcResponse,
@@ -19,10 +25,12 @@ class TestClient {
   ): Promise<RpcResponse> {
     const response = await fetch(`${this.baseUrl}/rpc`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: 1, method, params, deadlineMs }),
+      headers: { "content-type": RPC_CONTENT_TYPE },
+      body: encodeRpcMessage({ version: RPC_VERSION, id: 1, method, params, deadlineMs }),
     });
-    return (await response.json()) as RpcResponse;
+    const decoded = decodeRpcMessage(new Uint8Array(await response.arrayBuffer()));
+    if (!isRpcResponse(decoded)) throw new Error("invalid test RPC response");
+    return decoded;
   }
 }
 
@@ -68,7 +76,7 @@ function client(): TestClient {
   return new TestClient(host.url);
 }
 
-describe("plugin host HTTP JSON-RPC", () => {
+describe("plugin host HTTP MessagePack-RPC", () => {
   test("health endpoint reports readiness", async () => {
     const response = await fetch(`${host.url}/health`);
     expect(response.ok).toBe(true);
@@ -76,11 +84,11 @@ describe("plugin host HTTP JSON-RPC", () => {
   });
 
   test("handshake reports the plugin identity", async () => {
-    const response = await client().request(HANDSHAKE_METHOD, { rpcVersion: 1 });
+    const response = await client().request(HANDSHAKE_METHOD, { rpcVersion: RPC_VERSION });
     expect(response.ok).toBe(true);
     if (response.ok) {
       expect(response.result).toEqual({
-        rpcVersion: 1,
+        rpcVersion: RPC_VERSION,
         pluginId: CHAOS_PLUGIN_ID,
         pluginVersion: chaosTestPlugin.version,
         apiVersion: 1,
@@ -107,6 +115,21 @@ describe("plugin host HTTP JSON-RPC", () => {
         { entityKey: "chaos.last_kind", value: "ok" },
       ]);
       expect(result.logs).toEqual([]);
+    }
+  });
+
+  test("action encoding returns the declared command over MessagePack-RPC", async () => {
+    const response = await client().request(ENCODE_ACTION_METHOD, {
+      actionId: "set_mode",
+      input: { mode: "running", threshold: 7 },
+    });
+    expect(response.ok).toBe(true);
+    if (response.ok) {
+      expect(response.result).toEqual({
+        cmd: "chaos_set_mode",
+        args: [{ mode: "running" }, { threshold: 7 }],
+        schemaVersion: 1,
+      });
     }
   });
 
@@ -175,8 +198,14 @@ describe("plugin host HTTP JSON-RPC", () => {
     try {
       const response = await fetch(`${authHost.url}/rpc`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: 1, method: HANDSHAKE_METHOD, params: {}, deadlineMs: 1000 }),
+        headers: { "content-type": RPC_CONTENT_TYPE },
+        body: encodeRpcMessage({
+          version: RPC_VERSION,
+          id: 1,
+          method: HANDSHAKE_METHOD,
+          params: {},
+          deadlineMs: 1000,
+        }),
       });
       expect(response.status).toBe(401);
     } finally {

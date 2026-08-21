@@ -1,5 +1,5 @@
 /**
- * Dispatcher-side HTTP JSON-RPC client.
+ * Dispatcher-side HTTP MessagePack-RPC client.
  *
  * Plugin Hosts are independent containers. Docker/Kubernetes owns their
  * process lifecycle; this client only owns request deadlines, response size
@@ -10,7 +10,11 @@
 import {
   DEFAULT_MAX_FRAME_BYTES,
   HANDSHAKE_METHOD,
+  RPC_CONTENT_TYPE,
   RPC_VERSION,
+  decodeRpcMessage,
+  encodeRpcMessage,
+  isRpcResponse,
   type RpcError,
   type RpcResponse,
 } from "@soulcloud/plugin-sdk";
@@ -36,14 +40,6 @@ export class PluginHostTimeoutError extends Error {
   ) {
     super(`plugin host did not answer "${method}" within ${deadlineMs}ms`);
     this.name = "PluginHostTimeoutError";
-  }
-}
-
-function serializedBytes(value: unknown): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
-  } catch {
-    return Number.POSITIVE_INFINITY;
   }
 }
 
@@ -94,9 +90,12 @@ export class PluginHostClient {
       throw new PluginHostUnavailableError("plugin host client is closed");
     }
     const id = this.nextId++;
-    const message = { id, method, params, deadlineMs };
-    if (serializedBytes(message) > this.maxFrameBytes) {
-      throw new PluginHostUnavailableError("JSON-RPC request exceeds size ceiling");
+    const message = { version: RPC_VERSION, id, method, params, deadlineMs };
+    let encodedMessage: Uint8Array;
+    try {
+      encodedMessage = encodeRpcMessage(message, this.maxFrameBytes);
+    } catch (error) {
+      throw new PluginHostUnavailableError((error as Error).message);
     }
 
     const controller = new AbortController();
@@ -104,14 +103,14 @@ export class PluginHostClient {
     let response: Response;
     try {
       const headers: Record<string, string> = {
-        "content-type": "application/json",
-        accept: "application/json",
+        "content-type": RPC_CONTENT_TYPE,
+        accept: RPC_CONTENT_TYPE,
       };
       if (this.authToken) headers.authorization = `Bearer ${this.authToken}`;
       response = await fetch(`${this.baseUrl}/rpc`, {
         method: "POST",
         headers,
-        body: JSON.stringify(message),
+        body: encodedMessage,
         signal: controller.signal,
       });
     } catch (error) {
@@ -130,15 +129,21 @@ export class PluginHostClient {
       if (contentLength !== null && Number(contentLength) > this.maxFrameBytes) {
         throw new PluginHostUnavailableError("plugin host response exceeds size ceiling");
       }
-      const body = await response.text();
-      if (Buffer.byteLength(body, "utf8") > this.maxFrameBytes) {
+      const body = new Uint8Array(await response.arrayBuffer());
+      if (body.byteLength > this.maxFrameBytes) {
         throw new PluginHostUnavailableError("plugin host response exceeds size ceiling");
       }
       let messageResponse: RpcResponse;
       try {
-        messageResponse = JSON.parse(body) as RpcResponse;
+        const decoded = decodeRpcMessage(body, this.maxFrameBytes);
+        if (!isRpcResponse(decoded)) {
+          throw new Error("not a valid MessagePack-RPC response");
+        }
+        messageResponse = decoded;
       } catch {
-        throw new PluginHostUnavailableError("plugin host returned invalid JSON");
+        throw new PluginHostUnavailableError(
+          "plugin host returned invalid MessagePack-RPC",
+        );
       }
       if (
         messageResponse.id !== id ||
@@ -148,7 +153,9 @@ export class PluginHostClient {
             typeof messageResponse.error.code !== "string" ||
             typeof messageResponse.error.message !== "string"))
       ) {
-        throw new PluginHostUnavailableError("plugin host returned an invalid JSON-RPC response");
+        throw new PluginHostUnavailableError(
+          "plugin host returned an invalid MessagePack-RPC response",
+        );
       }
       if (messageResponse.ok) return messageResponse.result;
       const error = new Error(
@@ -164,7 +171,7 @@ export class PluginHostClient {
         throw error;
       }
       if (error instanceof Error && typeof (error as Error & { code?: unknown }).code === "string") {
-        // Preserve JSON-RPC application error codes for the dispatcher
+        // Preserve MessagePack-RPC application error codes for the dispatcher
         // (invalid_params/overloaded/response_too_large are policy signals,
         // not transport failures).
         throw error;

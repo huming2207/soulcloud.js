@@ -2,6 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   validateEntityValue,
   validatePluginManifest,
+  decodeRpcMessage,
+  encodeRpcMessage,
+  isRpcRequest,
+  RPC_VERSION,
+  RpcCodecError,
   type EntityDescriptor,
 } from "../src/index";
 
@@ -127,9 +132,29 @@ describe("validateEntityValue", () => {
   });
 });
 
-describe("JSON-RPC message contract", () => {
-  test("uses ordinary JSON request and response objects", () => {
-    const request = { id: 1, method: "m", params: { value: 1 }, deadlineMs: 10 };
-    expect(JSON.parse(JSON.stringify(request))).toEqual(request);
+describe("MessagePack-RPC message contract", () => {
+  test("preserves bigint and binary values", () => {
+    const request = {
+      version: RPC_VERSION,
+      id: 1,
+      method: "m",
+      params: { value: 2n ** 60n, blob: new Uint8Array([1, 2, 3]) },
+      deadlineMs: 10,
+    };
+    const decoded = decodeRpcMessage(encodeRpcMessage(request)) as typeof request;
+    expect(decoded.version).toBe(RPC_VERSION);
+    expect(decoded.params.value).toBe(2n ** 60n);
+    expect(decoded.params.blob).toEqual(new Uint8Array([1, 2, 3]));
+    expect(isRpcRequest(decoded)).toBe(true);
+  });
+
+  test("rejects trailing values and oversized frames", () => {
+    const frame = encodeRpcMessage({ version: RPC_VERSION, id: 1 });
+    expect(() => decodeRpcMessage(new Uint8Array([...frame, 0]))).toThrow(
+      RpcCodecError,
+    );
+    expect(() => encodeRpcMessage({ value: "x".repeat(100) }, 16)).toThrow(
+      RpcCodecError,
+    );
   });
 });

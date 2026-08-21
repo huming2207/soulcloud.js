@@ -38,7 +38,7 @@ SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平
   `@soulcloud/web`（SPA, Vite :5173 开发模式）和 PostgreSQL。
 - **进程间通信**: 核心进程之间仅 PostgreSQL（持久化出站队列（outbox）+ 租约轮询；
   LISTEN/NOTIFY 作为有损唤醒）；dispatcher 与 plugin-host 之间为容器网络上的
-  HTTP JSON-RPC（`PLUGIN_HOST_URLS`，§6.5）。
+  HTTP MessagePack-RPC（`PLUGIN_HOST_URLS`，§6.5）。
 - **协议**: MQTT 3.1.1 over WebSocket；命令使用 MessagePack payload；
   日志使用原始 on9log 包（单包或 MsgPack 打包——见
   [protocol-log-packaging.md](protocol-log-packaging.md)）。

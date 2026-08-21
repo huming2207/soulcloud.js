@@ -21,7 +21,7 @@ Home Assistant/Mi Home 的设备集成体验，但不照搬面向民用智能家
   tunnel 或其他隐蔽通道作为业务协议。
 - 第一版不引入 S3/MinIO；Artifact 由核心服务以 PostgreSQL/分块方式存储，并通过稳定的
   storage backend 接口为未来迁移预留空间。
-- 云端 Dispatcher 与 Plugin Host 通过容器网络 HTTP JSON-RPC 通信；Host 由 Docker/
+- 云端 Dispatcher 与 Plugin Host 通过容器网络 HTTP MessagePack-RPC 通信；Host 由 Docker/
   Kubernetes 独立管理，跨节点部署只需把 URL 指向对应 Service。
 
 ## 1. 总体架构
@@ -36,8 +36,8 @@ flowchart LR
     StationGateway[Station Gateway] --> DB
 
     DB --> Dispatcher[Plugin Dispatcher]
-    Dispatcher -->|HTTP JSON-RPC| HostA[Plugin Host A 容器]
-    Dispatcher -->|HTTP JSON-RPC| HostB[Plugin Host B 容器]
+    Dispatcher -->|HTTP MessagePack-RPC| HostA[Plugin Host A 容器]
+    Dispatcher -->|HTTP MessagePack-RPC| HostB[Plugin Host B 容器]
 
     Web --> PluginUI[隔离的 Plugin UI]
     PluginUI --> API
@@ -416,22 +416,27 @@ dead-letter、限流和 circuit breaker 状态。
 
 ### 6.5 Dispatcher 与 Plugin Host RPC
 
-当前实现使用容器网络上的 HTTP JSON-RPC。每个 Plugin Host 是独立容器，Dispatcher 只
-通过 `PLUGIN_HOST_URLS` 配置的 URL 请求它；Docker/Kubernetes 负责进程、内存、健康检查
-和重启策略。这样不需要共享 Unix socket，也不授予 Dispatcher 杀远端进程的权限。未来
+当前实现使用容器网络上的 HTTP MessagePack-RPC。每个 Plugin Host 是独立容器，Dispatcher 只
+通过 `PLUGIN_HOST_URLS` 配置的 URL 请求它；Host 只加入自己的 internal 网络，不能访问
+PostgreSQL、API、Broker 或其他 Plugin Host。Host 使用非 root、只读根文件系统、CPU/RSS/PID
+限制、`no-new-privileges` 和 capability drop。这样不需要共享 Unix socket，也不授予
+Dispatcher 杀远端进程的权限。未来
 如需跨主机，可在相同消息契约上增加 HTTPS/mTLS；不改变插件 SDK。
 
 必须遵循以下工程规则：
 
 - Host 对外提供 `GET /health` 和 `POST /rpc`；Dispatcher 启动或 URL 变化后重新 handshake。
 - Dispatcher 客户端设置请求 deadline、请求/响应大小上限和可选 bearer token；HTTP 超时只
-  失效本地 client，Host 的重启由容器编排器完成。
+  失效本地 client。Kubernetes 等编排器应通过 liveness probe 重启失活 Host；plain Docker
+  Compose 的 healthcheck 本身只会标记 unhealthy，不会重启仍存活的容器，因此 Host
+  entrypoint 带一个不持有 Docker 权限的 liveness supervisor，连续探测失败时只回收
+  Host 子进程并重新启动它。
 - Host 重启或网络暂时不可达时，Dispatcher 将事件按租约/退避策略重试；数据库 lease
   负责恢复 Dispatcher 或 Host 中断时未完成的工作。
 - Handshake 协商 RPC version、Plugin SDK API version、plugin ID/version 和能力。
-- 每个 JSON 请求/响应具有字节上限、request ID 和 deadline；畸形/超限 HTTP 请求直接
-  返回 4xx 或 JSON-RPC 错误，不进入 worker。
-- JSON-RPC 不承载 artifact 正文。大对象只传引用；日志或诊断流使用标准 chunk 消息，
+- 每个 MessagePack 请求/响应具有字节上限、request ID 和 deadline；畸形/超限 HTTP 请求直接
+  返回 4xx 或 RPC 错误，不进入 worker。`Uint8Array` 使用 MessagePack `bin`，64 位整数使用 `bigint`。
+- MessagePack-RPC 不承载 artifact 正文。大对象只传引用；日志或诊断流使用标准 chunk 消息，
   不能让插件各自发明无界大响应。
 
 ## 7. 前端插件隔离
@@ -945,7 +950,7 @@ GET    /v1/artifacts/:id                         支持 Range
 代码位置：
 
 - `packages/plugin-sdk/`：插件类型（manifest/profile/entity/action）、纯函数校验器
-  （host 预检与 dispatcher 权威复检共用）、HTTP JSON-RPC 消息契约。
+  （host 预检与 dispatcher 权威复检共用）、HTTP MessagePack-RPC 消息契约。
 - `plugins/`：编译期注册表（manifest 与 worker 双 map；核心进程只允许导入
   manifest map）、`soulcloud.generic` 内置 profile、`soulcloud.test.chaos` 混沌测试插件。
 - `packages/core/src/plugins/`：installation 服务（版本精确匹配、设备绑定解析）、
@@ -975,7 +980,7 @@ GET    /v1/artifacts/:id                         支持 Range
 - `packages/plugin-host/`：不可信侧进程，每进程只加载一个插件；握手校验身份、
   deadline 派生的 AbortSignal、自身输出预检、有界日志通知流、过载拒绝。
   进程内没有数据库连接、用户 JWT 或全局 secret。
-- `packages/plugin-dispatcher/`：可信进程，不加载任何插件代码；HTTP JSON-RPC
+- `packages/plugin-dispatcher/`：可信进程，不加载任何插件代码；HTTP MessagePack-RPC
   客户端、host 连接监督（握手/失败熔断；不 spawn 或 kill 远端容器）、per-installation
   round-robin 公平调度与并发限制、事件级退避重试与 dead-letter、双端输出校验、
   完成与 entity 更新同事务提交。
@@ -989,7 +994,7 @@ GET    /v1/artifacts/:id                         支持 Range
 
 原始清单：
 
-- 实现 Dispatcher 与独立 Plugin Host 的 HTTP JSON-RPC。
+- 实现 Dispatcher 与独立 Plugin Host 的 HTTP MessagePack-RPC。
 - Plugin Host 不持有数据库连接或用户 JWT。
 - 加入 timeout、response size、per-installation fairness/concurrency、retry、dead-letter 和
   circuit breaker。
@@ -1006,7 +1011,7 @@ GET    /v1/artifacts/:id                         支持 Range
 - `packages/core/src/plugins/actions.ts`：`validateEncodedAction`（cmd 匹配、
   单键标量参数、复用核心 `DeviceCommandSchema` 权威校验）。encoder 是插件代码，
   只在 Plugin Host 内执行：API → Dispatcher `POST /encode-action`（token/deadline/
-  frame 上限/熔断）→ Host `action.encode` JSON-RPC。
+  frame 上限/熔断）→ Host `action.encode` MessagePack-RPC。
 - `packages/core/src/audit.ts` + 迁移 `20260821120000_audit_events`：追加式审计，
   与操作同事务提交。
 - `packages/api/src/api/plugins.ts`：§16 控制面（catalog/installations CRUD/

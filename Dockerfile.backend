@@ -25,10 +25,11 @@ COPY packages/plugin-sdk packages/plugin-sdk
 COPY packages/plugin-host packages/plugin-host
 COPY packages/plugin-dispatcher packages/plugin-dispatcher
 COPY plugins plugins
-# prisma.config.ts needs a datasource url at generate time (no connection made)
+# prisma.config.ts needs a datasource url at generate time (no connection made).
+# Keep this as a build-only variable: baking DATABASE_URL into the common image
+# would give every derived image (including Plugin Host) a database endpoint.
 ARG DATABASE_URL=postgres://soulcloud:soulcloud@postgres:5432/soulcloud
-ENV DATABASE_URL=$DATABASE_URL
-RUN bun run --cwd packages/core db:generate
+RUN DATABASE_URL="$DATABASE_URL" bun run --cwd packages/core db:generate
 
 # --- api ---------------------------------------------------------------------
 FROM base AS api
@@ -46,15 +47,19 @@ CMD ["bun", "run", "packages/broker/src/index.ts"]
 
 # --- plugin-dispatcher --------------------------------------------------------
 # The dispatcher talks to independently deployed Plugin Host containers over
-# HTTP JSON-RPC. Container memory/restart policy belongs to the runtime.
+# HTTP MessagePack-RPC. Container memory/restart policy belongs to the runtime.
 FROM base AS plugin-dispatcher
 CMD ["sh", "-c", "bun run db:deploy && bun run packages/plugin-dispatcher/src/index.ts"]
 
 # --- plugin-host --------------------------------------------------------------
-# One image target is reused for each compile-time plugin. Compose/Kubernetes
-# supplies PLUGIN_ID and a per-container memory/restart policy.
+# One image target is reused for each compile-time plugin. The entrypoint is a
+# container-local liveness supervisor: Docker/Kubernetes still owns the
+# container, while the supervisor can recover a synchronous worker hang under
+# plain Compose (which otherwise only marks a healthcheck as unhealthy).
 FROM base AS plugin-host
 ENV PLUGIN_HOST_BIND=0.0.0.0
 ENV PLUGIN_HOST_PORT=8090
+ENV DATABASE_URL=""
+USER bun
 EXPOSE 8090
-CMD ["bun", "run", "packages/plugin-host/src/index.ts"]
+CMD ["sh", "packages/plugin-host/bin/entrypoint.sh"]
