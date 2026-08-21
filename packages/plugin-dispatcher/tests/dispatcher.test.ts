@@ -435,6 +435,56 @@ describe("plugin dispatcher (stage 2 prototype)", () => {
       await breakerDispatcher.stop();
     }
   });
+
+  test("permanent data errors do not open the installation circuit", async () => {
+    const fixture = await makeFixture("dispatcher-permanent-breaker");
+    const permanentDispatcher = startDispatcher(
+      prisma,
+      {
+        hostUrls: new Map([[chaosTestPlugin.id, host.url]]),
+        hostAuthToken: undefined,
+        pollIntervalMs: 25,
+        leaseDurationMs: 60_000,
+        eventTimeoutMs: 1_500,
+        maxAttempts: 2,
+        backoffBaseMs: 100,
+        backoffMaxMs: 1_000,
+        maxInFlight: 2,
+        perInstallationConcurrency: 1,
+        maxFrameBytes: 1024 * 1024,
+        crashThreshold: 100,
+        crashWindowMs: 60_000,
+        crashCooldownMs: 1_000,
+        sweepIntervalMs: 500,
+      },
+      quietLogger,
+      { breakerThreshold: 1, breakerCooldownMs: 10_000 },
+    );
+    try {
+      const invalid = await enqueuePluginEvent(prisma, {
+        deviceId: fixture.deviceId,
+        eventKind: "not-a-kind",
+        schemaVersion: 1,
+        payload: {},
+      });
+      await until("permanent event dead", async () =>
+        (await eventState(invalid.id)).state === "dead",
+      );
+      expect(permanentDispatcher.stats().openCircuits).not.toContain(fixture.installationId);
+
+      const healthy = await enqueuePluginEvent(prisma, {
+        deviceId: fixture.deviceId,
+        eventKind: "ok",
+        schemaVersion: 1,
+        payload: { value: 123 },
+      });
+      await until("healthy event completed", async () =>
+        (await eventState(healthy.id)).state === "completed",
+      );
+    } finally {
+      await permanentDispatcher.stop();
+    }
+  });
 });
 
 // keep PluginEventRow in the type surface (documents the lease shape)

@@ -204,7 +204,9 @@ export function startDispatcher(
     });
     failed += 1;
     if (outcome.state === "dead") deadLettered += 1;
-    runtime.breaker.recordFailure();
+    // Permanent data/routing errors cannot be repaired by retrying the host;
+    // they must not pause healthy events in the same installation.
+    if (!permanent) runtime.breaker.recordFailure();
     logger.warn("plugin event failed", {
       eventId: event.id,
       pluginId: event.pluginId,
