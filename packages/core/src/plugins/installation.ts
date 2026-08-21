@@ -13,7 +13,12 @@
 
 import { Prisma, type DbExecutor, type PrismaClient } from "../db";
 import { PluginSystemError } from "./errors";
-import { canonicalDescriptor, registerDeviceEntities } from "./entity";
+import {
+  canonicalDescriptor,
+  ensureEntityDescriptors,
+  registerDeviceEntities,
+  upsertRegistryRows,
+} from "./entity";
 import { findProfile, type PluginManifest } from "@soulcloud/plugin-sdk";
 
 export const BUILTIN_PLUGIN_ID = "soulcloud.generic";
@@ -189,6 +194,15 @@ export async function bindDeviceInTransaction(
         `manifest describes plugin ${params.manifest.id}, but installation ${install.id} belongs to ${install.pluginId}`,
       );
     }
+    // §3 version pinning: a device must never be bound through a manifest
+    // whose deployed version differs from the installation's configured
+    // one — that would silently upgrade descriptor semantics (review fix).
+    if (install.configuredPluginVersion !== params.manifest.version) {
+      throw new PluginSystemError(
+        "version_mismatch",
+        `installation ${install.id} is configured for ${install.configuredPluginVersion}, deployed manifest is ${params.manifest.version}`,
+      );
+    }
     const profile = findProfile(
       params.manifest,
       params.profileId,
@@ -209,6 +223,17 @@ export async function bindDeviceInTransaction(
         `device ${params.deviceId} belongs to a different project than installation ${install.id}`,
       );
     }
+    // Switching plugins (or profiles) must not leave the previous plugin's
+    // registry rows active: the read path would otherwise present stale
+    // states under a new binding (review fix). History is kept; rows are
+    // only marked deprecated.
+    await tx.$executeRaw`
+      UPDATE entity_registry
+      SET deprecated = true
+      WHERE device_id = ${params.deviceId}
+        AND plugin_id <> ${install.pluginId}
+        AND deprecated = false
+    `;
     await tx.$executeRaw`
       UPDATE devices
       SET plugin_installation_id = ${params.installationId},
@@ -293,9 +318,9 @@ export async function reconcileInstallationDevices(
       AND profile_id IS NOT NULL AND profile_version IS NOT NULL
   `;
 
-  const declaredKeys = new Set<string>();
   const missingProfiles: string[] = [];
   let devices = 0;
+  let deprecatedRegistryRows = 0;
   for (const group of groups) {
     const profile = findProfile(
       params.manifest,
@@ -303,10 +328,21 @@ export async function reconcileInstallationDevices(
       group.profile_version,
     );
     if (!profile) {
+      // Reported to the caller; migration callers treat this as blocking.
+      // Their devices are left untouched — deprecating their registry rows
+      // with ANOTHER profile's key set would be wrong (review fix).
       missingProfiles.push(`${group.profile_id}@${group.profile_version}`);
       continue;
     }
-    for (const entity of profile.entities) declaredKeys.add(entity.key);
+    // Descriptors are ensured ONCE per profile group, then each device's
+    // registry rows are upserted set-based — O(groups) descriptor passes
+    // instead of O(devices × entities) round trips inside the caller's
+    // transaction (review perf fix).
+    const revisionIds = await ensureEntityDescriptors(
+      prisma,
+      params.manifest.id,
+      profile,
+    );
     const deviceRows = await prisma.$queryRaw<{ id: string }[]>`
       SELECT id FROM devices
       WHERE plugin_installation_id = ${params.installationId}
@@ -314,24 +350,24 @@ export async function reconcileInstallationDevices(
         AND profile_version = ${group.profile_version}
     `;
     for (const deviceRow of deviceRows) {
-      await registerDeviceEntities(prisma, deviceRow.id, params.manifest.id, profile);
+      await upsertRegistryRows(prisma, deviceRow.id, params.manifest.id, revisionIds);
       devices += 1;
     }
-  }
-
-  let deprecatedRegistryRows = 0;
-  if (groups.length > 0 && missingProfiles.length < groups.length) {
-    const keyList = [...declaredKeys];
-    deprecatedRegistryRows = await prisma.$executeRaw`
+    // Deprecation is scoped PER PROFILE GROUP: a key removed from profile A
+    // must stay active for profile-B devices that still declare it.
+    const groupKeys = profile.entities.map((e) => e.key);
+    deprecatedRegistryRows += await prisma.$executeRaw`
       UPDATE entity_registry er
       SET deprecated = true
       FROM devices d
       WHERE d.id = er.device_id
         AND d.plugin_installation_id = ${params.installationId}
+        AND d.profile_id = ${group.profile_id}
+        AND d.profile_version = ${group.profile_version}
         AND er.plugin_id = ${params.manifest.id}
         AND er.deprecated = false
-        ${keyList.length > 0
-          ? Prisma.sql`AND er.entity_key NOT IN (${Prisma.join(keyList)})`
+        ${groupKeys.length > 0
+          ? Prisma.sql`AND er.entity_key NOT IN (${Prisma.join(groupKeys)})`
           : Prisma.empty}
     `;
   }
@@ -529,6 +565,16 @@ export async function migrateInstallationInTransaction(
     installationId: params.installationId,
     manifest: params.manifest,
   });
+  // §3: a migration must not strand devices on profiles the new manifest
+  // no longer declares — the whole transaction rolls back instead, and the
+  // operator has to unbind/migrate those devices first (review fix).
+  if (reconcile.missingProfiles.length > 0) {
+    throw new PluginSystemError(
+      "migration_blocked",
+      `migration blocked: the new manifest no longer declares bound profile(s) ${reconcile.missingProfiles.join(", ")}; unbind or migrate the affected devices first`,
+      { missingProfiles: reconcile.missingProfiles },
+    );
+  }
   return { installation: row, migrated: true, reconcile };
 }
 

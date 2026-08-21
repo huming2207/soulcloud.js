@@ -1,6 +1,6 @@
 /** Dispatcher <-> Plugin Host JSON-RPC message contract. */
 
-import type { EntityUpdate } from "./types";
+import type { CommandArgument, EntityUpdate } from "./types";
 
 export const RPC_VERSION = 1;
 /** Maximum serialized request/response body used by HTTP implementations. */
@@ -65,6 +65,12 @@ export function isRpcResponse(message: unknown): message is RpcResponse {
 
 export const HANDSHAKE_METHOD = "host.handshake";
 export const HANDLE_EVENT_METHOD = "plugin.handleEvent";
+/**
+ * Synchronous action-input encoding (§5, stage 3). The encoder is plugin
+ * code, so it executes in the HOST process only — the API/dispatcher never
+ * run it inline (review fix: container isolation for action encoding).
+ */
+export const ENCODE_ACTION_METHOD = "action.encode";
 
 export interface HandshakeRequest {
   rpcVersion: number;
@@ -98,6 +104,21 @@ export interface HandleEventParams {
 
 export interface HandleEventResult {
   updates: EntityUpdate[];
+}
+
+export interface EncodeActionParams {
+  actionId: string;
+  /** User-supplied action input, validated against the declared schema. */
+  input: unknown;
+}
+
+export interface EncodeActionResult {
+  /** DeviceCommand wire name declared by the action. */
+  cmd: string;
+  /** Encoded single-key arguments (validated single-key scalar maps). */
+  args: CommandArgument[];
+  /** Declared wire schema version (metadata). */
+  schemaVersion: number;
 }
 
 export const LOG_NOTIFICATION = "log";

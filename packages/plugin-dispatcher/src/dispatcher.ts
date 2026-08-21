@@ -128,6 +128,8 @@ export interface DispatcherHandle {
   wake(): void;
   stats(): DispatcherStats;
   stop(): Promise<void>;
+  /** Supervised host clients, reused by the HTTP encode endpoint. */
+  supervisor: HostSupervisor;
 }
 
 export function startDispatcher(
@@ -531,6 +533,7 @@ export function startDispatcher(
     wake() {
       void tick();
     },
+    supervisor,
     stats(): DispatcherStats {
       const inFlightPerInstallation: Record<string, number> = {};
       const openCircuits: string[] = [];

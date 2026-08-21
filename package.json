@@ -9,10 +9,10 @@
   ],
   "scripts": {
     "dev": "bun run dev:api & bun run dev:broker & bun run dev:plugin-host:generic & bun run dev:dispatcher & wait",
-    "dev:api": "bun run --watch packages/api/src/index.ts",
+    "dev:api": "PLUGIN_DISPATCHER_URL=http://127.0.0.1:8091 PLUGIN_DISPATCHER_AUTH_TOKEN=dev-dispatcher-token-1234 bun run --watch packages/api/src/index.ts",
     "dev:broker": "bun run --watch packages/broker/src/index.ts",
     "dev:plugin-host:generic": "PLUGIN_ID=soulcloud.generic PLUGIN_HOST_BIND=127.0.0.1 PLUGIN_HOST_PORT=8090 bun run --watch packages/plugin-host/src/index.ts",
-    "dev:dispatcher": "PLUGIN_HOST_URLS=soulcloud.generic=http://127.0.0.1:8090 bun run --watch packages/plugin-dispatcher/src/index.ts",
+    "dev:dispatcher": "PLUGIN_HOST_URLS=soulcloud.generic=http://127.0.0.1:8090 PLUGIN_DISPATCHER_HTTP_BIND=127.0.0.1 PLUGIN_DISPATCHER_AUTH_TOKEN=dev-dispatcher-token-1234 bun run --watch packages/plugin-dispatcher/src/index.ts",
     "dev:web": "bun run --cwd packages/web dev",
     "build:web": "bun run --cwd packages/web build",
     "start:api": "bun run packages/api/src/index.ts",

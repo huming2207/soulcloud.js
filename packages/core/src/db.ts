@@ -22,6 +22,10 @@ export type { PrismaClient } from "../generated/prisma/client";
  * compose inside one transaction.
  */
 export type DbExecutor = Pick<PrismaClient, "$queryRaw" | "$executeRaw">;
+/** The interactive-transaction client passed to `$transaction` callbacks. */
+export type TransactionClient = Parameters<
+  Parameters<PrismaClient["$transaction"]>[0]
+>[0];
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 

@@ -16,6 +16,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { prisma, decodeDeviceCommandExecution } from "@soulcloud/core";
+import { startPluginHost, type PluginHostHandle } from "../../../plugin-host/src/server";
+import { HostSupervisor } from "../../../plugin-dispatcher/src/supervisor";
+import {
+  startDispatcherHttp,
+  type DispatcherHttpHandle,
+} from "../../../plugin-dispatcher/src/http-server";
 import { createApp } from "../../src/api/app";
 
 const TEST_JWT = {
@@ -24,7 +30,13 @@ const TEST_JWT = {
   refreshTtlSeconds: 3600,
 };
 
-const app = createApp(prisma, TEST_JWT);
+const quietLogger = { info: () => {}, warn: () => {}, error: () => {} };
+let host: PluginHostHandle;
+let dispatcherHttp: DispatcherHttpHandle;
+// Assigned in beforeAll: the action encoder is plugin code, so the API under
+// test must reach it through the dispatcher's supervised endpoint
+// (review fix) — these tests run a real in-process host behind it.
+let app: ReturnType<typeof createApp>;
 
 let projectId = "";
 let ownerToken = "";
@@ -70,6 +82,46 @@ async function send(
 }
 
 beforeAll(async () => {
+  host = await startPluginHost({
+    pluginId: "soulcloud.test.chaos",
+    hostname: "127.0.0.1",
+    port: 0,
+  });
+  const supervisor = new HostSupervisor(
+    {
+      hostUrls: new Map([["soulcloud.test.chaos", host.url]]),
+      pollIntervalMs: 500,
+      leaseDurationMs: 60_000,
+      eventTimeoutMs: 5_000,
+      maxAttempts: 3,
+      backoffBaseMs: 1_000,
+      backoffMaxMs: 30_000,
+      maxInFlight: 4,
+      perInstallationConcurrency: 2,
+      maxFrameBytes: 1024 * 1024,
+      crashThreshold: 100,
+      crashWindowMs: 60_000,
+      crashCooldownMs: 1_000,
+      sweepIntervalMs: 15_000,
+    },
+    quietLogger,
+  );
+  dispatcherHttp = await startDispatcherHttp(
+    supervisor,
+    {
+      port: 0,
+      authToken: "test-dispatcher-token-123",
+      encodeTimeoutMs: 5_000,
+      maxFrameBytes: 1024 * 1024,
+    },
+    quietLogger,
+  );
+  app = createApp(prisma, TEST_JWT, 900, {}, 1024 * 1024, {}, {
+    dispatcherUrl: dispatcherHttp.url,
+    dispatcherAuthToken: "test-dispatcher-token-123",
+    encodeTimeoutMs: 5_000,
+  });
+
   projectId = randomUUID();
   await prisma.project.create({ data: { id: projectId, name: "plugins-api-test" } });
   const owner = await registerUser("plugins-owner");
@@ -90,6 +142,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await dispatcherHttp.close();
+  await host.close();
   await prisma.auditEvent.deleteMany({ where: { projectId } });
   await prisma.entityRegistry.deleteMany({ where: { deviceId } });
   await prisma.entityDescriptorRevision.deleteMany({
@@ -376,5 +430,71 @@ describe("device actions", () => {
     } finally {
       await prisma.device.delete({ where: { id: tempDevice } });
     }
+  });
+});
+
+describe("review-fix regressions (api)", () => {
+  test("unbind deprecates the previous plugin's registry rows", async () => {
+    const res = await send("DELETE", `/v1/devices/${deviceId}/profile`);
+    expect(res.status).toBe(200);
+    const rows = await prisma.$queryRaw<{ deprecated: boolean }[]>`
+      SELECT deprecated FROM entity_registry WHERE device_id = ${deviceId}
+    `;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.deprecated)).toBe(true);
+    // re-bind for the next test
+    const rebind = await send("PUT", `/v1/devices/${deviceId}/profile`, {
+      installation_id: installationId,
+      profile_id: "chaos_fixture",
+      profile_version: 1,
+    });
+    expect(rebind.status).toBe(200);
+  });
+
+  test("version drift pins read paths and invocation to the configured version", async () => {
+    // simulate a deployment that moved on before the operator migrated
+    await prisma.$executeRaw`
+      UPDATE plugin_installations SET configured_plugin_version = '0.9.0'
+      WHERE id = ${installationId}
+    `;
+    try {
+      // binding through the NEW deployed manifest must be refused
+      const bind = await send("PUT", `/v1/devices/${deviceId}/profile`, {
+        installation_id: installationId,
+        profile_id: "chaos_fixture",
+        profile_version: 1,
+      });
+      expect(bind.status).toBe(409);
+      expect(((await bind.json()) as { error: string }).error).toBe("version_mismatch");
+
+      // actions/plugin-view must not serve vNext descriptors
+      const actions = await send("GET", `/v1/devices/${deviceId}/actions`);
+      const actionsBody = (await actions.json()) as {
+        actions: unknown[];
+        version_mismatch: boolean;
+      };
+      expect(actionsBody.actions).toEqual([]);
+      expect(actionsBody.version_mismatch).toBe(true);
+
+      const view = await send("GET", `/v1/devices/${deviceId}/plugin-view`);
+      const viewBody = (await view.json()) as {
+        entities: unknown[];
+        version_mismatch: boolean;
+      };
+      expect(viewBody.entities).toEqual([]);
+      expect(viewBody.version_mismatch).toBe(true);
+
+      const invoke = await send("POST", `/v1/devices/${deviceId}/actions/set_mode`, {
+        input: { mode: "running" },
+      });
+      expect(invoke.status).toBe(409);
+    } finally {
+      await prisma.$executeRaw`
+        UPDATE plugin_installations SET configured_plugin_version = '1.0.0'
+        WHERE id = ${installationId}
+      `;
+    }
+    const actions = await send("GET", `/v1/devices/${deviceId}/actions`);
+    expect(((await actions.json()) as { actions: unknown[] }).actions.length).toBe(2);
   });
 });

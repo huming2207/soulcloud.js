@@ -27,12 +27,12 @@ import { Elysia } from "elysia";
 import { z } from "zod";
 import {
   PluginSystemError,
-  enqueueBatch,
+  enqueueBatchInTransaction,
   recordAuditEvent,
   bindDeviceInTransaction,
   createInstallation,
   dryRunDeviceProfile,
-  encodePluginAction,
+  findAction,
   getDeviceEntityStates,
   getInstallation,
   listProjectInstallations,
@@ -40,12 +40,19 @@ import {
   resolveDeviceBinding,
   setInstallationState,
   updateInstallationConfig,
+  validateEncodedAction,
   type JwtConfig,
   type PrismaClient,
 } from "@soulcloud/core";
 import { pluginManifests } from "@soulcloud/plugins";
 import { findProfile, validateActionInputSchema } from "@soulcloud/plugin-sdk";
-import { authenticateRequest, handleApiError, userCanAccessProject, UuidParam } from "./validate";
+import {
+  authenticateRequest,
+  handleApiError,
+  userCanAccessProject,
+  UuidParam,
+} from "./validate";
+import type { PluginDispatchOptions } from "./app";
 
 const ConfigJsonSchema = z.record(z.string(), z.unknown());
 
@@ -101,6 +108,7 @@ function mapPluginError(
     case "version_mismatch":
     case "installation_not_enabled":
     case "binding_mismatch":
+    case "migration_blocked":
       set.status = 409;
       return { error: error.kind, message: error.message };
     default:
@@ -110,6 +118,66 @@ function mapPluginError(
   }
 }
 
+/**
+ * Encodes one action input through the dispatcher's supervised endpoint —
+ * the encoder is plugin code and runs in the plugin host, never here
+ * (review fix). Deadline + bearer token per §6.1 sync-RPC rules.
+ */
+async function encodeViaDispatcher(
+  dispatch: PluginDispatchOptions,
+  params: { pluginId: string; actionId: string; input: unknown },
+): Promise<{ cmd: string; args: unknown; schemaVersion: number }> {
+  if (!dispatch.dispatcherUrl) {
+    throw new PluginSystemError(
+      "unknown_action",
+      "action invocation is unavailable: PLUGIN_DISPATCHER_URL is not configured",
+    );
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), dispatch.encodeTimeoutMs);
+  let payload: { cmd?: unknown; args?: unknown; schema_version?: unknown };
+  try {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (dispatch.dispatcherAuthToken) {
+      headers.authorization = `Bearer ${dispatch.dispatcherAuthToken}`;
+    }
+    const res = await fetch(`${dispatch.dispatcherUrl}/encode-action`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        plugin_id: params.pluginId,
+        action_id: params.actionId,
+        input: params.input,
+      }),
+      signal: controller.signal,
+    });
+    payload = (await res.json()) as typeof payload;
+    if (!res.ok) {
+      const err = new Error(
+        (payload as { message?: string }).message ?? `dispatcher returned HTTP ${res.status}`,
+      ) as Error & { status?: number; code?: string };
+      err.status = res.status;
+      err.code = (payload as { error?: string }).error;
+      throw err;
+    }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new PluginSystemError(
+        "invalid_action_output",
+        `action encoding timed out after ${dispatch.encodeTimeoutMs}ms`,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+  return {
+    cmd: typeof payload.cmd === "string" ? payload.cmd : "",
+    args: payload.args,
+    schemaVersion: typeof payload.schema_version === "number" ? payload.schema_version : 0,
+  };
+}
+
 /** Deployed manifest lookup for a plugin id (404 when absent). */
 function deployedManifest(
   pluginId: string,
@@ -117,7 +185,11 @@ function deployedManifest(
   return pluginManifests.get(pluginId);
 }
 
-export function createPluginRoutes(prisma: PrismaClient, auth: JwtConfig) {
+export function createPluginRoutes(
+  prisma: PrismaClient,
+  auth: JwtConfig,
+  dispatch: PluginDispatchOptions,
+) {
   return new Elysia({ prefix: "/v1" })
     // ------------------------------------------------------------------
     // control plane
@@ -505,6 +577,13 @@ export function createPluginRoutes(prisma: PrismaClient, auth: JwtConfig) {
                 profile_configuration = NULL
             WHERE id = ${params.deviceId}
           `;
+          // Deprecate the previous plugin's registry rows so the read path
+          // cannot present stale states after unbinding (review fix).
+          await tx.$executeRaw`
+            UPDATE entity_registry
+            SET deprecated = true
+            WHERE device_id = ${params.deviceId} AND deprecated = false
+          `;
           await recordAuditEvent(tx, {
             projectId: device.projectId,
             actorUserId: authUser.user.id,
@@ -540,13 +619,26 @@ export function createPluginRoutes(prisma: PrismaClient, auth: JwtConfig) {
         }
         const binding = await resolveDeviceBinding(prisma, params.deviceId);
         const manifest = deployedManifest(binding.pluginId) ?? null;
+        // §3 version pinning: when the installation is pinned to a version
+        // that differs from the deployed manifest, descriptors must not be
+        // served from the deployed manifest (review fix).
+        let pinnedVersionMatch = true;
+        if (binding.installationId !== null && manifest !== null) {
+          const install = await getInstallation(prisma, binding.installationId);
+          pinnedVersionMatch = install.configuredPluginVersion === manifest.version;
+        }
         const profile =
-          manifest !== null
+          manifest !== null && pinnedVersionMatch
             ? findProfile(manifest, binding.profileId, binding.profileVersion) ?? null
             : null;
+        // Only states of the CURRENTLY bound plugin are shown — rows from a
+        // previous plugin would otherwise masquerade under the new binding's
+        // entity keys (review fix).
         const states = await getDeviceEntityStates(prisma, params.deviceId);
         const stateByKey = new Map(
-          states.filter((s) => s.ingestedAt !== null).map((s) => [s.entityKey, s]),
+          states
+            .filter((s) => s.ingestedAt !== null && s.pluginId === binding.pluginId)
+            .map((s) => [s.entityKey, s]),
         );
         const entities = (profile?.entities ?? []).map((descriptor) => ({
           descriptor: {
@@ -566,10 +658,11 @@ export function createPluginRoutes(prisma: PrismaClient, auth: JwtConfig) {
           binding: {
             installation_id: binding.installationId,
             plugin_id: binding.pluginId,
-            plugin_version: manifest?.version ?? null,
+            plugin_version: manifest !== null && pinnedVersionMatch ? manifest.version : null,
             profile_id: binding.profileId,
             profile_version: binding.profileVersion,
           },
+          version_mismatch: !pinnedVersionMatch,
           entities,
         };
       } catch (error) {
@@ -597,15 +690,25 @@ export function createPluginRoutes(prisma: PrismaClient, auth: JwtConfig) {
         }
         const binding = await resolveDeviceBinding(prisma, params.deviceId);
         const manifest = deployedManifest(binding.pluginId) ?? null;
-        const actions = (manifest?.actions ?? [])
-          .filter((action) => validateActionInputSchema(action) === null)
-          .map((action) => ({
-            id: action.id,
-            input_schema: action.inputSchema,
-            wire_command: action.wire.command,
-            schema_version: action.wire.schemaVersion,
-          }));
-        return { actions };
+        // §3 version pinning: actions of a version the installation is not
+        // pinned to must not be offered (review fix).
+        let pinnedVersionMatch = true;
+        if (binding.installationId !== null && manifest !== null) {
+          const install = await getInstallation(prisma, binding.installationId);
+          pinnedVersionMatch = install.configuredPluginVersion === manifest.version;
+        }
+        const actions =
+          manifest === null || !pinnedVersionMatch
+            ? []
+            : manifest.actions
+                .filter((action) => validateActionInputSchema(action) === null)
+                .map((action) => ({
+                  id: action.id,
+                  input_schema: action.inputSchema,
+                  wire_command: action.wire.command,
+                  schema_version: action.wire.schemaVersion,
+                }));
+        return { actions, version_mismatch: !pinnedVersionMatch };
       } catch (error) {
         return mapPluginError(error, set) ?? handleApiError(error, set);
       }
@@ -643,8 +746,18 @@ export function createPluginRoutes(prisma: PrismaClient, auth: JwtConfig) {
             message: `plugin ${binding.pluginId} is not present in the deployed registry`,
           };
         }
+        let install: Awaited<ReturnType<typeof getInstallation>> | null = null;
         if (binding.installationId !== null) {
-          const install = await getInstallation(prisma, binding.installationId);
+          install = await getInstallation(prisma, binding.installationId);
+          // §3 version pinning: never encode with a manifest version the
+          // installation is not pinned to (review fix).
+          if (install.configuredPluginVersion !== manifest.version) {
+            set.status = 409;
+            return {
+              error: "version_mismatch",
+              message: `installation ${install.id} is configured for ${install.configuredPluginVersion}, deployed manifest is ${manifest.version}; migrate first`,
+            };
+          }
           if (install.state !== "enabled") {
             set.status = 409;
             return {
@@ -653,19 +766,42 @@ export function createPluginRoutes(prisma: PrismaClient, auth: JwtConfig) {
             };
           }
         }
-        const encoded = encodePluginAction({
-          manifest,
+        const action = findAction(manifest, params.action_id);
+        if (!action) {
+          set.status = 404;
+          return {
+            error: "unknown_action",
+            message: `plugin ${binding.pluginId} does not declare action "${params.action_id}"`,
+          };
+        }
+        const encodedResponse = await encodeViaDispatcher(dispatch, {
+          pluginId: binding.pluginId,
           actionId: params.action_id,
           input: parsed.data.input ?? {},
         });
-        // enqueueBatch owns its own transaction (sequence snapshotting), so
-        // the audit record cannot share it; a failed audit write must not
-        // un-queue an already accepted command — log and continue.
-        const batch = await enqueueBatch(prisma, [params.deviceId], encoded.command, {
-          deliveryTimeoutSeconds: parsed.data.delivery_timeout_seconds,
+        const encoded = validateEncodedAction({
+          action,
+          cmd: encodedResponse.cmd,
+          args: encodedResponse.args,
+          schemaVersion: encodedResponse.schemaVersion,
         });
-        try {
-          await recordAuditEvent(prisma, {
+        // Enqueue and audit commit atomically (review fix): the
+        // transaction-core of enqueueBatch shares this transaction.
+        const batch = await prisma.$transaction(async (tx) => {
+          const enqueued = await enqueueBatchInTransaction(
+            tx,
+            [params.deviceId],
+            encoded.command,
+            {
+              batchId: crypto.randomUUID(),
+              deviceCount: 1,
+              deliveryExpiresAt:
+                parsed.data.delivery_timeout_seconds === undefined
+                  ? null
+                  : new Date(Date.now() + parsed.data.delivery_timeout_seconds * 1000),
+            },
+          );
+          await recordAuditEvent(tx, {
             projectId: device.projectId,
             actorUserId: authUser.user.id,
             action: "device.action.invoke",
@@ -676,14 +812,11 @@ export function createPluginRoutes(prisma: PrismaClient, auth: JwtConfig) {
               action_id: params.action_id,
               wire_command: encoded.command.cmd,
               schema_version: encoded.schemaVersion,
-              batch_id: batch.id,
+              batch_id: enqueued.id,
             },
           });
-        } catch (auditError) {
-          console.error(
-            `[soulcloud-api] action audit write failed (command ${batch.id} already queued): ${(auditError as Error).message}`,
-          );
-        }
+          return enqueued;
+        });
         set.status = 202;
         return {
           batch_id: batch.id,
@@ -692,6 +825,25 @@ export function createPluginRoutes(prisma: PrismaClient, auth: JwtConfig) {
           schema_version: encoded.schemaVersion,
         };
       } catch (error) {
+        // Dispatcher encode failures carry their own codes; map them so a
+        // plugin-side problem does not surface as a generic 500.
+        const coded = error as { code?: string; message?: string };
+        if (coded.code === "invalid_action_input") {
+          set.status = 400;
+          return { error: "invalid_action_input", message: coded.message ?? "invalid action input" };
+        }
+        if (
+          coded.code === "encode_timeout" ||
+          coded.code === "plugin_unavailable" ||
+          coded.code === "overloaded"
+        ) {
+          set.status = 503;
+          return { error: coded.code!, message: coded.message ?? "plugin host unavailable" };
+        }
+        if (coded.code === "invalid_action_output" || coded.code === "handler_error") {
+          set.status = 502;
+          return { error: coded.code!, message: coded.message ?? "plugin encoder failed" };
+        }
         return mapPluginError(error, set) ?? handleApiError(error, set);
       }
     });

@@ -30,6 +30,10 @@ services:
       # shared with the broker; must be set in .env (>= 32 chars)
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       API_BIND_ADDRESS: 0.0.0.0:8080
+      # action encoders run in plugin hosts via the dispatcher endpoint
+      PLUGIN_DISPATCHER_URL: http://plugin-dispatcher:8091
+      PLUGIN_DISPATCHER_AUTH_TOKEN: ${PLUGIN_DISPATCHER_AUTH_TOKEN:-soulcloud-dev-dispatcher-token}
+      PLUGIN_ENCODE_TIMEOUT_MS: ${PLUGIN_ENCODE_TIMEOUT_MS:-5000}
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
@@ -79,6 +83,11 @@ services:
       PLUGIN_HOST_URLS: ${PLUGIN_HOST_URLS:-soulcloud.generic=http://plugin-host-generic:8090}
       # Override this development default in production/.env.
       PLUGIN_HOST_AUTH_TOKEN: ${PLUGIN_HOST_AUTH_TOKEN:-soulcloud-dev-plugin-token}
+      # synchronous action-encoding endpoint used by the API
+      PLUGIN_DISPATCHER_HTTP_PORT: 8091
+      PLUGIN_DISPATCHER_HTTP_BIND: 0.0.0.0
+      PLUGIN_DISPATCHER_AUTH_TOKEN: ${PLUGIN_DISPATCHER_AUTH_TOKEN:-soulcloud-dev-dispatcher-token}
+      PLUGIN_ENCODE_TIMEOUT_MS: ${PLUGIN_ENCODE_TIMEOUT_MS:-5000}
     restart: unless-stopped
     depends_on:
       postgres:

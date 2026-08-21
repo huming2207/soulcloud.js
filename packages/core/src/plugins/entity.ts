@@ -16,7 +16,7 @@
  *     plugin-side pre-checks).
  */
 
-import type { DbExecutor } from "../db";
+import { Prisma, type DbExecutor } from "../db";
 import { PluginSystemError } from "./errors";
 import type {
   DeviceProfileDescriptor,
@@ -47,16 +47,13 @@ export function canonicalDescriptor(
   return parts.join(";");
 }
 
-interface RevisionRow {
-  id: string;
-  revision: number;
-  descriptor: unknown;
-}
-
 /**
- * Ensures a descriptor revision exists for every entity of the profile,
- * creating revision N+1 when the canonical form changed. Returns the
+ * Ensures descriptor revisions exist for every entity of the profile,
+ * creating revision N+1 where the canonical form changed. Returns the
  * latest revision id per entity key. Idempotent.
+ *
+ * Set-based (review perf fix): ONE query loads the latest revision per
+ * key; only new/changed descriptors issue INSERTs.
  */
 export async function ensureEntityDescriptors(
   prisma: DbExecutor,
@@ -64,18 +61,25 @@ export async function ensureEntityDescriptors(
   profile: DeviceProfileDescriptor,
 ): Promise<Map<string, string>> {
   const byKey = new Map<string, string>();
+  if (profile.entities.length === 0) return byKey;
+  const keys = profile.entities.map((d) => d.key);
+  const existing = await prisma.$queryRaw<
+    { entity_key: string; id: string; revision: number; descriptor: unknown }[]
+  >`
+    SELECT DISTINCT ON (rev.entity_key)
+           rev.entity_key, rev.id, rev.revision, rev.descriptor
+    FROM entity_descriptor_revisions rev
+    WHERE rev.plugin_id = ${pluginId}
+      AND rev.profile_id = ${profile.id}
+      AND rev.profile_version = ${profile.version}
+      AND rev.entity_key IN (${Prisma.join(keys)})
+    ORDER BY rev.entity_key, rev.revision DESC
+  `;
+  const latestByKey = new Map(existing.map((row) => [row.entity_key, row]));
+
+  const toInsert: Array<{ descriptor: EntityDescriptor; revision: number }> = [];
   for (const descriptor of profile.entities) {
-    const existing = await prisma.$queryRaw<RevisionRow[]>`
-      SELECT id, revision, descriptor
-      FROM entity_descriptor_revisions
-      WHERE plugin_id = ${pluginId}
-        AND profile_id = ${profile.id}
-        AND profile_version = ${profile.version}
-        AND entity_key = ${descriptor.key}
-      ORDER BY revision DESC
-      LIMIT 1
-    `;
-    const latest = existing[0];
+    const latest = latestByKey.get(descriptor.key);
     const canonical = canonicalDescriptor(descriptor);
     const stored = latest
       ? canonicalDescriptor(latest.descriptor as EntityDescriptor)
@@ -84,16 +88,46 @@ export async function ensureEntityDescriptors(
       byKey.set(descriptor.key, latest.id);
       continue;
     }
+    toInsert.push({ descriptor, revision: (latest?.revision ?? 0) + 1 });
+  }
+  for (const { descriptor, revision } of toInsert) {
     const id = crypto.randomUUID();
     await prisma.$executeRaw`
       INSERT INTO entity_descriptor_revisions
         (id, plugin_id, profile_id, profile_version, entity_key, revision, descriptor, deprecated)
       VALUES (${id}, ${pluginId}, ${profile.id}, ${profile.version}, ${descriptor.key},
-              ${(latest?.revision ?? 0) + 1}, ${JSON.stringify(descriptor)}::jsonb, false)
+              ${revision}, ${JSON.stringify(descriptor)}::jsonb, false)
     `;
     byKey.set(descriptor.key, id);
   }
   return byKey;
+}
+
+/**
+ * Points every entity of one device at the given latest revisions
+ * (set-based single-statement upsert).
+ */
+export async function upsertRegistryRows(
+  prisma: DbExecutor,
+  deviceId: string,
+  pluginId: string,
+  revisionIds: ReadonlyMap<string, string>,
+): Promise<void> {
+  const entries = [...revisionIds.entries()];
+  if (entries.length === 0) return;
+  await prisma.$executeRaw`
+    INSERT INTO entity_registry (id, device_id, plugin_id, entity_key, descriptor_revision_id, deprecated)
+    SELECT gen_random_uuid(), ${deviceId}, ${pluginId}, k, r, false
+    FROM (
+      SELECT * FROM (VALUES ${Prisma.join(
+        entries.map(([key, revisionId]) =>
+          Prisma.sql`(${key}::text, ${revisionId}::uuid)`,
+        ),
+      )}) AS t(key, revision_id)
+    ) AS pairs(k, r)
+    ON CONFLICT (device_id, plugin_id, entity_key)
+    DO UPDATE SET descriptor_revision_id = EXCLUDED.descriptor_revision_id
+  `;
 }
 
 /**
@@ -110,14 +144,7 @@ export async function registerDeviceEntities(
   profile: DeviceProfileDescriptor,
 ): Promise<void> {
   const revisionIds = await ensureEntityDescriptors(prisma, pluginId, profile);
-  for (const [entityKey, revisionId] of revisionIds) {
-    await prisma.$executeRaw`
-      INSERT INTO entity_registry (id, device_id, plugin_id, entity_key, descriptor_revision_id, deprecated)
-      VALUES (${crypto.randomUUID()}, ${deviceId}, ${pluginId}, ${entityKey}, ${revisionId}, false)
-      ON CONFLICT (device_id, plugin_id, entity_key)
-      DO UPDATE SET descriptor_revision_id = EXCLUDED.descriptor_revision_id
-    `;
-  }
+  await upsertRegistryRows(prisma, deviceId, pluginId, revisionIds);
 }
 
 // ---------------------------------------------------------------------------

@@ -9,10 +9,14 @@
 import { pluginManifests, pluginWorkerLoaders } from "@soulcloud/plugins";
 import {
   DEFAULT_MAX_FRAME_BYTES,
+  ENCODE_ACTION_METHOD,
   HANDLE_EVENT_METHOD,
   HANDSHAKE_METHOD,
   RPC_VERSION,
+  validateActionInput,
   validateEventUpdates,
+  type EncodeActionParams,
+  type EncodeActionResult,
   type HandleEventParams,
   type HandleEventResult,
   type LogNotificationParams,
@@ -204,6 +208,94 @@ async function handleRequest(
         apiVersion: manifest.apiVersion,
       },
     });
+  }
+  if (request.method === ENCODE_ACTION_METHOD) {
+    // Encoding is plugin code, so it runs here — never in the API or
+    // dispatcher. It shares the handler concurrency gate and the request
+    // deadline with event handling; a broken encoder blocks at most this
+    // host's own event loop (container health checks own the restart).
+    if (env.getRunning() >= env.maxConcurrent) {
+      return jsonResponse(
+        errorResponse(request.id, "overloaded", "too many concurrent executions"),
+      );
+    }
+    env.onRunningDelta(1);
+    try {
+      const params = request.params as EncodeActionParams | undefined;
+      if (!params || typeof params.actionId !== "string") {
+        return jsonResponse(errorResponse(request.id, "invalid_params", "missing action parameters"));
+      }
+      const action = manifest.actions.find((a) => a.id === params.actionId);
+      if (!action) {
+        return jsonResponse(
+          errorResponse(request.id, "invalid_params", `unknown action "${params.actionId}"`),
+        );
+      }
+      const input = params.input ?? {};
+      const inputCheck = validateActionInput(action.inputSchema, input);
+      if (!inputCheck.ok) {
+        const detail = inputCheck.failures
+          .map((f) => `${f.field} ${f.error}`)
+          .join("; ");
+        return jsonResponse(
+          errorResponse(request.id, "invalid_params", `invalid action input — ${detail}`),
+        );
+      }
+      let args;
+      try {
+        args = action.wire.encode(input);
+      } catch (error) {
+        return jsonResponse(
+          errorResponse(
+            request.id,
+            "handler_error",
+            `action encoder threw: ${(error as Error).message ?? "encoder threw"}`,
+          ),
+        );
+      }
+      if (!Array.isArray(args) || args.length > 256) {
+        return jsonResponse(
+          errorResponse(request.id, "invalid_params", "encoder returned no array or too many arguments"),
+        );
+      }
+      for (const [index, arg] of args.entries()) {
+        if (!arg || typeof arg !== "object" || Array.isArray(arg) || Object.keys(arg).length !== 1) {
+          return jsonResponse(
+            errorResponse(request.id, "invalid_params", `encoder argument #${index} must be a single-key map`),
+          );
+        }
+        const value = Object.values(arg)[0];
+        const scalar =
+          typeof value === "string" ||
+          typeof value === "boolean" ||
+          typeof value === "bigint" ||
+          value === null ||
+          value instanceof Uint8Array ||
+          (typeof value === "number" && Number.isFinite(value));
+        if (!scalar) {
+          return jsonResponse(
+            errorResponse(request.id, "invalid_params", `encoder argument #${index} has a non-scalar value`),
+          );
+        }
+      }
+      const result: EncodeActionResult = {
+        cmd: action.wire.command,
+        args,
+        schemaVersion: action.wire.schemaVersion,
+      };
+      if (serializedBytes(result) > env.maxFrameBytes) {
+        return jsonResponse(
+          errorResponse(request.id, "response_too_large", "encoded action exceeds the frame ceiling"),
+        );
+      }
+      return jsonResponse({ id: request.id, ok: true, result });
+    } catch (error) {
+      return jsonResponse(
+        errorResponse(request.id, "handler_error", (error as Error).message ?? "action encoder threw"),
+      );
+    } finally {
+      env.onRunningDelta(-1);
+    }
   }
   if (request.method !== HANDLE_EVENT_METHOD) {
     return jsonResponse(

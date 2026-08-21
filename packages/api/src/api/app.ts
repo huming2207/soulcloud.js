@@ -71,6 +71,13 @@ export interface AuthWorkOptions {
   loginFailureCapacity?: number;
 }
 
+/** Connection to the dispatcher's synchronous action-encoding endpoint. */
+export interface PluginDispatchOptions {
+  dispatcherUrl: string;
+  dispatcherAuthToken?: string;
+  encodeTimeoutMs: number;
+}
+
 export function createApp(
   prisma: PrismaClient,
   jwt: JwtConfig,
@@ -78,6 +85,11 @@ export function createApp(
   streamOptions: StreamOptions = {},
   maxJsonBodyBytes = 1024 * 1024,
   authWorkOptions: AuthWorkOptions = {},
+  pluginDispatch: PluginDispatchOptions = {
+    dispatcherUrl: "",
+    dispatcherAuthToken: undefined,
+    encodeTimeoutMs: 6_000,
+  },
 ) {
   // C1 (round-5): never fall back to a hardcoded secret. The caller MUST
   // pass the configured JwtConfig (index.ts wires .env; tests inject
@@ -169,7 +181,7 @@ export function createApp(
     .use(createRolloutRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createMeRoutes(prisma, auth))
     .use(createDeviceRoutes(prisma, auth))
-    .use(createPluginRoutes(prisma, auth));
+    .use(createPluginRoutes(prisma, auth, pluginDispatch));
 }
 
 function formatZodIssues(

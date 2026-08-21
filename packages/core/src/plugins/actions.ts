@@ -1,12 +1,16 @@
 /**
- * Action → DeviceCommand encoding (§5, stage 3).
+ * Action → DeviceCommand validation (§5, stage 3).
  *
  * Actions are the user-facing operations a plugin declares; they ride the
  * EXISTING durable command queue — no second downlink envelope, no new
- * MQTT topic. The manifest's pure `wire.encode` runs in the API process
- * (manifests are metadata + pure functions; worker code is never imported
- * there), and its output is validated twice:
- *   1. structurally here (single-key scalar maps),
+ * MQTT topic.
+ *
+ * Trust boundary (review fix): the manifest's `wire.encode` is PLUGIN CODE
+ * and executes ONLY inside the Plugin Host container, reached through the
+ * dispatcher's supervised JSON-RPC channel (`action.encode`). This module
+ * never calls it — it validates the host's ENCODED OUTPUT before anything
+ * reaches the command queue:
+ *   1. structurally here (single-key scalar maps, bounded count),
  *   2. authoritatively by the core `DeviceCommandSchema` (the same zod
  *      contract the generic command API enforces).
  */
@@ -14,11 +18,10 @@
 import type { DeviceCommand } from "../protocol/command";
 import { DeviceCommandSchema } from "../protocol/command";
 import { PluginSystemError } from "./errors";
-import {
-  validateActionInput,
-  type ActionDescriptor,
-  type CommandArgument,
-  type PluginManifest,
+import type {
+  ActionDescriptor,
+  CommandArgument,
+  PluginManifest,
 } from "@soulcloud/plugin-sdk";
 
 export function findAction(
@@ -65,67 +68,40 @@ function checkEncodedArg(arg: unknown, index: number): void {
   }
 }
 
-export interface EncodedAction {
-  /** Ready to enqueue through the existing command queue. */
-  command: DeviceCommand;
-  /** Declared wire schema version (metadata for audit/UI). */
-  schemaVersion: number;
-}
-
 /**
- * Validates user input against the action's declared schema and encodes it
- * into a DeviceCommand via the manifest's pure encoder.
+ * Validates a host-returned encoding ({cmd, args}) against the declared
+ * action and produces a DeviceCommand ready for the command queue.
  *
- * @throws {PluginSystemError} unknown_action / invalid_action_input /
- * invalid_action_output.
+ * @throws {PluginSystemError} invalid_action_output.
  */
-export function encodePluginAction(params: {
-  manifest: PluginManifest;
-  actionId: string;
-  input: unknown;
-}): EncodedAction {
-  const action = findAction(params.manifest, params.actionId);
-  if (!action) {
-    throw new PluginSystemError(
-      "unknown_action",
-      `plugin ${params.manifest.id} does not declare action "${params.actionId}"`,
-    );
-  }
-  const inputCheck = validateActionInput(action.inputSchema, params.input ?? {});
-  if (!inputCheck.ok) {
-    const detail = inputCheck.failures
-      .map((f) => `${f.field} ${f.error}`)
-      .join("; ");
-    throw new PluginSystemError(
-      "invalid_action_input",
-      `action "${params.actionId}" input rejected — ${detail}`,
-      { failures: inputCheck.failures },
-    );
-  }
-  let encoded: CommandArgument[];
-  try {
-    encoded = action.wire.encode(params.input ?? {});
-  } catch (error) {
+export function validateEncodedAction(params: {
+  action: ActionDescriptor;
+  cmd: string;
+  args: unknown;
+  schemaVersion: number;
+}): { command: DeviceCommand; schemaVersion: number } {
+  const { action } = params;
+  if (params.cmd !== action.wire.command) {
     throw new PluginSystemError(
       "invalid_action_output",
-      `action "${params.actionId}" encoder threw: ${(error as Error).message}`,
+      `host encoded "${params.cmd}" but action "${action.id}" declares "${action.wire.command}"`,
     );
   }
-  if (!Array.isArray(encoded) || encoded.length > 256) {
+  if (!Array.isArray(params.args) || params.args.length > 256) {
     throw new PluginSystemError(
       "invalid_action_output",
-      `action "${params.actionId}" encoder returned no array or too many arguments`,
+      `action "${action.id}" encoding returned no array or too many arguments`,
     );
   }
-  encoded.forEach(checkEncodedArg);
+  params.args.forEach(checkEncodedArg);
   const parsed = DeviceCommandSchema.safeParse({
-    cmd: action.wire.command,
-    args: encoded,
+    cmd: params.cmd,
+    args: params.args as CommandArgument[],
   });
   if (!parsed.success) {
     throw new PluginSystemError(
       "invalid_action_output",
-      `action "${params.actionId}" produced an invalid DeviceCommand: ${parsed.error.issues[0]?.message ?? "unknown"}`,
+      `action "${action.id}" produced an invalid DeviceCommand: ${parsed.error.issues[0]?.message ?? "unknown"}`,
     );
   }
   return { command: parsed.data, schemaVersion: action.wire.schemaVersion };

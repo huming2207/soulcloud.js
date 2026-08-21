@@ -20,6 +20,7 @@ export type PluginSystemErrorKind =
   | "unknown_action"
   | "invalid_action_input"
   | "invalid_action_output"
+  | "migration_blocked"
   | "lease_time_overflow"
   | "database";
 

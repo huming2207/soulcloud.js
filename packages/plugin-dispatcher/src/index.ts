@@ -15,6 +15,7 @@ import { Client } from "pg";
 import { prisma, PLUGIN_EVENTS_CHANNEL } from "@soulcloud/core";
 import { dispatcherCoreOptionsFromConfig, loadDispatcherConfig } from "./config";
 import { startDispatcher } from "./dispatcher";
+import { startDispatcherHttp } from "./http-server";
 
 const config = loadDispatcherConfig();
 
@@ -32,6 +33,30 @@ const dispatcher = startDispatcher(
   dispatcherCoreOptionsFromConfig(config),
   logger,
 );
+
+// Synchronous action-encoding endpoint (§6.1): the API calls this instead of
+// executing plugin encoders itself; requests ride the supervised host
+// clients with deadline + frame cap + bench circuit.
+if (config.PLUGIN_DISPATCHER_HTTP_PORT > 0) {
+  const http = startDispatcherHttp(
+    dispatcher.supervisor,
+    {
+      port: config.PLUGIN_DISPATCHER_HTTP_PORT,
+      hostname: config.PLUGIN_DISPATCHER_HTTP_BIND,
+      authToken: config.PLUGIN_DISPATCHER_AUTH_TOKEN,
+      encodeTimeoutMs: config.PLUGIN_ENCODE_TIMEOUT_MS,
+      maxFrameBytes: config.PLUGIN_HOST_MAX_FRAME_BYTES,
+    },
+    logger,
+  );
+  console.log(`[plugin-dispatcher] encode endpoint on ${http.url}/encode-action`);
+  const closeHttp = http.close.bind(http);
+  const originalStop = dispatcher.stop.bind(dispatcher);
+  dispatcher.stop = async () => {
+    await originalStop();
+    await closeHttp();
+  };
+}
 
 // LISTEN/NOTIFY wake-up (lossy by design; the poll interval is the
 // correctness fallback — same contract as the broker's command poller).

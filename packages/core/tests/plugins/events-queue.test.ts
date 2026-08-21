@@ -18,7 +18,10 @@ import {
   sweepInstallationVersions,
 } from "../../src/plugins/events-queue";
 import { PluginSystemError } from "../../src/plugins/errors";
-import { reconcileInstallationDevices } from "../../src/plugins/installation";
+import {
+  migrateInstallationInTransaction,
+  reconcileInstallationDevices,
+} from "../../src/plugins/installation";
 import { chaosTestPlugin } from "../../../../plugins/chaos-test";
 import type { PluginManifest } from "@soulcloud/plugin-sdk";
 
@@ -487,5 +490,247 @@ describe("reconcileInstallationDevices (H2)", () => {
       SELECT deprecated FROM entity_registry WHERE device_id = ${deviceId} AND entity_key = 'chaos.counter'
     `;
     expect(after[0]!.deprecated).toBe(before[0]!.deprecated);
+  });
+});
+
+describe("review-fix regressions (core)", () => {
+  test("migration is blocked and rolled back when the new manifest drops a bound profile", async () => {
+    const blkProject = randomUUID();
+    await prisma.project.create({ data: { id: blkProject, name: "migrate-blocked" } });
+    const inst = await createInstallation(prisma, {
+      projectId: blkProject,
+      manifest: chaosTestPlugin,
+      configJson: {},
+    });
+    const dev = randomUUID();
+    await prisma.device.create({
+      data: {
+        id: dev,
+        deviceUid: `blk-${randomUUID().slice(0, 8)}`,
+        assignedId: "assigned-blocked",
+        passwordHash: "unused",
+        projectId: blkProject,
+      },
+    });
+    try {
+      await bindDeviceToInstallation(prisma, {
+        deviceId: dev,
+        installationId: inst.id,
+        profileId: chaosTestPlugin.profiles[0]!.id,
+        profileVersion: chaosTestPlugin.profiles[0]!.version,
+        manifest: chaosTestPlugin,
+      });
+      // v2 drops the bound profile entirely
+      const v2 = { ...chaosTestPlugin, version: "2.0.0", profiles: [] } as PluginManifest;
+      // the caller owns the transaction (same as the API route)
+      await expect(
+        prisma.$transaction((tx) =>
+          migrateInstallationInTransaction(tx, { installationId: inst.id, manifest: v2 }),
+        ),
+      ).rejects.toMatchObject({ kind: "migration_blocked" });
+
+      // rollback: version and state untouched
+      const row = await prisma.$queryRaw<{ configured_plugin_version: string; state: string }[]>`
+        SELECT configured_plugin_version, state FROM plugin_installations WHERE id = ${inst.id}
+      `;
+      expect(row[0]!.configured_plugin_version).toBe("1.0.0");
+      expect(row[0]!.state).toBe("enabled");
+    } finally {
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id = ${dev}`;
+      await prisma.$executeRaw`DELETE FROM plugin_installations WHERE project_id = ${blkProject}`;
+      await prisma.$executeRaw`DELETE FROM devices WHERE project_id = ${blkProject}`;
+      await prisma.$executeRaw`DELETE FROM projects WHERE id = ${blkProject}`;
+    }
+  });
+
+  test("re-binding to another plugin deprecates the previous plugin's rows", async () => {
+    const firstManifest = {
+      id: "acme.first",
+      version: "1.0.0",
+      apiVersion: 1,
+      profiles: [
+        {
+          id: "p1",
+          version: 1,
+          manufacturer: "Acme",
+          model: "First",
+          capabilities: [],
+          entities: [
+            { key: "first.value", valueType: "number", access: "read", category: "diagnostic", history: "none" },
+          ],
+        },
+      ],
+      actions: [],
+      events: [],
+      workflows: [],
+      ui: {},
+    } as PluginManifest;
+    const xProject = randomUUID();
+    await prisma.project.create({ data: { id: xProject, name: "cross-plugin" } });
+    const firstInstall = await createInstallation(prisma, {
+      projectId: xProject,
+      manifest: firstManifest,
+      configJson: {},
+    });
+    const chaosInstall = await createInstallation(prisma, {
+      projectId: xProject,
+      manifest: chaosTestPlugin,
+      configJson: {},
+    });
+    const dev = randomUUID();
+    await prisma.device.create({
+      data: {
+        id: dev,
+        deviceUid: `xpl-${randomUUID().slice(0, 8)}`,
+        assignedId: "assigned-cross",
+        passwordHash: "unused",
+        projectId: xProject,
+      },
+    });
+    try {
+      await bindDeviceToInstallation(prisma, {
+        deviceId: dev,
+        installationId: firstInstall.id,
+        profileId: "p1",
+        profileVersion: 1,
+        manifest: firstManifest,
+      });
+      // switch the device to the chaos plugin
+      await bindDeviceToInstallation(prisma, {
+        deviceId: dev,
+        installationId: chaosInstall.id,
+        profileId: chaosTestPlugin.profiles[0]!.id,
+        profileVersion: chaosTestPlugin.profiles[0]!.version,
+        manifest: chaosTestPlugin,
+      });
+      const rows = await prisma.$queryRaw<{ plugin_id: string; deprecated: boolean }[]>`
+        SELECT plugin_id, deprecated FROM entity_registry WHERE device_id = ${dev}
+      `;
+      const firstRows = rows.filter((r) => r.plugin_id === "acme.first");
+      expect(firstRows.length).toBe(1);
+      expect(firstRows.every((r) => r.deprecated)).toBe(true);
+      const chaosRows = rows.filter((r) => r.plugin_id === chaosTestPlugin.id);
+      expect(chaosRows.length).toBe(4);
+      expect(chaosRows.every((r) => !r.deprecated)).toBe(true);
+    } finally {
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id = ${dev}`;
+      await prisma.$executeRaw`DELETE FROM entity_descriptor_revisions WHERE plugin_id = 'acme.first'`;
+      await prisma.$executeRaw`DELETE FROM plugin_installations WHERE project_id = ${xProject}`;
+      await prisma.$executeRaw`DELETE FROM devices WHERE project_id = ${xProject}`;
+      await prisma.$executeRaw`DELETE FROM projects WHERE id = ${xProject}`;
+    }
+  });
+
+  test("reconcile deprecation is scoped per profile group", async () => {
+    const twoProfileManifest = {
+      id: "acme.twoprofiles",
+      version: "1.0.0",
+      apiVersion: 1,
+      profiles: [
+        {
+          id: "pa",
+          version: 1,
+          manufacturer: "Acme",
+          model: "A",
+          capabilities: [],
+          entities: [
+            { key: "shared.status", valueType: "number", access: "read", category: "diagnostic", history: "none" },
+            { key: "a.only", valueType: "string", access: "read", category: "diagnostic", history: "none" },
+          ],
+        },
+        {
+          id: "pb",
+          version: 1,
+          manufacturer: "Acme",
+          model: "B",
+          capabilities: [],
+          entities: [
+            { key: "shared.status", valueType: "number", access: "read", category: "diagnostic", history: "none" },
+            { key: "b.only", valueType: "number", access: "read", category: "diagnostic", history: "none" },
+          ],
+        },
+      ],
+      actions: [],
+      events: [],
+      workflows: [],
+      ui: {},
+    } as PluginManifest;
+    // v1.0.1 keeps shared.status only on pb
+    const upgraded = {
+      ...twoProfileManifest,
+      version: "1.0.1",
+      profiles: [twoProfileManifest.profiles[1]],
+    } as PluginManifest;
+
+    const gProject = randomUUID();
+    await prisma.project.create({ data: { id: gProject, name: "group-deprecation" } });
+    const inst = await createInstallation(prisma, {
+      projectId: gProject,
+      manifest: twoProfileManifest,
+      configJson: {},
+    });
+    const devA = randomUUID();
+    const devB = randomUUID();
+    for (const [id, suffix] of [[devA, "a"], [devB, "b"]] as const) {
+      await prisma.device.create({
+        data: {
+          id,
+          deviceUid: `grp-${suffix}-${randomUUID().slice(0, 8)}`,
+          assignedId: `assigned-group-${suffix}`,
+          passwordHash: "unused",
+          projectId: gProject,
+        },
+      });
+    }
+    try {
+      await bindDeviceToInstallation(prisma, {
+        deviceId: devA,
+        installationId: inst.id,
+        profileId: "pa",
+        profileVersion: 1,
+        manifest: twoProfileManifest,
+      });
+      await bindDeviceToInstallation(prisma, {
+        deviceId: devB,
+        installationId: inst.id,
+        profileId: "pb",
+        profileVersion: 1,
+        manifest: twoProfileManifest,
+      });
+
+      // upgrade the installation to a manifest where pa no longer exists
+      await prisma.$executeRaw`
+        UPDATE plugin_installations SET configured_plugin_version = '1.0.1'
+        WHERE id = ${inst.id}
+      `;
+      const result = await reconcileInstallationDevices(prisma, {
+        installationId: inst.id,
+        manifest: upgraded,
+      });
+      expect(result.devices).toBe(1); // only pb's device is reconcilable
+      expect(result.missingProfiles).toEqual(["pa@1"]);
+      // pa's group is skipped conservatively: its rows are left for the
+      // operator (migration callers block + roll back on missing profiles)
+      expect(result.deprecatedRegistryRows).toBe(0);
+
+      const rowsA = await prisma.$queryRaw<{ deprecated: boolean }[]>`
+        SELECT deprecated FROM entity_registry WHERE device_id = ${devA}
+      `;
+      expect(rowsA.every((r) => !r.deprecated)).toBe(true);
+
+      const rows = await prisma.$queryRaw<{ entity_key: string; deprecated: boolean }[]>`
+        SELECT er.entity_key, er.deprecated
+        FROM entity_registry er WHERE er.device_id = ${devB}
+      `;
+      // pb still declares shared.status — it must stay active for devB
+      const shared = rows.find((r) => r.entity_key === "shared.status");
+      expect(shared?.deprecated).toBe(false);
+    } finally {
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id IN (${devA}, ${devB})`;
+      await prisma.$executeRaw`DELETE FROM entity_descriptor_revisions WHERE plugin_id = 'acme.twoprofiles'`;
+      await prisma.$executeRaw`DELETE FROM plugin_installations WHERE project_id = ${gProject}`;
+      await prisma.$executeRaw`DELETE FROM devices WHERE project_id = ${gProject}`;
+      await prisma.$executeRaw`DELETE FROM projects WHERE id = ${gProject}`;
+    }
   });
 });

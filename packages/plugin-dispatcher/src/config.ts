@@ -37,6 +37,11 @@ const envSchema = z.object({
   PLUGIN_HOST_CRASH_COOLDOWN_MS: z.coerce.number().int().positive().default(30_000),
   /// Lease recovery + installation version sweep cadence.
   PLUGIN_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
+  /// Synchronous action-encoding endpoint (API -> dispatcher -> host).
+  PLUGIN_DISPATCHER_HTTP_PORT: z.coerce.number().int().min(0).default(8091),
+  PLUGIN_DISPATCHER_HTTP_BIND: z.string().default("0.0.0.0"),
+  PLUGIN_DISPATCHER_AUTH_TOKEN: z.string().min(16).optional(),
+  PLUGIN_ENCODE_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 });
 
 export type DispatcherConfig = BaseConfig & z.infer<typeof envSchema>;
@@ -85,6 +90,11 @@ export interface DispatcherCoreOptions {
   crashWindowMs: number;
   crashCooldownMs: number;
   sweepIntervalMs: number;
+  /** HTTP encode endpoint (entry point only; optional for embedders). */
+  dispatcherHttpPort?: number;
+  dispatcherHttpBind?: string;
+  dispatcherAuthToken?: string;
+  encodeTimeoutMs?: number;
 }
 
 export function parsePluginHostUrls(raw: string): ReadonlyMap<string, string> {
@@ -134,5 +144,9 @@ export function dispatcherCoreOptionsFromConfig(
     crashWindowMs: config.PLUGIN_HOST_CRASH_WINDOW_MS,
     crashCooldownMs: config.PLUGIN_HOST_CRASH_COOLDOWN_MS,
     sweepIntervalMs: config.PLUGIN_SWEEP_INTERVAL_MS,
+    dispatcherHttpPort: config.PLUGIN_DISPATCHER_HTTP_PORT,
+    dispatcherHttpBind: config.PLUGIN_DISPATCHER_HTTP_BIND,
+    dispatcherAuthToken: config.PLUGIN_DISPATCHER_AUTH_TOKEN,
+    encodeTimeoutMs: config.PLUGIN_ENCODE_TIMEOUT_MS,
   };
 }

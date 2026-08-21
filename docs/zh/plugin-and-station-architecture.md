@@ -1003,8 +1003,10 @@ GET    /v1/artifacts/:id                         支持 Range
 - `packages/plugin-sdk/`：`CommandArgument` 修正为命名单键 map（与 DeviceCommand
   wire contract 一致）；新增扁平 Action 输入 schema 语言与校验器，同一份声明驱动
   API 校验与 Web 表单渲染。
-- `packages/core/src/plugins/actions.ts`：`encodePluginAction`（schema 校验 →
-  manifest 纯 encoder → 结构复检 → 复用核心 `DeviceCommandSchema` 权威校验）。
+- `packages/core/src/plugins/actions.ts`：`validateEncodedAction`（cmd 匹配、
+  单键标量参数、复用核心 `DeviceCommandSchema` 权威校验）。encoder 是插件代码，
+  只在 Plugin Host 内执行：API → Dispatcher `POST /encode-action`（token/deadline/
+  frame 上限/熔断）→ Host `action.encode` JSON-RPC。
 - `packages/core/src/audit.ts` + 迁移 `20260821120000_audit_events`：追加式审计，
   与操作同事务提交。
 - `packages/api/src/api/plugins.ts`：§16 控制面（catalog/installations CRUD/

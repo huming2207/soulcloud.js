@@ -227,12 +227,30 @@ function ActionForm({ deviceId, action }: { deviceId: string; action: ActionView
               </TextField>
             );
           }
+          if (field.type === "boolean") {
+            // A free-text field would silently coerce "tru"/"yes" to false
+            // (review fix): booleans are an explicit two-option choice.
+            return (
+              <TextField
+                key={name}
+                select
+                size="small"
+                label={label + (field.required ? " *" : "")}
+                value={values[name] ?? ""}
+                onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))}
+                sx={{ minWidth: 140 }}
+              >
+                <MenuItem value="true">true</MenuItem>
+                <MenuItem value="false">false</MenuItem>
+              </TextField>
+            );
+          }
           return (
             <TextField
               key={name}
               size="small"
               label={label + (field.required ? " *" : "")}
-              type={field.type === "boolean" ? "text" : field.type === "string" ? "text" : "number"}
+              type={field.type === "string" ? "text" : "number"}
               value={values[name] ?? ""}
               onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))}
               slotProps={{
