@@ -37,6 +37,11 @@ const envSchema = z.object({
   PLUGIN_HOST_CRASH_COOLDOWN_MS: z.coerce.number().int().positive().default(30_000),
   /// Lease recovery + installation version sweep cadence.
   PLUGIN_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
+  /// Terminal event and entity-history retention maintenance.
+  PLUGIN_RETENTION_INTERVAL_MS: z.coerce.number().int().positive().default(3_600_000),
+  PLUGIN_EVENT_RETENTION_DAYS: z.coerce.number().positive().default(30),
+  PLUGIN_ENTITY_HISTORY_RETENTION_DAYS: z.coerce.number().positive().default(365),
+  PLUGIN_RETENTION_BATCH_SIZE: z.coerce.number().int().positive().default(1_000),
   /// Synchronous action-encoding endpoint (API -> dispatcher -> host).
   PLUGIN_DISPATCHER_HTTP_PORT: z.coerce.number().int().min(0).default(8091),
   PLUGIN_DISPATCHER_HTTP_BIND: z.string().default("0.0.0.0"),
@@ -90,6 +95,10 @@ export interface DispatcherCoreOptions {
   crashWindowMs: number;
   crashCooldownMs: number;
   sweepIntervalMs: number;
+  retentionIntervalMs?: number;
+  eventRetentionMs?: number;
+  entityHistoryRetentionMs?: number;
+  retentionBatchSize?: number;
   /** HTTP encode endpoint (entry point only; optional for embedders). */
   dispatcherHttpPort?: number;
   dispatcherHttpBind?: string;
@@ -144,6 +153,11 @@ export function dispatcherCoreOptionsFromConfig(
     crashWindowMs: config.PLUGIN_HOST_CRASH_WINDOW_MS,
     crashCooldownMs: config.PLUGIN_HOST_CRASH_COOLDOWN_MS,
     sweepIntervalMs: config.PLUGIN_SWEEP_INTERVAL_MS,
+    retentionIntervalMs: config.PLUGIN_RETENTION_INTERVAL_MS,
+    eventRetentionMs: config.PLUGIN_EVENT_RETENTION_DAYS * 86_400_000,
+    entityHistoryRetentionMs:
+      config.PLUGIN_ENTITY_HISTORY_RETENTION_DAYS * 86_400_000,
+    retentionBatchSize: config.PLUGIN_RETENTION_BATCH_SIZE,
     dispatcherHttpPort: config.PLUGIN_DISPATCHER_HTTP_PORT,
     dispatcherHttpBind: config.PLUGIN_DISPATCHER_HTTP_BIND,
     dispatcherAuthToken: config.PLUGIN_DISPATCHER_AUTH_TOKEN,

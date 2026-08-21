@@ -31,6 +31,7 @@ export * from "./plugins/errors";
 export * from "./plugins/installation";
 export * from "./plugins/entity";
 export * from "./plugins/events-queue";
+export * from "./plugins/retention";
 export * from "./plugins/actions";
 export * from "./audit";
 export * from "./security/password";

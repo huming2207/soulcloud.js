@@ -33,6 +33,7 @@ import {
   leaseNextPluginEvent,
   listInstallationsWithWork,
   recoverExpiredPluginEventLeases,
+  prunePluginData,
   sweepInstallationVersions,
   type PluginEventRow,
 } from "@soulcloud/core";
@@ -121,6 +122,9 @@ export interface DispatcherDeps {
 
 const DEFAULT_BREAKER_THRESHOLD = 5;
 const DEFAULT_BREAKER_COOLDOWN_MS = 30_000;
+const DEFAULT_RETENTION_INTERVAL_MS = 3_600_000;
+const DEFAULT_EVENT_RETENTION_MS = 30 * 86_400_000;
+const DEFAULT_ENTITY_HISTORY_RETENTION_MS = 365 * 86_400_000;
 
 export interface DispatcherHandle {
   /** One scheduler pass (exposed for deterministic tests). */
@@ -149,6 +153,7 @@ export function startDispatcher(
   let deadLettered = 0;
   let rrCursor = 0;
   let sweeping = false;
+  let retaining = false;
   let ticking = false;
 
   const installations = new Map<string, InstallationRuntime>();
@@ -456,6 +461,26 @@ export function startDispatcher(
     }
   }
 
+  async function retain(): Promise<void> {
+    if (retaining) return;
+    retaining = true;
+    try {
+      const result = await prunePluginData(prisma, {
+        eventRetentionMs: options.eventRetentionMs ?? DEFAULT_EVENT_RETENTION_MS,
+        entityHistoryRetentionMs:
+          options.entityHistoryRetentionMs ?? DEFAULT_ENTITY_HISTORY_RETENTION_MS,
+        batchSize: options.retentionBatchSize,
+      });
+      if (result.pluginEventsDeleted > 0 || result.entityHistoryDeleted > 0) {
+        logger.info("plugin data retention completed", { ...result });
+      }
+    } catch (error) {
+      logger.warn("plugin data retention failed", { error: (error as Error).message });
+    } finally {
+      retaining = false;
+    }
+  }
+
   async function tick(): Promise<void> {
     if (stopped || ticking) return;
     ticking = true;
@@ -519,8 +544,13 @@ export function startDispatcher(
 
   const pollTimer = setInterval(() => void tick(), options.pollIntervalMs);
   const sweepTimer = setInterval(() => void sweep(), options.sweepIntervalMs);
+  const retentionTimer = setInterval(
+    () => void retain(),
+    options.retentionIntervalMs ?? DEFAULT_RETENTION_INTERVAL_MS,
+  );
   pollTimer.unref?.();
   sweepTimer.unref?.();
+  retentionTimer.unref?.();
   // first pass immediately; a first sweep shortly after boot
   void tick();
   const initialSweepTimer = setTimeout(() => void sweep(), 250);
@@ -554,6 +584,7 @@ export function startDispatcher(
       stopped = true;
       clearInterval(pollTimer);
       clearInterval(sweepTimer);
+      clearInterval(retentionTimer);
       clearTimeout(initialSweepTimer);
       await supervisor.stopAll();
     },

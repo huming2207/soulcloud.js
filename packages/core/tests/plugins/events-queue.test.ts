@@ -18,6 +18,7 @@ import {
   listInstallationsWithWork,
   sweepInstallationVersions,
 } from "../../src/plugins/events-queue";
+import { prunePluginData } from "../../src/plugins/retention";
 import { PluginSystemError } from "../../src/plugins/errors";
 import {
   applyEntityUpdate,
@@ -295,6 +296,53 @@ describe("completion and failure", () => {
     expect(row[0]!.state).toBe("failed");
     expect(row[0]!.last_error).toContain("lease expired");
     await prisma.$executeRaw`DELETE FROM plugin_events WHERE id = ${e.id}`;
+  });
+});
+
+describe("plugin data retention", () => {
+  test("deletes only old terminal events and old history rows", async () => {
+    const { registerDeviceEntities } = await import("../../src/plugins/entity");
+    await registerDeviceEntities(prisma, deviceId, chaosTestPlugin.id, chaosTestPlugin.profiles[0]!);
+    await applyEntityUpdate(prisma, {
+      deviceId,
+      pluginId: chaosTestPlugin.id,
+      update: { entityKey: "chaos.value", value: 11 },
+    });
+    const oldEvent = await enqueuePluginEvent(prisma, {
+      deviceId,
+      eventKind: "ok",
+      schemaVersion: 1,
+      payload: {},
+    });
+    const pendingEvent = await enqueuePluginEvent(prisma, {
+      deviceId,
+      eventKind: "ok",
+      schemaVersion: 1,
+      payload: {},
+    });
+    await prisma.$executeRaw`
+      UPDATE plugin_events
+      SET state = 'completed', finished_at = now() - interval '2 days'
+      WHERE id = ${oldEvent.id}
+    `;
+    await prisma.$executeRaw`
+      UPDATE entity_history
+      SET ingested_at = now() - interval '2 days'
+      WHERE device_id = ${deviceId}
+    `;
+
+    const result = await prunePluginData(prisma, {
+      eventRetentionMs: 86_400_000,
+      entityHistoryRetentionMs: 86_400_000,
+      batchSize: 1,
+    });
+    expect(result.pluginEventsDeleted).toBeGreaterThanOrEqual(1);
+    expect(result.entityHistoryDeleted).toBeGreaterThanOrEqual(1);
+    const events = await prisma.$queryRaw<{ id: string; state: string }[]>`
+      SELECT id, state FROM plugin_events WHERE id IN (${oldEvent.id}, ${pendingEvent.id})
+    `;
+    expect(events.some((event) => event.id === oldEvent.id)).toBe(false);
+    expect(events.find((event) => event.id === pendingEvent.id)?.state).toBe("pending");
   });
 });
 
