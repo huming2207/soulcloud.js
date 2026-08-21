@@ -27,7 +27,7 @@
 import {
   PLUGIN_EVENTS_CHANNEL,
   PluginSystemError,
-  applyEntityUpdate,
+  applyEntityUpdates,
   completePluginEvent,
   failPluginEvent,
   leaseNextPluginEvent,
@@ -220,13 +220,11 @@ export function startDispatcher(
     const ok = await completePluginEvent(prisma, {
       eventId: event.id,
       applyUpdates: async (tx) => {
-        for (const update of updates) {
-          await applyEntityUpdate(tx, {
-            deviceId: event.deviceId,
-            pluginId: event.pluginId,
-            update,
-          });
-        }
+        await applyEntityUpdates(tx, {
+          deviceId: event.deviceId,
+          pluginId: event.pluginId,
+          updates,
+        });
       },
     });
     completed += 1;

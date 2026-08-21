@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../../src/db";
 import type { PrismaClient } from "../../src/db";
 import {
+  applyEntityUpdates,
   applyEntityUpdate,
   canonicalDescriptor,
   ensureEntityDescriptors,
@@ -220,6 +221,24 @@ describe("applyEntityUpdate policies", () => {
       update: { entityKey: "fixture.sampled", value: 2 },
     });
     expect(changed.historyAppended).toBe(true);
+  });
+
+  test("batches registry, current-state, and history writes", async () => {
+    const results = await applyEntityUpdates(prisma, {
+      deviceId,
+      pluginId: PLUGIN_ID,
+      updates: [
+        { entityKey: "fixture.voltage", value: 4.2 },
+        { entityKey: "fixture.mode", value: "running" },
+        { entityKey: "fixture.counter", value: 7 },
+      ],
+    });
+    expect(results).toHaveLength(3);
+    expect(results.every((result) => result.historyAppended)).toBe(true);
+    const states = await getDeviceEntityStates(prisma, deviceId);
+    expect(states.find((state) => state.entityKey === "fixture.voltage")?.value).toBe(4.2);
+    expect(states.find((state) => state.entityKey === "fixture.mode")?.value).toBe("running");
+    expect(states.find((state) => state.entityKey === "fixture.counter")?.value).toBe(7);
   });
 
   test("rejects values violating the descriptor", async () => {

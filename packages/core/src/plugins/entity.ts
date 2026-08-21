@@ -229,6 +229,8 @@ export interface AppliedEntityUpdate {
 
 interface RegistryRow {
   id: string;
+  entity_key: string;
+  descriptor_revision_id: string;
   descriptor: unknown;
 }
 
@@ -239,7 +241,7 @@ async function loadEntityRegistry(
   entityKey: string,
 ): Promise<RegistryRow> {
   const rows = await prisma.$queryRaw<RegistryRow[]>`
-    SELECT er.id, rev.descriptor
+    SELECT er.id, er.entity_key, er.descriptor_revision_id, rev.descriptor
     FROM entity_registry er
     INNER JOIN entity_descriptor_revisions rev ON rev.id = er.descriptor_revision_id
     WHERE er.device_id = ${deviceId}
@@ -268,6 +270,8 @@ interface CurrentStateRow {
   alarm_code: string | null;
 }
 
+type CurrentStateWithId = CurrentStateRow & { entity_registry_id: string };
+
 /** Uniform "level:code" fingerprint; no alarm renders as ":". */
 function alarmKey(level: string | null, code: string | null): string {
   return level === null && code === null ? ":" : `${level ?? ""}:${code ?? ""}`;
@@ -277,31 +281,10 @@ function currentAlarmKey(row: CurrentStateRow): string {
   return alarmKey(row.alarm_level, row.alarm_code);
 }
 
-/**
- * Applies ONE validated entity update: upserts current state and appends
- * history per the descriptor's policy. Callers are expected to have run
- * `validateEventUpdates` first (the dispatcher does); this function still
- * re-validates defensively — it is the last line before the database.
- *
- * @throws {PluginSystemError} unknown_entity / invalid_entity_update.
- */
-export async function applyEntityUpdate(
-  prisma: DbExecutor,
-  params: {
-    deviceId: string;
-    pluginId: string;
-    update: EntityUpdate;
-  },
-): Promise<AppliedEntityUpdate> {
-  const { deviceId, pluginId, update } = params;
-  const registry = await loadEntityRegistry(
-    prisma,
-    deviceId,
-    pluginId,
-    update.entityKey,
-  );
-  const descriptor = registry.descriptor as EntityDescriptor;
-
+function validateEntityUpdate(
+  descriptor: EntityDescriptor,
+  update: EntityUpdate,
+): void {
   const valueCheck =
     update.value === undefined
       ? ({ ok: true } as const)
@@ -310,7 +293,6 @@ export async function applyEntityUpdate(
     throw new PluginSystemError(
       "invalid_entity_update",
       `entity "${update.entityKey}": ${valueCheck.error}`,
-      { deviceId, pluginId, entityKey: update.entityKey },
     );
   }
   if (
@@ -336,18 +318,12 @@ export async function applyEntityUpdate(
       );
     }
   }
+}
 
-  // current state (upsert)
-  const existing = await prisma.$queryRaw<CurrentStateRow[]>`
-    SELECT value, quality, source_timestamp, sequence, alarm_level, alarm_code
-    FROM entity_current_state
-    WHERE entity_registry_id = ${registry.id}
-    FOR UPDATE
-  `;
-  const current = existing[0];
-  // EntityUpdate is a patch: omitted fields retain the current state. An
-  // explicit null value/alarm clears that field, while `alarm: undefined`
-  // does not clear an existing alarm.
+function resolveEntityState(
+  update: EntityUpdate,
+  current: CurrentStateRow | undefined,
+): CurrentStateRow {
   const value = update.value === undefined ? current?.value ?? null : update.value;
   const quality = update.quality ?? current?.quality ?? "good";
   const sourceTimestamp =
@@ -382,11 +358,197 @@ export async function applyEntityUpdate(
     alarmLevel = update.alarm?.level ?? null;
     alarmCode = update.alarm?.code ?? null;
   }
+  return {
+    value,
+    quality,
+    source_timestamp: sourceTimestamp,
+    sequence,
+    alarm_level: alarmLevel,
+    alarm_code: alarmCode,
+  };
+}
+
+function entityStateChanged(
+  current: CurrentStateRow | undefined,
+  next: CurrentStateRow,
+): boolean {
+  if (!current) return true;
+  return (
+    JSON.stringify(current.value ?? null) !== JSON.stringify(next.value ?? null) ||
+    current.quality !== next.quality ||
+    currentAlarmKey(current) !== currentAlarmKey(next)
+  );
+}
+
+/**
+ * Applies ONE validated entity update: upserts current state and appends
+ * history per the descriptor's policy. Callers are expected to have run
+ * `validateEventUpdates` first (the dispatcher does); this function still
+ * re-validates defensively — it is the last line before the database.
+ *
+ * @throws {PluginSystemError} unknown_entity / invalid_entity_update.
+ */
+export async function applyEntityUpdate(
+  prisma: DbExecutor,
+  params: {
+    deviceId: string;
+    pluginId: string;
+    update: EntityUpdate;
+  },
+): Promise<AppliedEntityUpdate> {
+  const results = await applyEntityUpdates(prisma, {
+    deviceId: params.deviceId,
+    pluginId: params.pluginId,
+    updates: [params.update],
+  });
+  return results[0]!;
+}
+
+/**
+ * Applies all updates from one plugin event in a set-based operation. Registry
+ * and current-state rows are locked in two queries, then all state/history
+ * writes use one statement each. Duplicate keys remain ordered patches.
+ */
+export async function applyEntityUpdates(
+  prisma: DbExecutor,
+  params: {
+    deviceId: string;
+    pluginId: string;
+    updates: EntityUpdate[];
+  },
+): Promise<AppliedEntityUpdate[]> {
+  const { deviceId, pluginId, updates } = params;
+  if (updates.length === 0) return [];
+  const keys = [...new Set(updates.map((update) => update.entityKey))];
+  const registries = await prisma.$queryRaw<RegistryRow[]>`
+    SELECT er.id, er.entity_key, er.descriptor_revision_id, rev.descriptor
+    FROM entity_registry er
+    INNER JOIN entity_descriptor_revisions rev ON rev.id = er.descriptor_revision_id
+    WHERE er.device_id = ${deviceId}
+      AND er.plugin_id = ${pluginId}
+      AND er.entity_key IN (${Prisma.join(keys)})
+      AND er.deprecated = false
+    FOR UPDATE OF er
+  `;
+  const registryByKey = new Map(registries.map((row) => [row.entity_key, row]));
+  for (const update of updates) {
+    if (!registryByKey.has(update.entityKey)) {
+      throw new PluginSystemError(
+        "unknown_entity",
+        `entity "${update.entityKey}" is not registered for device ${deviceId} (plugin ${pluginId})`,
+        { deviceId, pluginId, entityKey: update.entityKey },
+      );
+    }
+  }
+
+  const registryIds = registries.map((row) => row.id);
+  const currentRows = await prisma.$queryRaw<CurrentStateWithId[]>`
+    SELECT entity_registry_id, value, quality, source_timestamp, sequence,
+           alarm_level, alarm_code
+    FROM entity_current_state
+    WHERE entity_registry_id IN (${Prisma.join(registryIds)})
+    FOR UPDATE
+  `;
+  const currentByRegistry = new Map<string, CurrentStateRow>(
+    currentRows.map(({ entity_registry_id, ...row }) => [entity_registry_id, row]),
+  );
+
+  const sampledIds = registries
+    .filter((row) => (row.descriptor as EntityDescriptor).history === "sampled")
+    .map((row) => row.id);
+  const latestSamples = new Map<string, Date>();
+  let databaseNow: Date | null = null;
+  if (sampledIds.length > 0) {
+    const sampleRows = await prisma.$queryRaw<
+      Array<{ entity_registry_id: string; ingested_at: Date | null; db_now: Date }>
+    >`
+      WITH db_clock AS (SELECT clock_timestamp() AS db_now),
+      ids(entity_registry_id) AS (
+        VALUES ${Prisma.join(sampledIds.map((id) => Prisma.sql`(${id}::uuid)`))}
+      )
+      SELECT ids.entity_registry_id, latest.ingested_at, db_clock.db_now
+      FROM ids
+      CROSS JOIN db_clock
+      LEFT JOIN LATERAL (
+        SELECT eh.ingested_at
+        FROM entity_history eh
+        WHERE eh.entity_registry_id = ids.entity_registry_id
+        ORDER BY eh.id DESC
+        LIMIT 1
+      ) latest ON true
+    `;
+    databaseNow = sampleRows[0]?.db_now ?? null;
+    for (const row of sampleRows) {
+      if (row.ingested_at) latestSamples.set(row.entity_registry_id, row.ingested_at);
+    }
+  }
+
+  const results: AppliedEntityUpdate[] = [];
+  const currentUpserts = new Map<string, CurrentStateRow>();
+  const historyRows: Array<{
+    registryId: string;
+    descriptorRevisionId: string;
+    value: unknown;
+    quality: string;
+    sourceTimestamp: Date | null;
+    sequence: bigint | null;
+    alarmLevel: string | null;
+    alarmCode: string | null;
+  }> = [];
+
+  for (const update of updates) {
+    const registry = registryByKey.get(update.entityKey)!;
+    const descriptor = registry.descriptor as EntityDescriptor;
+    validateEntityUpdate(descriptor, update);
+    const current = currentByRegistry.get(registry.id);
+    const next = resolveEntityState(update, current);
+    currentByRegistry.set(registry.id, next);
+    currentUpserts.set(registry.id, next);
+
+    if (descriptor.history === "none") {
+      results.push({ entityKey: update.entityKey, historyAppended: false, skippedReason: "no_history_policy" });
+      continue;
+    }
+    if (descriptor.history === "changes" && !entityStateChanged(current, next)) {
+      results.push({ entityKey: update.entityKey, historyAppended: false, skippedReason: "unchanged" });
+      continue;
+    }
+    if (descriptor.history === "sampled") {
+      const last = latestSamples.get(registry.id);
+      const changed = entityStateChanged(current, next);
+      const ageMs = last && databaseNow
+        ? databaseNow.getTime() - last.getTime()
+        : Number.POSITIVE_INFINITY;
+      if (last && !changed && ageMs < (descriptor.sampleIntervalSeconds ?? 60) * 1000) {
+        results.push({ entityKey: update.entityKey, historyAppended: false, skippedReason: "sample_suppressed" });
+        continue;
+      }
+      latestSamples.set(registry.id, databaseNow ?? new Date(0));
+    }
+    historyRows.push({
+      registryId: registry.id,
+      descriptorRevisionId: registry.descriptor_revision_id,
+      value: next.value,
+      quality: next.quality,
+      sourceTimestamp: next.source_timestamp,
+      sequence: next.sequence,
+      alarmLevel: next.alarm_level,
+      alarmCode: next.alarm_code,
+    });
+    results.push({ entityKey: update.entityKey, historyAppended: true });
+  }
+
   await prisma.$executeRaw`
     INSERT INTO entity_current_state
-      (entity_registry_id, value, quality, source_timestamp, ingested_at, sequence, alarm_level, alarm_code, updated_at)
-    VALUES (${registry.id}, ${JSON.stringify(value ?? null)}::jsonb, ${quality},
-            ${sourceTimestamp}, now(), ${sequence}, ${alarmLevel}, ${alarmCode}, now())
+      (entity_registry_id, value, quality, source_timestamp, ingested_at,
+       sequence, alarm_level, alarm_code, updated_at)
+    VALUES ${Prisma.join(
+      [...currentUpserts].map(([registryId, state]) => Prisma.sql`(
+        ${registryId}::uuid, ${JSON.stringify(state.value ?? null)}::jsonb,
+        ${state.quality}, ${state.source_timestamp}, now(), ${state.sequence},
+        ${state.alarm_level}, ${state.alarm_code}, now()
+      )`),
+    )}
     ON CONFLICT (entity_registry_id)
     DO UPDATE SET value = EXCLUDED.value, quality = EXCLUDED.quality,
       source_timestamp = EXCLUDED.source_timestamp, ingested_at = now(),
@@ -394,56 +556,22 @@ export async function applyEntityUpdate(
       alarm_code = EXCLUDED.alarm_code, updated_at = now()
   `;
 
-  // history policy
-  if (descriptor.history === "none") {
-    return { entityKey: update.entityKey, historyAppended: false, skippedReason: "no_history_policy" };
-  }
-
-  if (descriptor.history === "changes") {
-    const before = current
-      ? `${JSON.stringify(current.value ?? null)}|${current.quality}|${currentAlarmKey(current)}`
-      : null;
-    const after = `${JSON.stringify(value ?? null)}|${quality}|${alarmKey(alarmLevel, alarmCode)}`;
-    if (before === after) {
-      return { entityKey: update.entityKey, historyAppended: false, skippedReason: "unchanged" };
-    }
-  }
-
-  if (descriptor.history === "sampled") {
-    // sampled: record value/quality/alarm changes immediately, otherwise
-    // at most one row per sampleIntervalSeconds (§4 retention policy).
-    const intervalMs = (descriptor.sampleIntervalSeconds ?? 60) * 1000;
-    const last = await prisma.$queryRaw<{ ingested_at: Date }[]>`
-      SELECT ingested_at FROM entity_history
-      WHERE entity_registry_id = ${registry.id}
-      ORDER BY id DESC
-      LIMIT 1
+  if (historyRows.length > 0) {
+    await prisma.$executeRaw`
+      INSERT INTO entity_history
+        (entity_registry_id, descriptor_revision_id, device_id, value, quality,
+         source_timestamp, ingested_at, sequence, alarm_level, alarm_code)
+      VALUES ${Prisma.join(
+        historyRows.map((row) => Prisma.sql`(
+          ${row.registryId}::uuid, ${row.descriptorRevisionId}::uuid,
+          ${deviceId}::uuid, ${JSON.stringify(row.value ?? null)}::jsonb,
+          ${row.quality}, ${row.sourceTimestamp}, now(), ${row.sequence},
+          ${row.alarmLevel}, ${row.alarmCode}
+        )`),
+      )}
     `;
-    const lastSample = last[0];
-    if (lastSample) {
-      // `current` holds the PREVIOUS state (fetched before the upsert).
-      const changed =
-        current !== undefined &&
-        (JSON.stringify(current.value ?? null) !== JSON.stringify(value ?? null) ||
-          current.quality !== quality ||
-          currentAlarmKey(current) !== alarmKey(alarmLevel, alarmCode));
-      const ageMs = Date.now() - new Date(lastSample.ingested_at).getTime();
-      if (!changed && ageMs < intervalMs) {
-        return { entityKey: update.entityKey, historyAppended: false, skippedReason: "sample_suppressed" };
-      }
-    }
   }
-
-  await prisma.$executeRaw`
-    INSERT INTO entity_history
-      (entity_registry_id, descriptor_revision_id, device_id, value, quality, source_timestamp, ingested_at, sequence, alarm_level, alarm_code)
-    SELECT ${registry.id}, er.descriptor_revision_id, er.device_id,
-           ${JSON.stringify(value ?? null)}::jsonb, ${quality},
-           ${sourceTimestamp}, now(), ${sequence},
-           ${alarmLevel}, ${alarmCode}
-    FROM entity_registry er WHERE er.id = ${registry.id}
-  `;
-  return { entityKey: update.entityKey, historyAppended: true };
+  return results;
 }
 
 // ---------------------------------------------------------------------------
