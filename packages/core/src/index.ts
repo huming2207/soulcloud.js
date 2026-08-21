@@ -31,6 +31,8 @@ export * from "./plugins/errors";
 export * from "./plugins/installation";
 export * from "./plugins/entity";
 export * from "./plugins/events-queue";
+export * from "./plugins/actions";
+export * from "./audit";
 export * from "./security/password";
 export * from "./auth/tokens";
 export { prisma, ping, createPrisma, Prisma } from "./db";

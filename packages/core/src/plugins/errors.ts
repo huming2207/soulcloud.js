@@ -7,6 +7,7 @@
 
 export type PluginSystemErrorKind =
   | "unknown_plugin"
+  | "unknown_profile"
   | "version_mismatch"
   | "invalid_installation"
   | "installation_not_enabled"
@@ -16,6 +17,9 @@ export type PluginSystemErrorKind =
   | "unknown_event_kind"
   | "unknown_entity"
   | "invalid_entity_update"
+  | "unknown_action"
+  | "invalid_action_input"
+  | "invalid_action_output"
   | "lease_time_overflow"
   | "database";
 

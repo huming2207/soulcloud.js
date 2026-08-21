@@ -26,6 +26,7 @@ import { BindFirmwareDialog } from "../components/BindFirmwareDialog";
 import { CredentialsDialog } from "../components/CredentialsDialog";
 import { CommandPanel } from "../components/CommandPanel";
 import { LogsView } from "../components/LogsView";
+import { PluginPanel } from "../components/PluginPanel";
 import { CardSkeleton, QueryError } from "../components/QueryState";
 import { useI18n } from "../i18n/I18nContext";
 
@@ -41,10 +42,12 @@ export function DeviceDetailPage() {
         <Tab label={t("detail.tabOverview")} />
         <Tab label={t("detail.tabCommands")} />
         <Tab label={t("detail.tabLogs")} />
+        <Tab label={t("detail.tabPlugin")} />
       </Tabs>
       {tab === 0 && <OverviewTab deviceId={deviceId} />}
       {tab === 1 && <CommandPanel deviceId={deviceId} />}
       {tab === 2 && <LogsView deviceId={deviceId} />}
+      {tab === 3 && <PluginPanel deviceId={deviceId} />}
     </Stack>
   );
 }

@@ -19,5 +19,6 @@
 
 export * from "./types";
 export * from "./validation";
+export * from "./action-schema";
 export * from "./define";
 export * from "./rpc";

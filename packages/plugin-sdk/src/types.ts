@@ -91,23 +91,58 @@ export interface DeviceProfileDescriptor {
 // ---------------------------------------------------------------------------
 
 /**
- * Arguments accepted by the existing command wire contract: scalar values
- * or raw binary. Complex structures are MessagePack-encoded by the plugin
- * into a single binary argument.
+ * Arguments accepted by the existing command wire contract: an array of
+ * single-key maps whose values are scalars or raw binary (§5). The key is
+ * the argument NAME the device firmware reads; complex structures are
+ * MessagePack-encoded by the plugin into one binary argument.
  */
-export type CommandArgument =
-  | { str: string }
-  | { u64: bigint | number }
-  | { i64: bigint | number }
-  | { f64: number }
-  | { bin: Uint8Array };
+export type CommandArgValue =
+  | string
+  | number
+  | bigint
+  | boolean
+  | null
+  | Uint8Array;
+
+export type CommandArgument = {
+  /** Exactly one key per argument. */
+  [name: string]: CommandArgValue;
+};
+
+/**
+ * Flat input-schema field: one declarative form field / validation rule.
+ * The same declaration drives API-side validation and the web console's
+ * rendered form (§7.1) — see `validateActionInput`.
+ */
+export interface ActionInputField {
+  type: "string" | "number" | "integer" | "boolean";
+  /** Absent/undefined input fails when required (default: optional). */
+  required?: boolean;
+  /** Restricts a string field to these values. */
+  enum?: string[];
+  /** Inclusive bounds for number/integer fields. */
+  min?: number;
+  max?: number;
+  /** Form label; falls back to the field name. */
+  title?: string;
+  /** Helper text below the form field. */
+  description?: string;
+  /** Pre-filled form value (never applied server-side). */
+  default?: string | number | boolean;
+}
+
+export type ActionInputSchema = Record<string, ActionInputField>;
 
 export interface ActionDescriptor {
   id: string;
-  /** Schema description of the action input (validated before dispatch). */
-  inputSchema: Record<string, unknown>;
+  /**
+   * Flat input schema rendered as the action form and validated before
+   * dispatch (see `validateActionInput`).
+   */
+  inputSchema: ActionInputSchema;
   wire: {
     command: string;
+    /** Declared wire schema version; metadata for dry-run/UI display. */
     schemaVersion: number;
     /** Encode validated input into DeviceCommand args. */
     encode: (input: unknown) => CommandArgument[];

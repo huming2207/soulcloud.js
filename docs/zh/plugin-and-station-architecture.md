@@ -1,6 +1,7 @@
 # 插件、工业 Entity 与工位执行架构规划
 
-**状态**：阶段 1（架构与 SDK 骨架）与阶段 2（插件容器隔离原型）已实施（见 §17.1/§17.2 的代码位置）；其余阶段仍为设计提案
+**状态**：阶段 1（架构与 SDK 骨架）、阶段 2（插件容器隔离原型）与阶段 3
+（Action 与声明式 Web UI）已实施（见 §17.1–§17.3 的代码位置）；其余阶段仍为设计提案
 **日期**：2026-08-21
 
 本文规划 SoulcloudJS 面向商用设备、生产测试和烧录治具的插件能力。目标类似
@@ -951,8 +952,10 @@ GET    /v1/artifacts/:id                         支持 Range
   entity 模型（descriptor revision / current state / history，含
   none/changes/sampled/all 四种 history 策略）、plugin_events 持久队列
   （`FOR UPDATE SKIP LOCKED` 租约、幂等 key、退避重试、dead-letter、版本漂移 sweep）。
-- Prisma 迁移 `20260821031915_plugin_sdk_entity_and_events`；所有 CHECK 约束
-  以原始 SQL 附在迁移内（仓库惯例）。
+- Prisma 迁移 `20260821031915_plugin_sdk_entity_and_events` 与
+  `20260821050000_plugin_event_binding_snapshots`（事件路由快照列、按设备幂等
+  唯一、revision 身份加入 profile_version）；所有 CHECK 约束以原始 SQL 附在
+  迁移内（仓库惯例）。
 - 既有设备不迁移：device 无绑定时在读取侧映射到内置 `soulcloud.generic`，
   协议行为不变。
 
@@ -993,11 +996,28 @@ GET    /v1/artifacts/:id                         支持 Range
 - 使用故意 crash、死循环、OOM 倾向和超大响应的测试插件验证 API/broker 不受影响
   （OOM 场景为手动混沌项，不在 CI）。
 
-### 阶段 3：Action 与声明式 Web UI
+### 阶段 3：Action 与声明式 Web UI —— ✅ 已实施
 
-- 插件 Action 转换为现有 command queue。
-- Web 根据 schema 渲染 Action/Entity 表单和状态。
-- 实现短期 plugin UI session；必要时加入 iframe UI。
+代码位置（实施记录见 `docs/zh/plugin-implementation-stage3.md`）：
+
+- `packages/plugin-sdk/`：`CommandArgument` 修正为命名单键 map（与 DeviceCommand
+  wire contract 一致）；新增扁平 Action 输入 schema 语言与校验器，同一份声明驱动
+  API 校验与 Web 表单渲染。
+- `packages/core/src/plugins/actions.ts`：`encodePluginAction`（schema 校验 →
+  manifest 纯 encoder → 结构复检 → 复用核心 `DeviceCommandSchema` 权威校验）。
+- `packages/core/src/audit.ts` + 迁移 `20260821120000_audit_events`：追加式审计，
+  与操作同事务提交。
+- `packages/api/src/api/plugins.ts`：§16 控制面（catalog/installations CRUD/
+  migrate/disable/enable）与设备插件路由（dry-run、audited bind/unbind、
+  plugin-view、actions 调用经既有 command queue）。
+- `packages/web/`：设备详情「插件」Tab 声明式渲染 Entity 状态与 Action 表单。
+
+原始清单：
+
+- 插件 Action 转换为现有 command queue。✅
+- Web 根据 schema 渲染 Action/Entity 表单和状态。✅
+- 实现短期 plugin UI session；必要时加入 iframe UI。⏸ 推迟：声明式 UI 已覆盖
+  当前需求，待出现需要隔离 bundle 的真实插件再实现（§7.2）。
 
 ### 阶段 4：HTTPS Station 正确性路径与真实纵切
 

@@ -1,4 +1,5 @@
 import { definePlugin } from "@soulcloud/plugin-sdk";
+import type { CommandArgument } from "@soulcloud/plugin-sdk";
 
 export const CHAOS_PLUGIN_ID = "soulcloud.test.chaos";
 export const CHAOS_PROFILE_ID = "chaos_fixture";
@@ -52,7 +53,39 @@ export const chaosTestPlugin = definePlugin({
       ],
     },
   ],
-  actions: [],
+  actions: [
+    {
+      id: "set_mode",
+      inputSchema: {
+        mode: {
+          type: "string",
+          required: true,
+          enum: ["standby", "running", "fault"],
+          title: "Chaos mode",
+        },
+        threshold: { type: "number", min: 0, max: 100, default: 50 },
+      },
+      wire: {
+        command: "chaos_set_mode",
+        schemaVersion: 1,
+        encode: (input) => {
+          const i = input as { mode: string; threshold?: number };
+          const args: CommandArgument[] = [{ mode: i.mode }];
+          if (i.threshold !== undefined) args.push({ threshold: i.threshold });
+          return args;
+        },
+      },
+    },
+    {
+      id: "clear_alarms",
+      inputSchema: {},
+      wire: {
+        command: "chaos_clear_alarms",
+        schemaVersion: 1,
+        encode: () => [],
+      },
+    },
+  ],
   events: [
     { kind: "ok", schemaVersion: 1 },
     { kind: "updates", schemaVersion: 1 },

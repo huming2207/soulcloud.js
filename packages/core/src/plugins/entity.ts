@@ -359,7 +359,8 @@ export interface EntityStateView {
   value: unknown;
   quality: string;
   sourceTimestamp: string | null;
-  ingestedAt: string;
+  /** Null when the entity has no current-state row yet. */
+  ingestedAt: string | null;
   sequence: string | null;
   alarmLevel: string | null;
   alarmCode: string | null;
@@ -398,7 +399,7 @@ export async function getDeviceEntityStates(
     value: row.value,
     quality: row.quality ?? "unknown",
     sourceTimestamp: row.source_timestamp?.toISOString() ?? null,
-    ingestedAt: row.ingested_at?.toISOString() ?? new Date(0).toISOString(),
+    ingestedAt: row.ingested_at?.toISOString() ?? null,
     sequence: row.sequence === null ? null : row.sequence.toString(),
     alarmLevel: row.alarm_level,
     alarmCode: row.alarm_code,

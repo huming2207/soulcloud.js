@@ -71,6 +71,7 @@ async function makeFixture(name: string): Promise<Fixture> {
     installationId: installation.id,
     profileId: CHAOS_PROFILE_ID,
     profileVersion: CHAOS_PROFILE_VERSION,
+    manifest: chaosTestPlugin,
   });
   await registerDeviceEntities(
     prisma,
@@ -349,6 +350,90 @@ describe("plugin dispatcher (stage 2 prototype)", () => {
     expect(stats.completed).toBeGreaterThan(0);
     expect(stats.deadLettered).toBeGreaterThan(0);
     expect(stats.inFlight).toBe(0);
+  });
+
+  test("entity-registry drift dead-letters permanently with a precise error (H2)", async () => {
+    const fixture = await makeFixture("dispatcher-drift");
+    // simulate a lost reconcile: the manifest still declares the entities,
+    // but this device's registry rows are gone
+    await prisma.entityRegistry.deleteMany({ where: { deviceId: fixture.deviceId } });
+    const event = await enqueuePluginEvent(prisma, {
+      deviceId: fixture.deviceId,
+      eventKind: "ok",
+      schemaVersion: 1,
+      payload: { value: 5 },
+    });
+    await until("drifted event dead", async () =>
+      (await eventState(event.id)).state === "dead",
+    );
+    const state = await eventState(event.id);
+    // deterministic outcome: one attempt, no retry burn, precise cause
+    expect(state.attempt_count).toBe(1);
+    expect(state.last_error).toContain("unknown_entity");
+  });
+
+  test("installation circuit breaker re-admits work after an idle cooldown (H1 regression)", async () => {
+    // Pause the shared dispatcher so it cannot lease this fixture's events.
+    await dispatcher.stop();
+    const fixture = await makeFixture("dispatcher-breaker");
+    const breakerDispatcher = startDispatcher(
+      prisma,
+      {
+        hostUrls: new Map([[chaosTestPlugin.id, host.url]]),
+        hostAuthToken: undefined,
+        pollIntervalMs: 50,
+        leaseDurationMs: 60_000,
+        eventTimeoutMs: 1_500,
+        maxAttempts: 2,
+        backoffBaseMs: 100,
+        backoffMaxMs: 1_000,
+        maxInFlight: 4,
+        perInstallationConcurrency: 1,
+        maxFrameBytes: 1024 * 1024,
+        crashThreshold: 100,
+        crashWindowMs: 60_000,
+        crashCooldownMs: 1_000,
+        sweepIntervalMs: 500,
+      },
+      quietLogger,
+      // two consecutive handler failures open the circuit; short cooldown
+      { breakerThreshold: 2, breakerCooldownMs: 300 },
+    );
+    try {
+      const fail1 = await enqueuePluginEvent(prisma, {
+        deviceId: fixture.deviceId,
+        eventKind: "fail",
+        schemaVersion: 1,
+        payload: {},
+      });
+      const fail2 = await enqueuePluginEvent(prisma, {
+        deviceId: fixture.deviceId,
+        eventKind: "fail",
+        schemaVersion: 1,
+        payload: {},
+      });
+      await until("both fail events dead-lettered", async () =>
+        (await eventState(fail1.id)).state === "dead" &&
+        (await eventState(fail2.id)).state === "dead",
+      );
+      // The queue is now EMPTY. Let the cooldown elapse while idle ticks
+      // evaluate `open` repeatedly — under the old trial-slot semantics the
+      // first of these ticks consumed the single trial and permanently
+      // stalled this installation.
+      await Bun.sleep(600);
+      const okEvent = await enqueuePluginEvent(prisma, {
+        deviceId: fixture.deviceId,
+        eventKind: "ok",
+        schemaVersion: 1,
+        payload: { value: 99 },
+      });
+      await until("post-breaker event completed", async () =>
+        (await eventState(okEvent.id)).state === "completed",
+      );
+      expect((await currentState(fixture.deviceId, "chaos.counter"))?.value).toBe(99);
+    } finally {
+      await breakerDispatcher.stop();
+    }
   });
 });
 

@@ -26,6 +26,7 @@
 
 import {
   PLUGIN_EVENTS_CHANNEL,
+  PluginSystemError,
   applyEntityUpdate,
   completePluginEvent,
   failPluginEvent,
@@ -51,38 +52,41 @@ import type { DispatcherCoreOptions } from "./config";
 // Circuit breaker (per installation)
 // ---------------------------------------------------------------------------
 
-class InstallationCircuitBreaker {
+/**
+ * Timestamp-based circuit breaker. Once the cooldown elapses the circuit
+ * admits traffic again WITHOUT reserving a trial slot — evaluating `open`
+ * has no side effects, so idle scheduler ticks cannot stall an installation.
+ * A host that is still broken re-opens the circuit after `threshold`
+ * consecutive failures, bounding the post-cooldown probe window.
+ */
+export class InstallationCircuitBreaker {
   private consecutiveFailures = 0;
   private openedAt: number | null = null;
-  private trialInProgress = false;
 
   constructor(
     private readonly threshold: number,
     private readonly cooldownMs: number,
+    private readonly now: () => number = Date.now,
   ) {}
 
   get open(): boolean {
-    if (this.openedAt === null) return false;
-    if (Date.now() - this.openedAt < this.cooldownMs) return true;
-    if (this.trialInProgress) return true;
-    // half-open: allow exactly one trial request
-    this.trialInProgress = true;
-    return false;
+    return (
+      this.openedAt !== null &&
+      this.now() - this.openedAt < this.cooldownMs
+    );
   }
 
   recordSuccess(): void {
     this.consecutiveFailures = 0;
     this.openedAt = null;
-    this.trialInProgress = false;
   }
 
   recordFailure(): void {
     this.consecutiveFailures += 1;
     if (this.consecutiveFailures >= this.threshold) {
-      this.openedAt = Date.now();
+      this.openedAt = this.now();
       this.consecutiveFailures = 0;
     }
-    this.trialInProgress = false;
   }
 }
 
@@ -405,10 +409,17 @@ export function startDispatcher(
         error: (error as Error).message,
       });
       try {
+        // The entity registry rejecting plugin output (unknown_entity /
+        // invalid_entity_update) is deterministic for this event — retrying
+        // would burn attempts on the same outcome (H2).
+        const kind = error instanceof PluginSystemError ? error.kind : null;
+        const permanent = kind === "unknown_entity" || kind === "invalid_entity_update";
         await markFailed(
           event,
-          `dispatcher internal error: ${(error as Error).message}`,
-          false,
+          permanent
+            ? `entity registry rejected plugin output (${kind}): ${(error as Error).message}`
+            : `dispatcher internal error: ${(error as Error).message}`,
+          permanent,
           runtime,
         );
       } catch (inner) {

@@ -17,6 +17,7 @@ import type {
   EntityUpdate,
   PluginManifest,
 } from "./types";
+import { validateActionInputSchema } from "./action-schema";
 
 // ---------------------------------------------------------------------------
 // Bounded sizes (§15: every plugin call limits input, output and update sizes)
@@ -70,6 +71,17 @@ export const deviceProfileDescriptorSchema = z.object({
   entities: z.array(entityDescriptorSchema).max(MAX_PROFILE_ENTITIES),
 });
 
+const actionInputFieldSchema = z.object({
+  type: z.enum(["string", "number", "integer", "boolean"]),
+  required: z.boolean().optional(),
+  enum: z.array(z.string().min(1)).min(1).optional(),
+  min: z.number().finite().optional(),
+  max: z.number().finite().optional(),
+  title: z.string().max(255).optional(),
+  description: z.string().max(1024).optional(),
+  default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+});
+
 export const pluginManifestSchema = z.object({
   id: z.string().regex(PLUGIN_ID_PATTERN),
   version: z.string().regex(/^\d+\.\d+\.\d+(-[a-z0-9.-]+)?$/).max(64),
@@ -78,7 +90,7 @@ export const pluginManifestSchema = z.object({
   profiles: z.array(deviceProfileDescriptorSchema).max(MAX_MANIFEST_PROFILES),
   actions: z.array(z.object({
     id: z.string().regex(ENTITY_KEY_PATTERN),
-    inputSchema: z.record(z.string(), z.unknown()),
+    inputSchema: z.record(z.string(), actionInputFieldSchema),
     wire: z.object({
       command: z.string().min(1).max(255),
       schemaVersion: z.number().int().positive(),
@@ -144,6 +156,10 @@ export function validatePluginManifest(
       return { ok: false, error: `duplicate action id "${action.id}"` };
     }
     actionIds.add(action.id);
+    const schemaError = validateActionInputSchema(action);
+    if (schemaError) {
+      return { ok: false, error: schemaError };
+    }
   }
   for (const event of m.events) {
     const identity = `${event.kind}@${event.schemaVersion}`;

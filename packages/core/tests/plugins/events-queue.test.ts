@@ -18,7 +18,9 @@ import {
   sweepInstallationVersions,
 } from "../../src/plugins/events-queue";
 import { PluginSystemError } from "../../src/plugins/errors";
+import { reconcileInstallationDevices } from "../../src/plugins/installation";
 import { chaosTestPlugin } from "../../../../plugins/chaos-test";
+import type { PluginManifest } from "@soulcloud/plugin-sdk";
 
 // Integration tests against the isolated test database (scripts/test.sh).
 
@@ -56,6 +58,7 @@ beforeAll(async () => {
     installationId,
     profileId: chaosTestPlugin.profiles[0]!.id,
     profileVersion: chaosTestPlugin.profiles[0]!.version,
+    manifest: chaosTestPlugin,
   });
   unboundDeviceId = await createDevice("events-unbound");
 });
@@ -329,5 +332,160 @@ describe("installation queries", () => {
     expect(mine[0]!.state).toBe("enabled");
     await prisma.$executeRaw`DELETE FROM plugin_installations WHERE project_id = ${driftedProject}`;
     await prisma.$executeRaw`DELETE FROM projects WHERE id = ${driftedProject}`;
+  });
+});
+
+describe("bindDeviceToInstallation validation (H2)", () => {
+  test("rejects a manifest from a different plugin", async () => {
+    const impostor = { ...chaosTestPlugin, id: "acme.other" };
+    await expect(
+      bindDeviceToInstallation(prisma, {
+        deviceId,
+        installationId,
+        profileId: chaosTestPlugin.profiles[0]!.id,
+        profileVersion: chaosTestPlugin.profiles[0]!.version,
+        manifest: impostor,
+      }),
+    ).rejects.toMatchObject({ kind: "unknown_plugin" });
+  });
+
+  test("rejects profiles the manifest does not declare", async () => {
+    await expect(
+      bindDeviceToInstallation(prisma, {
+        deviceId,
+        installationId,
+        profileId: "ghost_profile",
+        profileVersion: 1,
+        manifest: chaosTestPlugin,
+      }),
+    ).rejects.toMatchObject({ kind: "unknown_profile" });
+  });
+
+  test("registers the profile's entities for the device in the same transaction", async () => {
+    const fresh = await createDevice("events-bind-register");
+    const installed = await bindDeviceToInstallation(prisma, {
+      deviceId: fresh,
+      installationId,
+      profileId: chaosTestPlugin.profiles[0]!.id,
+      profileVersion: chaosTestPlugin.profiles[0]!.version,
+      manifest: chaosTestPlugin,
+    });
+    expect(installed.installationId).toBe(installationId);
+    const rows = await prisma.$queryRaw<{ entity_key: string }[]>`
+      SELECT entity_key FROM entity_registry WHERE device_id = ${fresh} ORDER BY entity_key
+    `;
+    expect(rows.map((r) => r.entity_key)).toEqual(
+      chaosTestPlugin.profiles[0]!.entities.map((e) => e.key).sort(),
+    );
+    await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id = ${fresh}`;
+  });
+});
+
+describe("reconcileInstallationDevices (H2)", () => {
+  test("refreshes changed descriptors and deprecates removed keys", async () => {
+    // isolated fixture so the shared installation stays untouched
+    const recProject = randomUUID();
+    await prisma.project.create({ data: { id: recProject, name: "reconcile-test" } });
+    const recInstall = await createInstallation(prisma, {
+      projectId: recProject,
+      manifest: chaosTestPlugin,
+      configJson: {},
+    });
+    const recDevice = randomUUID();
+    await prisma.device.create({
+      data: {
+        id: recDevice,
+        deviceUid: `rec-${randomUUID().slice(0, 12)}`,
+        assignedId: "reconcile-device",
+        passwordHash: "unused",
+        projectId: recProject,
+      },
+    });
+    try {
+      await bindDeviceToInstallation(prisma, {
+        deviceId: recDevice,
+        installationId: recInstall.id,
+        profileId: chaosTestPlugin.profiles[0]!.id,
+        profileVersion: chaosTestPlugin.profiles[0]!.version,
+        manifest: chaosTestPlugin,
+      });
+
+      // hotfix drift: same plugin/profile version, one descriptor changed,
+      // one entity key removed entirely
+      const base = chaosTestPlugin.profiles[0]!;
+      const drifted = {
+        ...chaosTestPlugin,
+        profiles: [
+          {
+            ...base,
+            entities: base.entities
+              .filter((e) => e.key !== "chaos.mode")
+              .map((e) => (e.key === "chaos.value" ? { ...e, unit: "mV" } : e)),
+          },
+        ],
+      } as PluginManifest;
+
+      const result = await reconcileInstallationDevices(prisma, {
+        installationId: recInstall.id,
+        manifest: drifted,
+      });
+      expect(result.devices).toBe(1);
+      expect(result.missingProfiles).toEqual([]);
+      expect(result.deprecatedRegistryRows).toBe(1);
+
+      const rows = await prisma.$queryRaw<
+        { entity_key: string; deprecated: boolean; unit: string | null }[]
+      >`
+        SELECT er.entity_key, er.deprecated, rev.descriptor->>'unit' AS unit
+        FROM entity_registry er
+        INNER JOIN entity_descriptor_revisions rev ON rev.id = er.descriptor_revision_id
+        WHERE er.device_id = ${recDevice}
+        ORDER BY er.entity_key
+      `;
+      const byKey = new Map(rows.map((r) => [r.entity_key, r]));
+      expect(byKey.get("chaos.value")!.unit).toBe("mV");
+      expect(byKey.get("chaos.mode")!.deprecated).toBe(true);
+      expect(byKey.get("chaos.counter")!.deprecated).toBe(false);
+
+      // §4.1: history semantics survive — the pre-drift revision still exists
+      const oldRevisions = await prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count FROM entity_descriptor_revisions
+        WHERE plugin_id = ${chaosTestPlugin.id}
+          AND entity_key = 'chaos.value' AND descriptor->>'unit' = 'V'
+      `;
+      expect(Number(oldRevisions[0]!.count)).toBe(1);
+    } finally {
+      await prisma.$executeRaw`DELETE FROM entity_history WHERE device_id = ${recDevice}`;
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id = ${recDevice}`;
+      await prisma.$executeRaw`DELETE FROM plugin_installations WHERE id = ${recInstall.id}`;
+      await prisma.$executeRaw`DELETE FROM devices WHERE project_id = ${recProject}`;
+      await prisma.$executeRaw`DELETE FROM projects WHERE id = ${recProject}`;
+    }
+  });
+
+  test("refuses to reconcile against a different version", async () => {
+    await expect(
+      reconcileInstallationDevices(prisma, {
+        installationId,
+        manifest: { ...chaosTestPlugin, version: "9.9.9" },
+      }),
+    ).rejects.toMatchObject({ kind: "version_mismatch" });
+  });
+
+  test("reports bound profiles missing from the manifest without touching rows", async () => {
+    const before = await prisma.$queryRaw<{ deprecated: boolean }[]>`
+      SELECT deprecated FROM entity_registry WHERE device_id = ${deviceId} AND entity_key = 'chaos.counter'
+    `;
+    const result = await reconcileInstallationDevices(prisma, {
+      installationId,
+      manifest: { ...chaosTestPlugin, profiles: [] },
+    });
+    expect(result.devices).toBe(0);
+    expect(result.missingProfiles).toEqual(["chaos_fixture@1"]);
+    expect(result.deprecatedRegistryRows).toBe(0);
+    const after = await prisma.$queryRaw<{ deprecated: boolean }[]>`
+      SELECT deprecated FROM entity_registry WHERE device_id = ${deviceId} AND entity_key = 'chaos.counter'
+    `;
+    expect(after[0]!.deprecated).toBe(before[0]!.deprecated);
   });
 });

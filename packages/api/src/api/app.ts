@@ -35,6 +35,7 @@ import { createFirmwareRoutes } from "./firmware";
 import { createRolloutRoutes } from "./rollout";
 import { createMeRoutes } from "./me";
 import { createDeviceRoutes } from "./devices";
+import { createPluginRoutes } from "./plugins";
 import { authenticateRequest, userCanAccessProject } from "./validate";
 
 const MAX_BATCH_TARGETS = 1000;
@@ -167,7 +168,8 @@ export function createApp(
     .use(createFirmwareRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createRolloutRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createMeRoutes(prisma, auth))
-    .use(createDeviceRoutes(prisma, auth));
+    .use(createDeviceRoutes(prisma, auth))
+    .use(createPluginRoutes(prisma, auth));
 }
 
 function formatZodIssues(
