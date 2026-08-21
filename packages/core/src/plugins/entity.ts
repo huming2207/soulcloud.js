@@ -497,6 +497,12 @@ export async function applyEntityUpdates(
       ) latest ON true
     `;
     databaseNow = sampleRows[0]?.db_now ?? null;
+    if (!databaseNow) {
+      throw new PluginSystemError(
+        "database",
+        "database clock query returned no row for sampled history",
+      );
+    }
     for (const row of sampleRows) {
       if (row.ingested_at) latestSamples.set(row.entity_registry_id, row.ingested_at);
     }
@@ -542,7 +548,7 @@ export async function applyEntityUpdates(
         results.push({ entityKey: update.entityKey, historyAppended: false, skippedReason: "sample_suppressed" });
         continue;
       }
-      latestSamples.set(registry.id, databaseNow ?? new Date(0));
+      latestSamples.set(registry.id, databaseNow!);
     }
     historyRows.push({
       registryId: registry.id,
