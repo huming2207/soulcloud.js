@@ -197,6 +197,17 @@ export function startDispatcherHttp(
           );
         }
         const coded = error as Error & { code?: string };
+        if (coded.code === "invalid_action_output") {
+          return rpcResponse(
+            errorResponse(
+              requestId,
+              "invalid_action_output",
+              coded.message ?? "invalid action output",
+            ),
+            options.maxFrameBytes,
+            502,
+          );
+        }
         if (coded.code === "invalid_params") {
           return rpcResponse(
             errorResponse(requestId, "invalid_action_input", coded.message ?? "invalid action input"),

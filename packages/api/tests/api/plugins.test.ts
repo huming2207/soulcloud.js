@@ -23,6 +23,8 @@ import {
   type DispatcherHttpHandle,
 } from "../../../plugin-dispatcher/src/http-server";
 import { createApp } from "../../src/api/app";
+import { pluginManifests } from "@soulcloud/plugins";
+import type { ActionDescriptor } from "@soulcloud/plugin-sdk";
 
 const TEST_JWT = {
   secret: "test-secret-0123456789-0123456789-0123456789",
@@ -405,6 +407,32 @@ describe("device actions", () => {
       SELECT action FROM audit_events WHERE project_id = ${projectId} AND action = 'device.action.invoke'
     `;
     expect(audit.length).toBe(1);
+  });
+
+  test("encoder output faults return 502 instead of blaming action input", async () => {
+    const manifest = pluginManifests.get("soulcloud.test.chaos")!;
+    const originalActions = manifest.actions;
+    const malformedEncoderAction = {
+      id: "bad_encode",
+      inputSchema: {},
+      wire: {
+        command: "chaos_bad_encode",
+        schemaVersion: 1,
+        encode: () => 42,
+      },
+    } as unknown as ActionDescriptor;
+    manifest.actions = [...originalActions, malformedEncoderAction];
+    try {
+      const response = await send("POST", `/v1/devices/${deviceId}/actions/bad_encode`, {
+        input: {},
+      });
+      expect(response.status).toBe(502);
+      expect((await response.json()) as { error: string }).toMatchObject({
+        error: "invalid_action_output",
+      });
+    } finally {
+      manifest.actions = originalActions;
+    }
   });
 
   test("actions of an unbound (generic) device are empty and invocation 404s", async () => {

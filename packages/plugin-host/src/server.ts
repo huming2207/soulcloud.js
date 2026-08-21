@@ -273,13 +273,21 @@ async function handleRequest(
       }
       if (!Array.isArray(args) || args.length > 256) {
         return respond(
-          errorResponse(request.id, "invalid_params", "encoder returned no array or too many arguments"),
+          errorResponse(
+            request.id,
+            "invalid_action_output",
+            "encoder returned no array or too many arguments",
+          ),
         );
       }
       for (const [index, arg] of args.entries()) {
         if (!arg || typeof arg !== "object" || Array.isArray(arg) || Object.keys(arg).length !== 1) {
           return respond(
-            errorResponse(request.id, "invalid_params", `encoder argument #${index} must be a single-key map`),
+            errorResponse(
+              request.id,
+              "invalid_action_output",
+              `encoder argument #${index} must be a single-key map`,
+            ),
           );
         }
         const value = Object.values(arg)[0];
@@ -292,7 +300,11 @@ async function handleRequest(
           (typeof value === "number" && Number.isFinite(value));
         if (!scalar) {
           return respond(
-            errorResponse(request.id, "invalid_params", `encoder argument #${index} has a non-scalar value`),
+            errorResponse(
+              request.id,
+              "invalid_action_output",
+              `encoder argument #${index} has a non-scalar value`,
+            ),
           );
         }
       }
