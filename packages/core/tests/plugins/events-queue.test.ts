@@ -20,6 +20,10 @@ import {
 } from "../../src/plugins/events-queue";
 import { PluginSystemError } from "../../src/plugins/errors";
 import {
+  applyEntityUpdate,
+  getDeviceEntityStates,
+} from "../../src/plugins/entity";
+import {
   migrateInstallationInTransaction,
   reconcileInstallationDevices,
 } from "../../src/plugins/installation";
@@ -709,6 +713,142 @@ describe("review-fix regressions (core)", () => {
       await prisma.$executeRaw`DELETE FROM plugin_installations WHERE id IN (${installA.id}, ${installB.id})`;
       await prisma.$executeRaw`DELETE FROM devices WHERE id IN (${deviceA}, ${deviceB})`;
       await prisma.$executeRaw`DELETE FROM projects WHERE id IN (${projectA}, ${projectB})`;
+    }
+  });
+
+  test("same-plugin profile switches close the registry deprecated lifecycle", async () => {
+    const switchManifest = {
+      id: `acme.profile-switch-${randomUUID()}`,
+      version: "1.0.0",
+      apiVersion: 1,
+      profiles: [
+        {
+          id: "profile_a",
+          version: 1,
+          manufacturer: "Acme",
+          model: "Switch A",
+          capabilities: [],
+          entities: [
+            {
+              key: "switch.a",
+              valueType: "number",
+              access: "read",
+              category: "measurement",
+              history: "none",
+            },
+          ],
+        },
+        {
+          id: "profile_b",
+          version: 1,
+          manufacturer: "Acme",
+          model: "Switch B",
+          capabilities: [],
+          entities: [
+            {
+              key: "switch.b",
+              valueType: "string",
+              access: "read",
+              category: "diagnostic",
+              history: "none",
+            },
+          ],
+        },
+      ],
+      actions: [],
+      events: [],
+      workflows: [],
+      ui: {},
+    } as PluginManifest;
+    const switchProject = randomUUID();
+    const switchDevice = randomUUID();
+    await prisma.project.create({ data: { id: switchProject, name: "profile-switch" } });
+    const switchInstall = await createInstallation(prisma, {
+      projectId: switchProject,
+      manifest: switchManifest,
+      configJson: {},
+    });
+    await prisma.device.create({
+      data: {
+        id: switchDevice,
+        deviceUid: `profile-switch-${randomUUID().slice(0, 8)}`,
+        assignedId: "assigned-profile-switch",
+        passwordHash: "unused",
+        projectId: switchProject,
+      },
+    });
+    const profileA = switchManifest.profiles[0]!;
+    const profileB = switchManifest.profiles[1]!;
+    try {
+      await bindDeviceToInstallation(prisma, {
+        deviceId: switchDevice,
+        installationId: switchInstall.id,
+        profileId: profileA.id,
+        profileVersion: profileA.version,
+        manifest: switchManifest,
+      });
+      expect((await getDeviceEntityStates(prisma, switchDevice)).map((s) => s.entityKey)).toEqual([
+        "switch.a",
+      ]);
+
+      await bindDeviceToInstallation(prisma, {
+        deviceId: switchDevice,
+        installationId: switchInstall.id,
+        profileId: profileB.id,
+        profileVersion: profileB.version,
+        manifest: switchManifest,
+      });
+      let rows = await prisma.$queryRaw<{ entity_key: string; deprecated: boolean }[]>`
+        SELECT entity_key, deprecated
+        FROM entity_registry
+        WHERE device_id = ${switchDevice}
+          AND plugin_id = ${switchManifest.id}
+        ORDER BY entity_key
+      `;
+      expect(rows).toEqual([
+        { entity_key: "switch.a", deprecated: true },
+        { entity_key: "switch.b", deprecated: false },
+      ]);
+      expect((await getDeviceEntityStates(prisma, switchDevice)).map((s) => s.entityKey)).toEqual([
+        "switch.b",
+      ]);
+      await expect(
+        applyEntityUpdate(prisma, {
+          deviceId: switchDevice,
+          pluginId: switchManifest.id,
+          update: { entityKey: "switch.a", value: 1 },
+        }),
+      ).rejects.toMatchObject({ kind: "unknown_entity" });
+
+      // Re-adding profile A must reactivate its existing registry row rather
+      // than leaving it permanently deprecated after the profile round-trip.
+      await bindDeviceToInstallation(prisma, {
+        deviceId: switchDevice,
+        installationId: switchInstall.id,
+        profileId: profileA.id,
+        profileVersion: profileA.version,
+        manifest: switchManifest,
+      });
+      rows = await prisma.$queryRaw<{ entity_key: string; deprecated: boolean }[]>`
+        SELECT entity_key, deprecated
+        FROM entity_registry
+        WHERE device_id = ${switchDevice}
+          AND plugin_id = ${switchManifest.id}
+        ORDER BY entity_key
+      `;
+      expect(rows).toEqual([
+        { entity_key: "switch.a", deprecated: false },
+        { entity_key: "switch.b", deprecated: true },
+      ]);
+      expect((await getDeviceEntityStates(prisma, switchDevice)).map((s) => s.entityKey)).toEqual([
+        "switch.a",
+      ]);
+    } finally {
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id = ${switchDevice}`;
+      await prisma.$executeRaw`DELETE FROM entity_descriptor_revisions WHERE plugin_id = ${switchManifest.id}`;
+      await prisma.$executeRaw`DELETE FROM plugin_installations WHERE id = ${switchInstall.id}`;
+      await prisma.$executeRaw`DELETE FROM devices WHERE id = ${switchDevice}`;
+      await prisma.$executeRaw`DELETE FROM projects WHERE id = ${switchProject}`;
     }
   });
 

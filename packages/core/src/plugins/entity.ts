@@ -174,7 +174,8 @@ export async function upsertRegistryRows(
       )}) AS t(key, revision_id)
     ) AS pairs(k, r)
     ON CONFLICT (device_id, plugin_id, entity_key)
-    DO UPDATE SET descriptor_revision_id = EXCLUDED.descriptor_revision_id
+    DO UPDATE SET descriptor_revision_id = EXCLUDED.descriptor_revision_id,
+                  deprecated = false
   `;
 }
 
@@ -244,6 +245,7 @@ async function loadEntityRegistry(
     WHERE er.device_id = ${deviceId}
       AND er.plugin_id = ${pluginId}
       AND er.entity_key = ${entityKey}
+      AND er.deprecated = false
     LIMIT 1
   `;
   const row = rows[0];
@@ -486,6 +488,7 @@ export async function getDeviceEntityStates(
     FROM entity_registry er
     LEFT JOIN entity_current_state cs ON cs.entity_registry_id = er.id
     WHERE er.device_id = ${deviceId}
+      AND er.deprecated = false
     ORDER BY er.entity_key
   `;
   return rows.map((row) => ({

@@ -266,16 +266,29 @@ export async function bindDeviceInTransaction(
         `device ${params.deviceId} belongs to a different project than installation ${install.id}`,
       );
     }
-    // Switching plugins (or profiles) must not leave the previous plugin's
+    // Switching plugins (or profiles) must not leave the previous binding's
     // registry rows active: the read path would otherwise present stale
     // states under a new binding (review fix). History is kept; rows are
-    // only marked deprecated.
+    // only marked deprecated. A profile may change within the same plugin,
+    // so deprecation is keyed by the target profile's entity set rather than
+    // only by plugin_id.
     await tx.$executeRaw`
       UPDATE entity_registry
       SET deprecated = true
       WHERE device_id = ${params.deviceId}
         AND plugin_id <> ${install.pluginId}
         AND deprecated = false
+    `;
+    const targetEntityKeys = profile.entities.map((entity) => entity.key);
+    await tx.$executeRaw`
+      UPDATE entity_registry
+      SET deprecated = true
+      WHERE device_id = ${params.deviceId}
+        AND plugin_id = ${install.pluginId}
+        AND deprecated = false
+        ${targetEntityKeys.length > 0
+          ? Prisma.sql`AND entity_key NOT IN (${Prisma.join(targetEntityKeys)})`
+          : Prisma.empty}
     `;
     await tx.$executeRaw`
       UPDATE devices
