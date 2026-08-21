@@ -24,6 +24,7 @@ SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平
 | [security.md](security.md) | 威胁模型、DDoS 防护、审计历史（3 轮评审） |
 | [testing.md](testing.md) | 测试策略、fixtures、CI |
 | [web.md](web.md) | Web 控制台：技术栈、认证流程、页面、i18n、测试 |
+| [plugin-and-station-architecture.md](plugin-and-station-architecture.md) | 商用设备插件、工业 Entity、插件隔离、烧录工位和弱网通信规划（仅中文提案） |
 
 ## 快速事实
 
