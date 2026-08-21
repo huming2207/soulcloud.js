@@ -3,8 +3,8 @@
 > 本文档记录 `plugin-and-station-architecture.md` 中阶段 1（架构与 SDK 骨架）和
 > 阶段 2（容器化插件隔离原型）的落地实现。设计动机和完整背景见该提案文档。
 
-**日期**：2026-08-21 · **基线**：711 个后端非 E2E 测试全绿（新增插件测试与评审修复
-回归）、`tsc --noEmit` 干净、`docker compose config` 校验通过。
+**日期**：2026-08-22 · **基线**：733 个后端非 E2E 测试全绿（Bun 1.4，含插件测试与
+评审修复回归）、`tsc --noEmit` 干净、`docker compose config` 校验通过。
 评审修复（H1/H2）见文末「评审修复记录」。
 
 ## 概览
@@ -146,7 +146,10 @@ History 策略：`none` 不记历史；`changes` 值/质量/告警指纹任一�
 
 **监督**（`supervisor.ts`）：按需创建 HTTP client、连接并握手；请求失败记录到
 快速失败熔断器，超时只使本地 client 失效。Dispatcher 不 spawn、SIGKILL 或重启远端
-进程；容器编排器通过 `healthcheck`、内存限制和 `restart` 策略负责 Host 生命周期。
+进程；容器编排器通过资源限制和 restart 策略负责容器生命周期。plain Compose 只会把
+失败的 healthcheck 标为 unhealthy，因此 Host entrypoint 另有一个不持有 Docker 权限的
+liveness supervisor，在 event loop 同步卡死时终止并重启 Host 子进程；Kubernetes 等
+编排器仍应配置真正的 liveness restart policy。
 
 **调度**（`dispatcher.ts`）：
 
@@ -173,8 +176,10 @@ History 策略：`none` 不记历史；`changes` 值/质量/告警指纹任一�
 
 - `Dockerfile.backend` 新增 `plugin-dispatcher` 和 `plugin-host` targets（与 api/broker 共享 base）。
 - `compose.yaml` 新增独立的 `plugin-dispatcher` 与 `plugin-host-generic` 服务；Dispatcher
-  通过 `PLUGIN_HOST_URLS` 访问容器网络 URL，Host 通过 `mem_limit`、`healthcheck` 和
-  `restart` 由 Compose 管理，不需要共享 socket volume。
+  通过 `PLUGIN_HOST_URLS` 访问容器网络 URL。每个 Host 只加入自己的 internal 网络，
+  不加入 API/DB 网络；Host 使用非 root 用户、只读根文件系统、独立的 memory/CPU/PID
+  上限和 `no-new-privileges`，并由 liveness supervisor 处理 plain Compose 下的同步挂死。
+  全程不需要共享 socket volume 或 Docker socket。
 - `bun run dev:dispatcher` 加入根 dev 脚本。
 
 ## 测试
@@ -219,7 +224,6 @@ DB 侧抛 `unknown_entity`，被归为可重试后烧完 attempt 才 dead-letter
 
 - Broker `/event` 上行 envelope 接入（阶段 5；事件队列与路由已就绪，只差
   dispatch 挂钩）。
-- Action → 现有 command queue 的 encoder 路径与 REST API（阶段 3）。
 - Station 协议、Artifact Service、provisioning identity（阶段 4+）。
 - 插件 UI / iframe 隔离（阶段 3）。
 - 跨节点 RPC 传输（v2；协议已与传输解耦）。

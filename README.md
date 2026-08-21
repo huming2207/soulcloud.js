@@ -243,8 +243,8 @@ storage archive, retention policies, fleet selectors, org/tenant tenancy
 
 ## Production compose
 
-The base `docker compose up -d` starts PostgreSQL, the API, the broker and
-the web console:
+The base `docker compose up -d` starts PostgreSQL, the API, the broker, the
+dispatcher, the isolated Plugin Host and the web console:
 
 ```sh
 # .env must set JWT_SECRET (>= 32 chars)
@@ -254,7 +254,8 @@ docker compose up -d --build
 # MQTT (WS):   ws://localhost:1883/mqtt
 ```
 
-- Images: `Dockerfile.backend` (api/broker targets, multi-stage Bun) and
+- Images: `Dockerfile.backend` (api/broker/dispatcher/plugin-host targets,
+  multi-stage Bun) and
   `packages/web/Dockerfile` (vite build -> minimal nginx static server).
 - The web container serves the built SPA only (SPA fallback + immutable
   asset caching, no proxying inside the container). Compose binds the API
@@ -263,7 +264,11 @@ docker compose up -d --build
   never exposed to other hosts; the reverse proxy in front — traefik in
   the reference deployment — terminates TLS and routes `host/` to the
   web service and `host/v1`, `host/health` to the api service over the
-  docker network.
+  Docker app network. Plugin Hosts are attached only to their own internal
+  dispatcher network, run as the non-root `bun` user with read-only root
+  filesystems and CPU/memory/PID limits. Their container entrypoint supervisor
+  recovers synchronous worker hangs under plain Compose; production
+  orchestrators should also configure liveness restart probes.
 - MQTT-over-WebSocket TLS is likewise expected at the proxy (stream
   passthrough to `:1883`).
 
@@ -273,10 +278,10 @@ A reference traefik v3 stack lives in `deploy/traefik/` (file provider,
 no docker-provider magic):
 
 ```sh
-# 1. start the soulcloud services as usual (network <project>_default)
+# 1. start the soulcloud services as usual (network `soulcloudjs_app` by default)
 docker compose up -d --build
 # 2. start traefik on the same host, joined to that network
-#    (edit deploy/traefik/compose.traefik.yaml if the project name differs)
+#    (set SOULCLOUD_APP_NETWORK in .env if the network name differs)
 docker compose -f deploy/traefik/compose.traefik.yaml up -d
 # 3. set your domain + ACME email in deploy/traefik/*.yaml (example.com)
 ```

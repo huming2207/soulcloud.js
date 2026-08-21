@@ -417,15 +417,20 @@ dead-letter、限流和 circuit breaker 状态。
 ### 6.5 Dispatcher 与 Plugin Host RPC
 
 当前实现使用容器网络上的 HTTP MessagePack-RPC。每个 Plugin Host 是独立容器，Dispatcher 只
-通过 `PLUGIN_HOST_URLS` 配置的 URL 请求它；Docker/Kubernetes 负责进程、内存、健康检查
-和重启策略。这样不需要共享 Unix socket，也不授予 Dispatcher 杀远端进程的权限。未来
+通过 `PLUGIN_HOST_URLS` 配置的 URL 请求它；Host 只加入自己的 internal 网络，不能访问
+PostgreSQL、API、Broker 或其他 Plugin Host。Host 使用非 root、只读根文件系统、CPU/RSS/PID
+限制、`no-new-privileges` 和 capability drop。这样不需要共享 Unix socket，也不授予
+Dispatcher 杀远端进程的权限。未来
 如需跨主机，可在相同消息契约上增加 HTTPS/mTLS；不改变插件 SDK。
 
 必须遵循以下工程规则：
 
 - Host 对外提供 `GET /health` 和 `POST /rpc`；Dispatcher 启动或 URL 变化后重新 handshake。
 - Dispatcher 客户端设置请求 deadline、请求/响应大小上限和可选 bearer token；HTTP 超时只
-  失效本地 client，Host 的重启由容器编排器完成。
+  失效本地 client。Kubernetes 等编排器应通过 liveness probe 重启失活 Host；plain Docker
+  Compose 的 healthcheck 本身只会标记 unhealthy，不会重启仍存活的容器，因此 Host
+  entrypoint 带一个不持有 Docker 权限的 liveness supervisor，连续探测失败时只回收
+  Host 子进程并重新启动它。
 - Host 重启或网络暂时不可达时，Dispatcher 将事件按租约/退避策略重试；数据库 lease
   负责恢复 Dispatcher 或 Host 中断时未完成的工作。
 - Handshake 协商 RPC version、Plugin SDK API version、plugin ID/version 和能力。
