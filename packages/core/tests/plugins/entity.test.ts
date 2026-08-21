@@ -123,6 +123,39 @@ describe("descriptor revisions", () => {
     };
     expect(canonicalDescriptor(a)).toBe(canonicalDescriptor(b));
   });
+
+  test("concurrent registrations serialize revision allocation", async () => {
+    const concurrentPluginId = `test.entity-concurrent-${randomUUID()}`;
+    const secondDeviceId = randomUUID();
+    await prisma.device.create({
+      data: {
+        id: secondDeviceId,
+        deviceUid: `ent-concurrent-${randomUUID().slice(0, 12)}`,
+        assignedId: "entity-concurrent-device",
+        passwordHash: "unused",
+        projectId,
+      },
+    });
+    try {
+      const registrations = await Promise.all([
+        registerDeviceEntities(prisma, deviceId, concurrentPluginId, profile),
+        registerDeviceEntities(prisma, secondDeviceId, concurrentPluginId, profile),
+      ]);
+      expect(registrations).toHaveLength(2);
+      const revisions = await prisma.$queryRaw<{ count: number; max_revision: number }[]>`
+        SELECT count(*)::int AS count, max(revision)::int AS max_revision
+        FROM entity_descriptor_revisions
+        WHERE plugin_id = ${concurrentPluginId}
+      `;
+      expect(revisions[0]!.count).toBe(profile.entities.length);
+      expect(revisions[0]!.max_revision).toBe(1);
+    } finally {
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id = ${secondDeviceId}`;
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id = ${deviceId} AND plugin_id = ${concurrentPluginId}`;
+      await prisma.$executeRaw`DELETE FROM entity_descriptor_revisions WHERE plugin_id = ${concurrentPluginId}`;
+      await prisma.$executeRaw`DELETE FROM devices WHERE id = ${secondDeviceId}`;
+    }
+  });
 });
 
 describe("applyEntityUpdate policies", () => {

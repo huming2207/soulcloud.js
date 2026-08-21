@@ -15,8 +15,8 @@ import { Prisma, type DbExecutor, type PrismaClient } from "../db";
 import { PluginSystemError } from "./errors";
 import {
   canonicalDescriptor,
-  ensureEntityDescriptors,
-  registerDeviceEntities,
+  ensureEntityDescriptorsInTransaction,
+  registerDeviceEntitiesInTransaction,
   upsertRegistryRows,
 } from "./entity";
 import { findProfile, type PluginManifest } from "@soulcloud/plugin-sdk";
@@ -57,6 +57,60 @@ interface DeviceRow {
   plugin_id: string | null;
   profile_id: string | null;
   profile_version: number | null;
+}
+
+/**
+ * Locks the installation before any device or descriptor rows are touched.
+ * All installation lifecycle mutations use this helper so bind, migrate,
+ * state changes and reconcile serialize on the same row.
+ */
+async function lockInstallationForUpdate(
+  tx: DbExecutor,
+  installationId: string,
+): Promise<InstallationRow> {
+  const rows = await tx.$queryRaw<InstallationRow[]>`
+    SELECT id, project_id AS "projectId", plugin_id AS "pluginId",
+           configured_plugin_version AS "configuredPluginVersion",
+           state, config_json AS "configJson"
+    FROM plugin_installations
+    WHERE id = ${installationId}
+    FOR UPDATE
+  `;
+  const row = rows[0];
+  if (!row) {
+    throw new PluginSystemError(
+      "invalid_installation",
+      `installation ${installationId} does not exist`,
+    );
+  }
+  return row;
+}
+
+interface LockedDeviceRow extends DeviceRow {
+  project_id: string;
+}
+
+function hasTransactionClient(
+  prisma: PrismaClient | DbExecutor,
+): prisma is PrismaClient {
+  // Prisma's interactive transaction proxy also exposes `$transaction`, but
+  // unlike the root client it does not expose the connection lifecycle API.
+  return typeof (prisma as PrismaClient).$connect === "function";
+}
+
+/** Locks a device after its installation lock has been acquired. */
+async function lockDeviceForUpdate(
+  tx: DbExecutor,
+  deviceId: string,
+): Promise<LockedDeviceRow | undefined> {
+  const rows = await tx.$queryRaw<LockedDeviceRow[]>`
+    SELECT id, device_uid, project_id, plugin_installation_id, plugin_id,
+           profile_id, profile_version
+    FROM devices
+    WHERE id = ${deviceId}
+    FOR UPDATE
+  `;
+  return rows[0];
 }
 
 /**
@@ -169,19 +223,10 @@ export async function bindDeviceInTransaction(
     manifest: PluginManifest;
   },
 ): Promise<DeviceBinding> {
-    const installation = await tx.$queryRaw<InstallationRow[]>`
-      SELECT id, project_id AS "projectId", plugin_id AS "pluginId",
-             configured_plugin_version AS "configuredPluginVersion",
-             state, config_json AS "configJson"
-      FROM plugin_installations WHERE id = ${params.installationId} LIMIT 1
-    `;
-    const install = installation[0];
-    if (!install) {
-      throw new PluginSystemError(
-        "invalid_installation",
-        `installation ${params.installationId} does not exist`,
-      );
-    }
+    // Lock order is installation -> device -> entity registry/descriptors.
+    // This prevents a bind from validating an enabled/version-pinned
+    // snapshot and then committing after disable or migrate changed it.
+    const install = await lockInstallationForUpdate(tx, params.installationId);
     if (install.state !== "enabled") {
       throw new PluginSystemError(
         "installation_not_enabled",
@@ -214,10 +259,8 @@ export async function bindDeviceInTransaction(
         `plugin ${params.manifest.id} does not declare profile ${params.profileId}@${params.profileVersion}`,
       );
     }
-    const device = await tx.$queryRaw<{ project_id: string }[]>`
-      SELECT project_id FROM devices WHERE id = ${params.deviceId} LIMIT 1
-    `;
-    if (device[0]?.project_id !== install.projectId) {
+    const device = await lockDeviceForUpdate(tx, params.deviceId);
+    if (device?.project_id !== install.projectId) {
       throw new PluginSystemError(
         "binding_mismatch",
         `device ${params.deviceId} belongs to a different project than installation ${install.id}`,
@@ -243,7 +286,12 @@ export async function bindDeviceInTransaction(
           profile_configuration = ${JSON.stringify(params.configuration ?? {})}::jsonb
       WHERE id = ${params.deviceId}
     `;
-    await registerDeviceEntities(tx, params.deviceId, install.pluginId, profile);
+    await registerDeviceEntitiesInTransaction(
+      tx,
+      params.deviceId,
+      install.pluginId,
+      profile,
+    );
     const binding = await resolveDeviceBinding(tx, params.deviceId);
     if (binding.installationId !== params.installationId) {
       throw new PluginSystemError(
@@ -276,25 +324,35 @@ export interface ReconcileInstallationResult {
  * against any other version would silently change device semantics (§3).
  */
 export async function reconcileInstallationDevices(
-  prisma: DbExecutor,
+  prisma: PrismaClient | DbExecutor,
   params: {
     installationId: string;
     manifest: PluginManifest;
   },
 ): Promise<ReconcileInstallationResult> {
-  const installations = await prisma.$queryRaw<InstallationRow[]>`
-    SELECT id, project_id AS "projectId", plugin_id AS "pluginId",
-           configured_plugin_version AS "configuredPluginVersion",
-           state, config_json AS "configJson"
-    FROM plugin_installations WHERE id = ${params.installationId} LIMIT 1
-  `;
-  const install = installations[0];
-  if (!install) {
-    throw new PluginSystemError(
-      "invalid_installation",
-      `installation ${params.installationId} does not exist`,
+  if (hasTransactionClient(prisma)) {
+    return prisma.$transaction((tx) =>
+      reconcileInstallationDevicesInTransaction(tx, params),
     );
   }
+  return reconcileInstallationDevicesInTransaction(prisma, params);
+}
+
+/** Reconcile core for callers that already own the surrounding transaction. */
+async function reconcileInstallationDevicesInTransaction(
+  tx: DbExecutor,
+  params: {
+    installationId: string;
+    manifest: PluginManifest;
+  },
+  lockedInstallation?: InstallationRow,
+): Promise<ReconcileInstallationResult> {
+  // Migration has already locked this row; standalone reconcile acquires the
+  // same lock here. Either way, device rows are locked only after the
+  // installation row, matching bind's global lock order.
+  const install =
+    lockedInstallation ??
+    (await lockInstallationForUpdate(tx, params.installationId));
   if (install.pluginId !== params.manifest.id) {
     throw new PluginSystemError(
       "unknown_plugin",
@@ -308,62 +366,93 @@ export async function reconcileInstallationDevices(
     );
   }
 
-  const groups = await prisma.$queryRaw<
-    { profile_id: string; profile_version: number }[]
-  >`
-    SELECT DISTINCT profile_id, profile_version
+  // Lock all affected devices in deterministic order before touching entity
+  // descriptors/registry rows. This closes the reconcile-vs-bind window and
+  // avoids taking device locks in different orders across transactions.
+  const lockedDevices = await tx.$queryRaw<LockedDeviceRow[]>`
+    SELECT id, device_uid, project_id, plugin_installation_id, plugin_id,
+           profile_id, profile_version
     FROM devices
     WHERE plugin_installation_id = ${params.installationId}
-      AND plugin_id = ${params.manifest.id}
-      AND profile_id IS NOT NULL AND profile_version IS NOT NULL
+    ORDER BY id
+    FOR UPDATE
   `;
+  const groups = new Map<
+    string,
+    { profileId: string; profileVersion: number; devices: LockedDeviceRow[] }
+  >();
+  for (const device of lockedDevices) {
+    if (
+      device.plugin_id !== params.manifest.id ||
+      device.profile_id === null ||
+      device.profile_version === null
+    ) continue;
+    const groupKey = JSON.stringify([
+      device.profile_id,
+      device.profile_version,
+    ]);
+    const group = groups.get(groupKey);
+    if (group) group.devices.push(device);
+    else {
+      groups.set(groupKey, {
+        profileId: device.profile_id!,
+        profileVersion: device.profile_version!,
+        devices: [device],
+      });
+    }
+  }
 
   const missingProfiles: string[] = [];
   let devices = 0;
   let deprecatedRegistryRows = 0;
-  for (const group of groups) {
+  // Reconciles can cover multiple profiles. Acquire descriptor advisory
+  // locks in a stable order so two installations cannot deadlock by visiting
+  // the same profile groups in opposite device order.
+  const orderedGroups = [...groups.values()].sort((left, right) => {
+    if (left.profileId !== right.profileId) {
+      return left.profileId < right.profileId ? -1 : 1;
+    }
+    return left.profileVersion - right.profileVersion;
+  });
+  for (const group of orderedGroups) {
+    const { profileId, profileVersion, devices: groupDevices } = group;
+    const groupKey = `${profileId}@${profileVersion}`;
     const profile = findProfile(
       params.manifest,
-      group.profile_id,
-      group.profile_version,
+      profileId,
+      profileVersion,
     );
     if (!profile) {
       // Reported to the caller; migration callers treat this as blocking.
       // Their devices are left untouched — deprecating their registry rows
       // with ANOTHER profile's key set would be wrong (review fix).
-      missingProfiles.push(`${group.profile_id}@${group.profile_version}`);
+      missingProfiles.push(groupKey);
       continue;
     }
     // Descriptors are ensured ONCE per profile group, then each device's
     // registry rows are upserted set-based — O(groups) descriptor passes
     // instead of O(devices × entities) round trips inside the caller's
     // transaction (review perf fix).
-    const revisionIds = await ensureEntityDescriptors(
-      prisma,
+    const revisionIds = await ensureEntityDescriptorsInTransaction(
+      tx,
       params.manifest.id,
       profile,
     );
-    const deviceRows = await prisma.$queryRaw<{ id: string }[]>`
-      SELECT id FROM devices
-      WHERE plugin_installation_id = ${params.installationId}
-        AND profile_id = ${group.profile_id}
-        AND profile_version = ${group.profile_version}
-    `;
-    for (const deviceRow of deviceRows) {
-      await upsertRegistryRows(prisma, deviceRow.id, params.manifest.id, revisionIds);
+    for (const deviceRow of groupDevices) {
+      await upsertRegistryRows(tx, deviceRow.id, params.manifest.id, revisionIds);
       devices += 1;
     }
     // Deprecation is scoped PER PROFILE GROUP: a key removed from profile A
     // must stay active for profile-B devices that still declare it.
     const groupKeys = profile.entities.map((e) => e.key);
-    deprecatedRegistryRows += await prisma.$executeRaw`
+    deprecatedRegistryRows += await tx.$executeRaw`
       UPDATE entity_registry er
       SET deprecated = true
       FROM devices d
       WHERE d.id = er.device_id
         AND d.plugin_installation_id = ${params.installationId}
-        AND d.profile_id = ${group.profile_id}
-        AND d.profile_version = ${group.profile_version}
+        AND d.profile_id = ${profileId}
+        AND d.profile_version = ${profileVersion}
         AND er.plugin_id = ${params.manifest.id}
         AND er.deprecated = false
         ${groupKeys.length > 0
@@ -384,13 +473,29 @@ export async function reconcileInstallationDevices(
  * `configurationSchema` (§3) and is currently the caller's duty.
  */
 export async function updateInstallationConfig(
-  prisma: DbExecutor,
+  prisma: PrismaClient | DbExecutor,
   params: {
     installationId: string;
     configJson: Record<string, unknown>;
   },
 ): Promise<InstallationRow> {
-  const rows = await prisma.$queryRaw<InstallationRow[]>`
+  if (hasTransactionClient(prisma)) {
+    return prisma.$transaction((tx) =>
+      updateInstallationConfigInTransaction(tx, params),
+    );
+  }
+  return updateInstallationConfigInTransaction(prisma, params);
+}
+
+export async function updateInstallationConfigInTransaction(
+  tx: DbExecutor,
+  params: {
+    installationId: string;
+    configJson: Record<string, unknown>;
+  },
+): Promise<InstallationRow> {
+  await lockInstallationForUpdate(tx, params.installationId);
+  const rows = await tx.$queryRaw<InstallationRow[]>`
     UPDATE plugin_installations
     SET config_json = ${JSON.stringify(params.configJson)}::jsonb, updated_at = now()
     WHERE id = ${params.installationId}
@@ -414,30 +519,37 @@ export async function updateInstallationConfig(
  * disabled) instead of being force-enabled blind.
  */
 export async function setInstallationState(
-  prisma: DbExecutor,
+  prisma: PrismaClient | DbExecutor,
   params: {
     installationId: string;
     state: "enabled" | "disabled";
   },
 ): Promise<InstallationRow> {
-  const current = await prisma.$queryRaw<{ state: string }[]>`
-    SELECT state FROM plugin_installations WHERE id = ${params.installationId} LIMIT 1
-  `;
-  const from = current[0]?.state;
-  if (!from) {
-    throw new PluginSystemError(
-      "invalid_installation",
-      `installation ${params.installationId} does not exist`,
+  if (hasTransactionClient(prisma)) {
+    return prisma.$transaction((tx) =>
+      setInstallationStateInTransaction(tx, params),
     );
   }
+  return setInstallationStateInTransaction(prisma, params);
+}
+
+export async function setInstallationStateInTransaction(
+  tx: DbExecutor,
+  params: {
+    installationId: string;
+    state: "enabled" | "disabled";
+  },
+): Promise<InstallationRow> {
+  const current = await lockInstallationForUpdate(tx, params.installationId);
+  const from = current.state;
   if (params.state === "enabled" && from === "error") {
     throw new PluginSystemError(
       "installation_not_enabled",
       `installation ${params.installationId} is in error state; migrate it to the deployed version first`,
     );
   }
-  if (from === params.state) return await getInstallation(prisma, params.installationId);
-  const rows = await prisma.$queryRaw<InstallationRow[]>`
+  if (from === params.state) return current;
+  const rows = await tx.$queryRaw<InstallationRow[]>`
     UPDATE plugin_installations
     SET state = ${params.state}, error_detail = NULL, updated_at = now()
     WHERE id = ${params.installationId}
@@ -536,7 +648,7 @@ export async function migrateInstallationInTransaction(
     manifest: PluginManifest;
   },
 ): Promise<MigrationResult> {
-  const install = await getInstallation(tx, params.installationId);
+  const install = await lockInstallationForUpdate(tx, params.installationId);
   if (install.pluginId !== params.manifest.id) {
     throw new PluginSystemError(
       "unknown_plugin",
@@ -561,10 +673,10 @@ export async function migrateInstallationInTransaction(
               state, config_json AS "configJson"
   `;
   const row = updated[0]!;
-  const reconcile = await reconcileInstallationDevices(tx, {
+  const reconcile = await reconcileInstallationDevicesInTransaction(tx, {
     installationId: params.installationId,
     manifest: params.manifest,
-  });
+  }, row);
   // §3: a migration must not strand devices on profiles the new manifest
   // no longer declares — the whole transaction rolls back instead, and the
   // operator has to unbind/migrate those devices first (review fix).

@@ -16,7 +16,7 @@
  *     plugin-side pre-checks).
  */
 
-import { Prisma, type DbExecutor } from "../db";
+import { Prisma, type DbExecutor, type PrismaClient } from "../db";
 import { PluginSystemError } from "./errors";
 import type {
   DeviceProfileDescriptor,
@@ -24,6 +24,14 @@ import type {
   EntityUpdate,
 } from "@soulcloud/plugin-sdk";
 import { validateEntityValue } from "@soulcloud/plugin-sdk";
+
+function hasTransactionClient(
+  prisma: PrismaClient | DbExecutor,
+): prisma is PrismaClient {
+  // Prisma's interactive transaction proxy also exposes `$transaction`, but
+  // unlike the root client it does not expose the connection lifecycle API.
+  return typeof (prisma as PrismaClient).$connect === "function";
+}
 
 // ---------------------------------------------------------------------------
 // Descriptor revisions
@@ -53,15 +61,55 @@ export function canonicalDescriptor(
  * latest revision id per entity key. Idempotent.
  *
  * Set-based (review perf fix): ONE query loads the latest revision per
- * key; only new/changed descriptors issue INSERTs.
+ * key; only new/changed descriptors issue INSERTs. When called through the
+ * public Prisma client, the whole read/compute/insert sequence runs in one
+ * transaction so the advisory lock is held for the entire operation.
+ *
+ * The transaction is important: the advisory lock in the transaction-core
+ * below must cover the read/compute/insert sequence, not just the lock
+ * statement itself.
  */
 export async function ensureEntityDescriptors(
+  prisma: PrismaClient | DbExecutor,
+  pluginId: string,
+  profile: DeviceProfileDescriptor,
+): Promise<Map<string, string>> {
+  if (hasTransactionClient(prisma)) {
+    return prisma.$transaction((tx) =>
+      ensureEntityDescriptorsInTransaction(tx, pluginId, profile),
+    );
+  }
+  return ensureEntityDescriptorsInTransaction(prisma, pluginId, profile);
+}
+
+/** Transaction-core used by binding/reconcile paths that already own a tx. */
+export async function ensureEntityDescriptorsInTransaction(
   prisma: DbExecutor,
   pluginId: string,
   profile: DeviceProfileDescriptor,
 ): Promise<Map<string, string>> {
   const byKey = new Map<string, string>();
   if (profile.entities.length === 0) return byKey;
+
+  // There may be no existing revision row to lock yet. A transaction-level
+  // advisory lock gives all installations of the same plugin profile a
+  // stable serialization point before latest-revision reads and inserts.
+  // This runs after the caller's installation/device locks, preserving the
+  // global lock order: installation -> device -> descriptor registry.
+  const descriptorIdentity = JSON.stringify([
+    pluginId,
+    profile.id,
+    profile.version,
+  ]);
+  // Keep the void-returning lock function out of the result set: Prisma's
+  // PostgreSQL adapter cannot deserialize a `void` column from $queryRaw.
+  await prisma.$queryRaw`
+    WITH lock_acquired AS (
+      SELECT pg_advisory_xact_lock(hashtextextended(${descriptorIdentity}, 0))
+    )
+    SELECT true AS locked FROM lock_acquired
+  `;
+
   const keys = profile.entities.map((d) => d.key);
   const existing = await prisma.$queryRaw<
     { entity_key: string; id: string; revision: number; descriptor: unknown }[]
@@ -138,12 +186,32 @@ export async function upsertRegistryRows(
  * deprecated rather than deleting (§4.1).
  */
 export async function registerDeviceEntities(
+  prisma: PrismaClient | DbExecutor,
+  deviceId: string,
+  pluginId: string,
+  profile: DeviceProfileDescriptor,
+): Promise<void> {
+  if (hasTransactionClient(prisma)) {
+    await prisma.$transaction((tx) =>
+      registerDeviceEntitiesInTransaction(tx, deviceId, pluginId, profile),
+    );
+    return;
+  }
+  await registerDeviceEntitiesInTransaction(prisma, deviceId, pluginId, profile);
+}
+
+/** Transaction-core used by bind/reconcile paths that already own a tx. */
+export async function registerDeviceEntitiesInTransaction(
   prisma: DbExecutor,
   deviceId: string,
   pluginId: string,
   profile: DeviceProfileDescriptor,
 ): Promise<void> {
-  const revisionIds = await ensureEntityDescriptors(prisma, pluginId, profile);
+  const revisionIds = await ensureEntityDescriptorsInTransaction(
+    prisma,
+    pluginId,
+    profile,
+  );
   await upsertRegistryRows(prisma, deviceId, pluginId, revisionIds);
 }
 

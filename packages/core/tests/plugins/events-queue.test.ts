@@ -7,6 +7,7 @@ import {
   resolveDeviceBinding,
   BUILTIN_PROFILE_ID,
   BUILTIN_PLUGIN_ID,
+  setInstallationState,
 } from "../../src/plugins/installation";
 import {
   enqueuePluginEvent,
@@ -494,6 +495,223 @@ describe("reconcileInstallationDevices (H2)", () => {
 });
 
 describe("review-fix regressions (core)", () => {
+  test("bind and disable serialize on the installation row", async () => {
+    const raceProject = randomUUID();
+    await prisma.project.create({ data: { id: raceProject, name: "bind-disable-race" } });
+    const raceInstall = await createInstallation(prisma, {
+      projectId: raceProject,
+      manifest: chaosTestPlugin,
+      configJson: {},
+    });
+    const raceDevice = randomUUID();
+    await prisma.device.create({
+      data: {
+        id: raceDevice,
+        deviceUid: `race-disable-${randomUUID().slice(0, 8)}`,
+        assignedId: "assigned-bind-disable",
+        passwordHash: "unused",
+        projectId: raceProject,
+      },
+    });
+    const completion: string[] = [];
+    try {
+      const disablePromise = setInstallationState(prisma, {
+        installationId: raceInstall.id,
+        state: "disabled",
+      }).then(
+        (value) => {
+          completion.push("disable");
+          return { ok: true as const, value };
+        },
+        (error) => {
+          completion.push("disable");
+          return { ok: false as const, error };
+        },
+      );
+      const bindPromise = bindDeviceToInstallation(prisma, {
+        deviceId: raceDevice,
+        installationId: raceInstall.id,
+        profileId: chaosTestPlugin.profiles[0]!.id,
+        profileVersion: chaosTestPlugin.profiles[0]!.version,
+        manifest: chaosTestPlugin,
+      }).then(
+        (value) => {
+          completion.push("bind");
+          return { ok: true as const, value };
+        },
+        (error) => {
+          completion.push("bind");
+          return { ok: false as const, error };
+        },
+      );
+      const [disable, bind] = await Promise.all([disablePromise, bindPromise]);
+      expect(disable.ok).toBe(true);
+      expect(completion).toHaveLength(2);
+
+      const device = await prisma.$queryRaw<{ plugin_installation_id: string | null }[]>`
+        SELECT plugin_installation_id FROM devices WHERE id = ${raceDevice}
+      `;
+      if (bind.ok) {
+        // A successful bind held the installation lock through its commit;
+        // disable can only complete afterwards.
+        expect(completion.indexOf("bind")).toBeLessThan(completion.indexOf("disable"));
+        expect(device[0]!.plugin_installation_id).toBe(raceInstall.id);
+      } else {
+        expect(bind.error).toMatchObject({ kind: "installation_not_enabled" });
+        expect(completion.indexOf("disable")).toBeLessThan(completion.indexOf("bind"));
+        expect(device[0]!.plugin_installation_id).toBeNull();
+      }
+    } finally {
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id = ${raceDevice}`;
+      await prisma.$executeRaw`DELETE FROM plugin_installations WHERE id = ${raceInstall.id}`;
+      await prisma.$executeRaw`DELETE FROM devices WHERE id = ${raceDevice}`;
+      await prisma.$executeRaw`DELETE FROM projects WHERE id = ${raceProject}`;
+    }
+  });
+
+  test("bind and migrate serialize before profile validation", async () => {
+    const raceProject = randomUUID();
+    await prisma.project.create({ data: { id: raceProject, name: "bind-migrate-race" } });
+    const raceInstall = await createInstallation(prisma, {
+      projectId: raceProject,
+      manifest: chaosTestPlugin,
+      configJson: {},
+    });
+    const raceDevice = randomUUID();
+    await prisma.device.create({
+      data: {
+        id: raceDevice,
+        deviceUid: `race-migrate-${randomUUID().slice(0, 8)}`,
+        assignedId: "assigned-bind-migrate",
+        passwordHash: "unused",
+        projectId: raceProject,
+      },
+    });
+    const v2 = {
+      ...chaosTestPlugin,
+      version: "2.0.0",
+      profiles: [],
+    } as PluginManifest;
+    try {
+      const migrationPromise = prisma.$transaction((tx) =>
+        migrateInstallationInTransaction(tx, {
+          installationId: raceInstall.id,
+          manifest: v2,
+        }),
+      ).then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
+      const bindPromise = bindDeviceToInstallation(prisma, {
+        deviceId: raceDevice,
+        installationId: raceInstall.id,
+        profileId: chaosTestPlugin.profiles[0]!.id,
+        profileVersion: chaosTestPlugin.profiles[0]!.version,
+        manifest: chaosTestPlugin,
+      }).then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
+      const [migration, bind] = await Promise.all([migrationPromise, bindPromise]);
+      const installation = await prisma.$queryRaw<{ configured_plugin_version: string }[]>`
+        SELECT configured_plugin_version
+        FROM plugin_installations
+        WHERE id = ${raceInstall.id}
+      `;
+      const device = await prisma.$queryRaw<{ plugin_installation_id: string | null }[]>`
+        SELECT plugin_installation_id FROM devices WHERE id = ${raceDevice}
+      `;
+      if (migration.ok) {
+        // Migration won the installation lock: bind must observe v2 and
+        // reject, rather than commit a v1 profile against a v2 installation.
+        expect(bind.ok).toBe(false);
+        if (!bind.ok) {
+          expect(bind.error).toMatchObject({ kind: "version_mismatch" });
+        }
+        expect(installation[0]!.configured_plugin_version).toBe("2.0.0");
+        expect(device[0]!.plugin_installation_id).toBeNull();
+      } else {
+        // Bind won first: migration observes the locked device and rolls
+        // back because v2 no longer declares its profile.
+        expect(migration.error).toMatchObject({ kind: "migration_blocked" });
+        expect(bind.ok).toBe(true);
+        expect(installation[0]!.configured_plugin_version).toBe("1.0.0");
+        expect(device[0]!.plugin_installation_id).toBe(raceInstall.id);
+      }
+    } finally {
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id = ${raceDevice}`;
+      await prisma.$executeRaw`DELETE FROM plugin_installations WHERE id = ${raceInstall.id}`;
+      await prisma.$executeRaw`DELETE FROM devices WHERE id = ${raceDevice}`;
+      await prisma.$executeRaw`DELETE FROM projects WHERE id = ${raceProject}`;
+    }
+  });
+
+  test("concurrent binds do not allocate duplicate descriptor revisions", async () => {
+    const concurrentPlugin = {
+      ...chaosTestPlugin,
+      id: `acme.concurrent-${randomUUID()}`,
+    } as PluginManifest;
+    const projectA = randomUUID();
+    const projectB = randomUUID();
+    const deviceA = randomUUID();
+    const deviceB = randomUUID();
+    await prisma.project.createMany({
+      data: [
+        { id: projectA, name: "concurrent-bind-a" },
+        { id: projectB, name: "concurrent-bind-b" },
+      ],
+    });
+    const [installA, installB] = await Promise.all([
+      createInstallation(prisma, { projectId: projectA, manifest: concurrentPlugin }),
+      createInstallation(prisma, { projectId: projectB, manifest: concurrentPlugin }),
+    ]);
+    for (const [id, projectIdForDevice, suffix] of [
+      [deviceA, projectA, "a"],
+      [deviceB, projectB, "b"],
+    ] as const) {
+      await prisma.device.create({
+        data: {
+          id,
+          deviceUid: `race-concurrent-${suffix}-${randomUUID().slice(0, 8)}`,
+          assignedId: `assigned-concurrent-${suffix}`,
+          passwordHash: "unused",
+          projectId: projectIdForDevice,
+        },
+      });
+    }
+    try {
+      await Promise.all([
+        bindDeviceToInstallation(prisma, {
+          deviceId: deviceA,
+          installationId: installA.id,
+          profileId: concurrentPlugin.profiles[0]!.id,
+          profileVersion: concurrentPlugin.profiles[0]!.version,
+          manifest: concurrentPlugin,
+        }),
+        bindDeviceToInstallation(prisma, {
+          deviceId: deviceB,
+          installationId: installB.id,
+          profileId: concurrentPlugin.profiles[0]!.id,
+          profileVersion: concurrentPlugin.profiles[0]!.version,
+          manifest: concurrentPlugin,
+        }),
+      ]);
+      const revisions = await prisma.$queryRaw<{ count: number; max_revision: number }[]>`
+        SELECT count(*)::int AS count, max(revision)::int AS max_revision
+        FROM entity_descriptor_revisions
+        WHERE plugin_id = ${concurrentPlugin.id}
+      `;
+      expect(revisions[0]!.count).toBe(concurrentPlugin.profiles[0]!.entities.length);
+      expect(revisions[0]!.max_revision).toBe(1);
+    } finally {
+      await prisma.$executeRaw`DELETE FROM entity_registry WHERE device_id IN (${deviceA}, ${deviceB})`;
+      await prisma.$executeRaw`DELETE FROM entity_descriptor_revisions WHERE plugin_id = ${concurrentPlugin.id}`;
+      await prisma.$executeRaw`DELETE FROM plugin_installations WHERE id IN (${installA.id}, ${installB.id})`;
+      await prisma.$executeRaw`DELETE FROM devices WHERE id IN (${deviceA}, ${deviceB})`;
+      await prisma.$executeRaw`DELETE FROM projects WHERE id IN (${projectA}, ${projectB})`;
+    }
+  });
+
   test("migration is blocked and rolled back when the new manifest drops a bound profile", async () => {
     const blkProject = randomUUID();
     await prisma.project.create({ data: { id: blkProject, name: "migrate-blocked" } });

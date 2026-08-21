@@ -38,8 +38,8 @@ import {
   listProjectInstallations,
   migrateInstallationInTransaction,
   resolveDeviceBinding,
-  setInstallationState,
-  updateInstallationConfig,
+  setInstallationStateInTransaction,
+  updateInstallationConfigInTransaction,
   validateEncodedAction,
   type JwtConfig,
   type PrismaClient,
@@ -362,7 +362,7 @@ export function createPluginRoutes(
           return { error: "forbidden", message: "not a member of this project" };
         }
         const updated = await prisma.$transaction(async (tx) => {
-          const row = await updateInstallationConfig(tx, {
+          const row = await updateInstallationConfigInTransaction(tx, {
             installationId: params.installationId,
             configJson: parsed.data.config_json!,
           });
@@ -964,7 +964,7 @@ async function mutateInstallationState(
       return { error: "forbidden", message: "not a member of this project" };
     }
     const updated = await prisma.$transaction(async (tx) => {
-      const row = await setInstallationState(tx, {
+      const row = await setInstallationStateInTransaction(tx, {
         installationId,
         state,
       });
