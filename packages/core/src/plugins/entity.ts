@@ -173,22 +173,29 @@ export async function upsertRegistryRowsForDevices(
 ): Promise<void> {
   const entries = [...revisionIds.entries()];
   if (deviceIds.length === 0 || entries.length === 0) return;
-  await prisma.$executeRaw`
-    INSERT INTO entity_registry (id, device_id, plugin_id, entity_key, descriptor_revision_id, deprecated)
-    SELECT gen_random_uuid(), devices.device_id, ${pluginId}, pairs.entity_key,
-           pairs.revision_id, false
-    FROM (VALUES ${Prisma.join(
-      deviceIds.map((id) => Prisma.sql`(${id}::uuid)`),
-    )}) AS devices(device_id)
-    CROSS JOIN (VALUES ${Prisma.join(
-      entries.map(([key, revisionId]) =>
-        Prisma.sql`(${key}::text, ${revisionId}::uuid)`,
-      ),
-    )}) AS pairs(entity_key, revision_id)
-    ON CONFLICT (device_id, plugin_id, entity_key)
-    DO UPDATE SET descriptor_revision_id = EXCLUDED.descriptor_revision_id,
-                  deprecated = false
-  `;
+  // Keep one statement bounded for very large installations. This still
+  // collapses device×entity work from one round-trip per device to a small,
+  // predictable number of set-based statements.
+  const deviceBatchSize = 500;
+  for (let offset = 0; offset < deviceIds.length; offset += deviceBatchSize) {
+    const batch = deviceIds.slice(offset, offset + deviceBatchSize);
+    await prisma.$executeRaw`
+      INSERT INTO entity_registry (id, device_id, plugin_id, entity_key, descriptor_revision_id, deprecated)
+      SELECT gen_random_uuid(), devices.device_id, ${pluginId}, pairs.entity_key,
+             pairs.revision_id, false
+      FROM (VALUES ${Prisma.join(
+        batch.map((id) => Prisma.sql`(${id}::uuid)`),
+      )}) AS devices(device_id)
+      CROSS JOIN (VALUES ${Prisma.join(
+        entries.map(([key, revisionId]) =>
+          Prisma.sql`(${key}::text, ${revisionId}::uuid)`,
+        ),
+      )}) AS pairs(entity_key, revision_id)
+      ON CONFLICT (device_id, plugin_id, entity_key)
+      DO UPDATE SET descriptor_revision_id = EXCLUDED.descriptor_revision_id,
+                    deprecated = false
+    `;
+  }
 }
 
 /**
