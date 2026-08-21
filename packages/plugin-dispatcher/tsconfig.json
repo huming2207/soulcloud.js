@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@soulcloud/core": ["../core/src/index.ts"],
+      "@soulcloud/plugin-sdk": ["../plugin-sdk/src/index.ts"],
+      "@soulcloud/plugins": ["../../plugins/registry.ts"]
+    }
+  },
+  "include": ["src", "tests"]
+}

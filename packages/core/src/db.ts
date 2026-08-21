@@ -15,6 +15,14 @@ import {
 export { PrismaNamespace as Prisma };
 export type { PrismaClient } from "../generated/prisma/client";
 
+/**
+ * Minimal executor interface accepted by the plugin subsystem services:
+ * they only issue raw SQL. Both a PrismaClient and the transaction client
+ * passed to `$transaction` callbacks satisfy it, which lets queue helpers
+ * compose inside one transaction.
+ */
+export type DbExecutor = Pick<PrismaClient, "$queryRaw" | "$executeRaw">;
+
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 
 export const prisma = new PrismaClient({ adapter });

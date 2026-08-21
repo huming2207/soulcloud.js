@@ -80,6 +80,7 @@ model Project {
   otaJobs      OtaJob[]
   rollouts     OtaRollout[]
   userLinks    UserProject[]
+  installations PluginInstallation[]
 
   @@map("projects")
 }
@@ -98,6 +99,20 @@ model Device {
   authRevoked      Boolean          @default(false) @map("auth_revoked")
   projectId        String           @map("project_id") @db.Uuid
   project          Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  // --- plugin / profile binding (see docs/zh/plugin-and-station-architecture.md §3) ---
+  /// Installation this device is routed to. NULL = builtin soulcloud.generic
+  /// profile (existing devices keep their current protocol behaviour).
+  pluginInstallationId String?     @map("plugin_installation_id") @db.Uuid
+  pluginInstallation   PluginInstallation? @relation(fields: [pluginInstallationId], references: [id], onDelete: SetNull)
+  /// Builtin profile when NULL: ("soulcloud.generic", "generic", 1).
+  /// CHECK devices_plugin_profile_consistent: the three profile columns are
+  /// either all NULL or all set (enforced in the migration SQL).
+  pluginId         String?          @map("plugin_id") @db.VarChar(255)
+  profileId        String?          @map("profile_id") @db.VarChar(255)
+  profileVersion   Int?             @map("profile_version")
+  /// Per-device configuration validated against the profile's schema
+  profileConfiguration Json?       @map("profile_configuration")
   /// CHECK devices_next_command_sequence_positive: next_command_sequence > 0
   nextCommandSeq   BigInt           @default(1) @map("next_command_sequence")
   commands         DeviceCommand[]
@@ -105,6 +120,8 @@ model Device {
   logEvents        RawLogEvent[]
   otaTargets       OtaTarget[]
   rolloutPool      OtaRolloutPool[]
+  pluginEvents     PluginEvent[]
+  entityRegistrations EntityRegistry[]
 
   @@unique([projectId, assignedId], map: "devices_project_assigned_id_unique")
   @@map("devices")
@@ -397,6 +414,10 @@ model RawLogEvent {
   decodeState  String            @default("unknown_fw") @map("decode_state") @db.VarChar(32)
 
   @@index([deviceId, id], map: "raw_log_events_device_idx")
+  /// Keyset index for the time-ranged log export (perf audit; created by
+  /// migration 20260813020000 but previously missing here — schema drift
+  /// that made later `migrate dev` want to drop it)
+  @@index([deviceId, receivedAt, id], map: "raw_log_events_device_time_id_idx")
   @@index([artifactId, tagId, id], map: "raw_log_events_artifact_idx")
   @@index([receivedAt], map: "raw_log_events_time_idx")
   @@map("raw_log_events")
@@ -410,4 +431,161 @@ model DeviceFirmwareState {
   fwHash     String   @map("fw_hash") @db.VarChar(64)
   reportedAt DateTime @default(now()) @map("reported_at") @db.Timestamptz()
   @@map("device_firmware_state")
+}
+
+// --- plugin system (see docs/zh/plugin-and-station-architecture.md) ---------
+// Implemented for stage 1 (SDK skeleton + entity model) and stage 2
+// (dispatcher / plugin host process isolation).
+
+/// One plugin enabled for one project (§3). `configured_plugin_version`
+/// must exactly match the version deployed in the registry; a mismatch
+/// moves the installation to `error` (never auto-upgrade/downgrade).
+model PluginInstallation {
+  id                      String    @id @default(uuid()) @db.Uuid
+  projectId               String    @map("project_id") @db.Uuid
+  project                 Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// CHECK plugin_installations_plugin_id_not_blank
+  pluginId                String    @map("plugin_id") @db.VarChar(255)
+  /// CHECK plugin_installations_version_not_blank
+  configuredPluginVersion String    @map("configured_plugin_version") @db.VarChar(64)
+  /// enabled | draining | disabled | error (CHECK in migration SQL)
+  state                   String    @default("enabled") @db.VarChar(32)
+  /// Why the installation is in `error` (version drift, bad config, ...)
+  errorDetail             String?   @map("error_detail") @db.Text
+  configJson              Json?     @map("config_json")
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt               DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  devices                 Device[]
+  events                  PluginEvent[]
+
+  @@index([pluginId])
+  @@map("plugin_installations")
+}
+
+/// Immutable descriptor snapshot per entity (§4.1). Entity semantics are
+/// interpreted with the revision that was current when the sample was
+/// taken; renames create new entity keys and deprecate the old row.
+model EntityDescriptorRevision {
+  id          String   @id @default(uuid()) @db.Uuid
+  pluginId    String   @map("plugin_id") @db.VarChar(255)
+  profileId   String   @map("profile_id") @db.VarChar(255)
+  profileVersion Int    @map("profile_version")
+  entityKey   String   @map("entity_key") @db.VarChar(255)
+  /// 1-based, monotonic per (plugin_id, profile_id, profile_version, entity_key)
+  revision    Int
+  /// Full EntityDescriptor JSON snapshot
+  descriptor  Json
+  deprecated  Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  entities    EntityRegistry[]
+  history     EntityHistory[]
+
+  @@unique([pluginId, profileId, profileVersion, entityKey, revision], map: "entity_descriptor_revisions_identity_unique")
+  @@index([pluginId, profileId, profileVersion, entityKey])
+  @@map("entity_descriptor_revisions")
+}
+
+/// One registered entity per (device, plugin, entity_key) (§4).
+model EntityRegistry {
+  id                  String   @id @default(uuid()) @db.Uuid
+  deviceId            String   @map("device_id") @db.Uuid
+  device              Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  pluginId            String   @map("plugin_id") @db.VarChar(255)
+  entityKey           String   @map("entity_key") @db.VarChar(255)
+  descriptorRevisionId String  @map("descriptor_revision_id") @db.Uuid
+  descriptorRevision  EntityDescriptorRevision @relation(fields: [descriptorRevisionId], references: [id], onDelete: Restrict)
+  deprecated          Boolean  @default(false)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  currentState        EntityCurrentState?
+  history             EntityHistory[]
+
+  @@unique([deviceId, pluginId, entityKey], map: "entity_registry_identity_unique")
+  @@index([deviceId])
+  @@map("entity_registry")
+}
+
+/// Latest state per registered entity (§4). Kept separate from history:
+/// hot reads never scan history rows.
+model EntityCurrentState {
+  entityRegistryId String   @id @map("entity_registry_id") @db.Uuid
+  entity           EntityRegistry @relation(fields: [entityRegistryId], references: [id], onDelete: Cascade)
+  value            Json?
+  /// good | bad | uncertain | stale | unknown (CHECK in migration SQL)
+  quality          String   @default("unknown") @db.VarChar(16)
+  sourceTimestamp  DateTime? @map("source_timestamp") @db.Timestamptz()
+  ingestedAt       DateTime @default(now()) @map("ingested_at") @db.Timestamptz()
+  /// Optional producer-side ordering token
+  sequence         BigInt?
+  /// info | warning | critical (CHECK in migration SQL)
+  alarmLevel       String?  @map("alarm_level") @db.VarChar(16)
+  alarmCode        String? @map("alarm_code") @db.VarChar(64)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("entity_current_state")
+}
+
+/// Append-only entity samples (§4). History policy comes from the
+/// descriptor revision that was current when the update was applied.
+model EntityHistory {
+  id                 BigInt   @id @default(autoincrement())
+  entityRegistryId   String   @map("entity_registry_id") @db.Uuid
+  entity             EntityRegistry @relation(fields: [entityRegistryId], references: [id], onDelete: Cascade)
+  descriptorRevisionId String @map("descriptor_revision_id") @db.Uuid
+  descriptorRevision EntityDescriptorRevision @relation(fields: [descriptorRevisionId], references: [id], onDelete: Restrict)
+  /// Denormalised for the "all entities of one device over time" query
+  deviceId           String   @map("device_id") @db.Uuid
+  value              Json?
+  quality            String   @db.VarChar(16)
+  sourceTimestamp    DateTime? @map("source_timestamp") @db.Timestamptz()
+  ingestedAt         DateTime @default(now()) @map("ingested_at") @db.Timestamptz()
+  sequence           BigInt?
+  alarmLevel         String?  @map("alarm_level") @db.VarChar(16)
+  alarmCode          String? @map("alarm_code") @db.VarChar(64)
+
+  @@index([entityRegistryId, id], map: "entity_history_entity_idx")
+  @@index([deviceId, id], map: "entity_history_device_idx")
+  @@map("entity_history")
+}
+
+/// Durable plugin event inbox (§6.3). Routing is derived from the device's
+/// installation binding at enqueue time; devices never choose the plugin.
+/// States: pending | leased | failed | completed | dead. `failed` means
+/// "attempt failed, retry scheduled via available_at"; `dead` is terminal.
+model PluginEvent {
+  id                   String    @id @default(uuid()) @db.Uuid
+  pluginInstallationId String    @map("plugin_installation_id") @db.Uuid
+  installation         PluginInstallation @relation(fields: [pluginInstallationId], references: [id], onDelete: Cascade)
+  deviceId             String    @map("device_id") @db.Uuid
+  device               Device    @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  /// Routing identity is snapshotted at enqueue time; the current device
+  /// binding may change while this event is waiting or retrying.
+  projectId            String    @map("project_id") @db.Uuid
+  deviceUid            String    @map("device_uid") @db.VarChar(255)
+  pluginId             String    @map("plugin_id") @db.VarChar(255)
+  pluginVersion        String    @map("plugin_version") @db.VarChar(64)
+  profileId            String    @map("profile_id") @db.VarChar(255)
+  profileVersion       Int       @map("profile_version")
+  installationConfig   Json?     @map("installation_config")
+  /// CHECK plugin_events_event_kind_not_blank
+  eventKind            String    @map("event_kind") @db.VarChar(255)
+  /// CHECK plugin_events_schema_version_positive
+  schemaVersion        Int       @map("schema_version")
+  payload              Json
+  /// pending | leased | failed | completed | dead (CHECK in migration SQL)
+  state                String    @default("pending") @db.VarChar(16)
+  /// CHECK plugin_events_attempt_count_nonnegative
+  attemptCount         Int       @default(0) @map("attempt_count")
+  availableAt          DateTime  @default(now()) @map("available_at") @db.Timestamptz()
+  leaseExpiresAt       DateTime? @map("lease_expires_at") @db.Timestamptz()
+  /// Repeated uploads with the same key are idempotent within one device.
+  idempotencyKey       String?   @map("idempotency_key") @db.VarChar(255)
+  lastError            String?   @map("last_error") @db.Text
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  /// Set on terminal states (completed and dead)
+  finishedAt           DateTime? @map("finished_at") @db.Timestamptz()
+
+  @@index([deviceId, idempotencyKey], map: "plugin_events_device_idempotency_idx")
+  @@index([state, availableAt], map: "plugin_events_state_available_idx")
+  @@index([pluginInstallationId, state, availableAt], map: "plugin_events_installation_state_idx")
+  @@map("plugin_events")
 }

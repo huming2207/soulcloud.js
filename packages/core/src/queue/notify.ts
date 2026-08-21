@@ -54,3 +54,10 @@ export const NOTIFICATIONS_CHANNEL = "soulcloud_notifications";
  * costs immediacy only (the UI falls back to stat freshness).
  */
 export const DEVICE_STATUS_CHANNEL = "soulcloud_device_status";
+
+/**
+ * Wake-up channel for the plugin dispatcher: fired inside the enqueue
+ * transaction after a plugin event row commits. Lossy by design — the
+ * dispatcher's poll interval is the correctness fallback (§6.3).
+ */
+export const PLUGIN_EVENTS_CHANNEL = "soulcloud_plugin_events";

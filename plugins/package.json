@@ -1,0 +1,14 @@
+{
+  "name": "@soulcloud/plugins",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "registry.ts",
+  "dependencies": {
+    "@soulcloud/plugin-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "typescript": "^5"
+  }
+}

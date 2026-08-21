@@ -69,6 +69,43 @@ services:
       retries: 20
       start_period: 5s
 
+  plugin-dispatcher:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: plugin-dispatcher
+    environment:
+      DATABASE_URL: postgres://soulcloud:${POSTGRES_PASSWORD:-soulcloud}@postgres:5432/soulcloud
+      PLUGIN_HOST_URLS: ${PLUGIN_HOST_URLS:-soulcloud.generic=http://plugin-host-generic:8090}
+      # Override this development default in production/.env.
+      PLUGIN_HOST_AUTH_TOKEN: ${PLUGIN_HOST_AUTH_TOKEN:-soulcloud-dev-plugin-token}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      plugin-host-generic:
+        condition: service_healthy
+
+  plugin-host-generic:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: plugin-host
+    environment:
+      PLUGIN_ID: soulcloud.generic
+      PLUGIN_HOST_BIND: 0.0.0.0
+      PLUGIN_HOST_PORT: 8090
+      PLUGIN_HOST_AUTH_TOKEN: ${PLUGIN_HOST_AUTH_TOKEN:-soulcloud-dev-plugin-token}
+      PLUGIN_HOST_MAX_FRAME_BYTES: ${PLUGIN_HOST_MAX_FRAME_BYTES:-1048576}
+    restart: unless-stopped
+    mem_limit: ${PLUGIN_HOST_MEMORY_LIMIT:-512m}
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8090/health').then(r => { if (!r.ok) process.exit(1) })"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   web:
     build:
       context: .

@@ -1,6 +1,6 @@
 # 插件、工业 Entity 与工位执行架构规划
 
-**状态**：设计提案，尚未实施  
+**状态**：阶段 1（架构与 SDK 骨架）与阶段 2（插件容器隔离原型）已实施（见 §17.1/§17.2 的代码位置）；其余阶段仍为设计提案
 **日期**：2026-08-21
 
 本文规划 SoulcloudJS 面向商用设备、生产测试和烧录治具的插件能力。目标类似
@@ -20,8 +20,8 @@ Home Assistant/Mi Home 的设备集成体验，但不照搬面向民用智能家
   tunnel 或其他隐蔽通道作为业务协议。
 - 第一版不引入 S3/MinIO；Artifact 由核心服务以 PostgreSQL/分块方式存储，并通过稳定的
   storage backend 接口为未来迁移预留空间。
-- 云端 Dispatcher 与 Plugin Host 第一版部署在同一节点，通过 Unix domain socket
-  通信；跨节点插件执行属于 v2 范围。
+- 云端 Dispatcher 与 Plugin Host 通过容器网络 HTTP JSON-RPC 通信；Host 由 Docker/
+  Kubernetes 独立管理，跨节点部署只需把 URL 指向对应 Service。
 
 ## 1. 总体架构
 
@@ -35,8 +35,8 @@ flowchart LR
     StationGateway[Station Gateway] --> DB
 
     DB --> Dispatcher[Plugin Dispatcher]
-    Dispatcher -->|UDS RPC| HostA[Plugin Host A]
-    Dispatcher -->|UDS RPC| HostB[Plugin Host B]
+    Dispatcher -->|HTTP JSON-RPC| HostA[Plugin Host A 容器]
+    Dispatcher -->|HTTP JSON-RPC| HostB[Plugin Host B 容器]
 
     Web --> PluginUI[隔离的 Plugin UI]
     PluginUI --> API
@@ -415,21 +415,21 @@ dead-letter、限流和 circuit breaker 状态。
 
 ### 6.5 Dispatcher 与 Plugin Host RPC
 
-第一版使用 Unix domain socket（UDS）和长度前缀 JSON-RPC。协议与传输解耦，但部署约束
-明确为 Dispatcher 与 Plugin Host 位于同一 Linux 内核：Docker Compose 同机容器共享
-volume，或 Kubernetes 同一 Pod 的 sidecar 共享 `emptyDir`。跨服务器/跨 VM 属于 v2，
-届时可增加 TCP/mTLS 或 gRPC transport，不改变插件 SDK。
+当前实现使用容器网络上的 HTTP JSON-RPC。每个 Plugin Host 是独立容器，Dispatcher 只
+通过 `PLUGIN_HOST_URLS` 配置的 URL 请求它；Docker/Kubernetes 负责进程、内存、健康检查
+和重启策略。这样不需要共享 Unix socket，也不授予 Dispatcher 杀远端进程的权限。未来
+如需跨主机，可在相同消息契约上增加 HTTPS/mTLS；不改变插件 SDK。
 
 必须遵循以下工程规则：
 
-- 挂载共享目录，不 bind mount 单个 socket 文件。服务端重启会 unlink/recreate socket，
-  单文件 mount 可能仍指向旧 inode。
-- 统一容器 UID/GID，或使用共享 group/`fsGroup` 和明确权限位。
-- 客户端容忍 socket 消失、拒绝连接和 inode 更新，并使用带 jitter 的退避重连。
-- Dispatcher 重启后所有 Host 重新 handshake；Host 重启后 Dispatcher 将其摘除，等待重新
-  注册，数据库 lease 负责恢复未完成工作。
+- Host 对外提供 `GET /health` 和 `POST /rpc`；Dispatcher 启动或 URL 变化后重新 handshake。
+- Dispatcher 客户端设置请求 deadline、请求/响应大小上限和可选 bearer token；HTTP 超时只
+  失效本地 client，Host 的重启由容器编排器完成。
+- Host 重启或网络暂时不可达时，Dispatcher 将事件按租约/退避策略重试；数据库 lease
+  负责恢复 Dispatcher 或 Host 中断时未完成的工作。
 - Handshake 协商 RPC version、Plugin SDK API version、plugin ID/version 和能力。
-- 每帧具有长度上限、request ID、deadline 和 cancel；畸形/超限帧直接断开对应 Host。
+- 每个 JSON 请求/响应具有字节上限、request ID 和 deadline；畸形/超限 HTTP 请求直接
+  返回 4xx 或 JSON-RPC 错误，不进入 worker。
 - JSON-RPC 不承载 artifact 正文。大对象只传引用；日志或诊断流使用标准 chunk 消息，
   不能让插件各自发明无界大响应。
 
@@ -939,21 +939,59 @@ GET    /v1/artifacts/:id                         支持 Range
 
 ## 17. 实施顺序
 
-### 阶段 1：架构与 SDK 骨架
+### 阶段 1：架构与 SDK 骨架 —— ✅ 已实施
+
+代码位置：
+
+- `packages/plugin-sdk/`：插件类型（manifest/profile/entity/action）、纯函数校验器
+  （host 预检与 dispatcher 权威复检共用）、HTTP JSON-RPC 消息契约。
+- `plugins/`：编译期注册表（manifest 与 worker 双 map；核心进程只允许导入
+  manifest map）、`soulcloud.generic` 内置 profile、`soulcloud.test.chaos` 混沌测试插件。
+- `packages/core/src/plugins/`：installation 服务（版本精确匹配、设备绑定解析）、
+  entity 模型（descriptor revision / current state / history，含
+  none/changes/sampled/all 四种 history 策略）、plugin_events 持久队列
+  （`FOR UPDATE SKIP LOCKED` 租约、幂等 key、退避重试、dead-letter、版本漂移 sweep）。
+- Prisma 迁移 `20260821031915_plugin_sdk_entity_and_events`；所有 CHECK 约束
+  以原始 SQL 附在迁移内（仓库惯例）。
+- 既有设备不迁移：device 无绑定时在读取侧映射到内置 `soulcloud.generic`，
+  协议行为不变。
+
+原始清单：
 
 - 确定 Plugin SDK、Station Protocol 和版本兼容规则。
 - 建立静态 manifest registry。
 - 实现工业 Entity descriptor revision/current state/history 模型和首批查询索引。
-- 定义 Station 独立身份域、操作员身份和 Artifact Service contract。
+- 定义 Station 独立身份域、操作员身份和 Artifact Service contract（station 身份域
+  与 Artifact Service 属阶段 4）。
 - 现有设备映射为 `soulcloud.generic`，不改变协议行为。
 
-### 阶段 2：插件进程隔离原型
+### 阶段 2：插件进程隔离原型 —— ✅ 已实施
 
-- 实现 Dispatcher 与独立 Plugin Host 的 UDS + 长度前缀 JSON-RPC。
+代码位置：
+
+- `packages/plugin-host/`：不可信侧进程，每进程只加载一个插件；握手校验身份、
+  deadline 派生的 AbortSignal、自身输出预检、有界日志通知流、过载拒绝。
+  进程内没有数据库连接、用户 JWT 或全局 secret。
+- `packages/plugin-dispatcher/`：可信进程，不加载任何插件代码；HTTP JSON-RPC
+  客户端、host 连接监督（握手/失败熔断；不 spawn 或 kill 远端容器）、per-installation
+  round-robin 公平调度与并发限制、事件级退避重试与 dead-letter、双端输出校验、
+  完成与 entity 更新同事务提交。
+- 测试：`packages/plugin-dispatcher/tests/dispatcher.test.ts` 通过真实 HTTP Host 验证
+  超时/超大响应/未声明事件全部被隔离且命令队列不受影响；crash/死循环/oom 需要在
+  独立容器混沌环境执行。Host 单测与 core 集成测试覆盖 HTTP 契约、history 策略、租约
+  恢复与版本漂移。
+- 部署：`compose.yaml` 新增独立 `plugin-dispatcher` 和 `plugin-host-generic` 服务；
+  `Dockerfile.backend` 新增 `plugin-dispatcher`/`plugin-host` targets，Host 的内存和重启
+  交给 Compose。
+
+原始清单：
+
+- 实现 Dispatcher 与独立 Plugin Host 的 HTTP JSON-RPC。
 - Plugin Host 不持有数据库连接或用户 JWT。
 - 加入 timeout、response size、per-installation fairness/concurrency、retry、dead-letter 和
   circuit breaker。
-- 使用故意 crash、死循环、OOM 倾向和超大响应的测试插件验证 API/broker 不受影响。
+- 使用故意 crash、死循环、OOM 倾向和超大响应的测试插件验证 API/broker 不受影响
+  （OOM 场景为手动混沌项，不在 CI）。
 
 ### 阶段 3：Action 与声明式 Web UI
 

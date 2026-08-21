@@ -19,6 +19,12 @@
     "paths": {
       "@soulcloud/core": [
         "./packages/core/src/index.ts"
+      ],
+      "@soulcloud/plugin-sdk": [
+        "./packages/plugin-sdk/src/index.ts"
+      ],
+      "@soulcloud/plugins": [
+        "./plugins/registry.ts"
       ]
     }
   },
@@ -26,6 +32,10 @@
     "packages/core",
     "packages/api",
     "packages/broker",
+    "packages/plugin-sdk",
+    "packages/plugin-host",
+    "packages/plugin-dispatcher",
+    "plugins",
     "scripts",
     "tests"
   ]

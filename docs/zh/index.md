@@ -2,9 +2,10 @@
 
 > 本文档是 [docs/en/index.md](../en/index.md) 的中文翻译，与英文版结构一一对应；如内容冲突，以英文版为准。
 
-**日期**: 2026-08-21 · **基线**: 642 个后端测试 + 226 个 web 单元测试全绿，
+**日期**: 2026-08-21 · **基线**: 698 个后端非 E2E 测试 + 226 个 web 单元测试全绿，
 `tsc --noEmit` 干净，后端 + 浏览器 E2E 套件通过，CI 运行三个并行 job
-（backend / web / web-e2e）。
+（backend / web / web-e2e）。插件系统阶段 1+2 已实施（见
+[plugin-implementation-stage1-2.md](plugin-implementation-stage1-2.md)）。
 
 SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平台。
 本文档集描述当前已有什么、它如何工作、以及哪些是刻意留待将来处理的。
@@ -25,16 +26,19 @@ SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平
 | [testing.md](testing.md) | 测试策略、fixtures、CI |
 | [web.md](web.md) | Web 控制台：技术栈、认证流程、页面、i18n、测试 |
 | [plugin-and-station-architecture.md](plugin-and-station-architecture.md) | 商用设备插件、工业 Entity、插件隔离、烧录工位和弱网通信规划（仅中文提案） |
+| [plugin-implementation-stage1-2.md](plugin-implementation-stage1-2.md) | 插件系统阶段 1+2 实施记录：SDK、编译期注册表、entity 模型、事件队列、dispatcher/host 容器隔离（仅中文） |
 
 ## 快速事实
 
 - **运行时**: Bun 1.4, TypeScript strict, 零原生依赖（只有 `jose`、`pg`、
   `elysia`、`zod`、`aedes`、`@msgpack/msgpack`、`mqtt-packet` 作为测试辅助）。
-- **进程**: `@soulcloud/api` (REST, :8080)、`@soulcloud/broker`
-  （MQTT over WebSocket, :1883/mqtt）和 `@soulcloud/web`（SPA, Vite :5173
-  开发模式）——两个后端进程、一个 PostgreSQL、一个浏览器 UI。
-- **进程间通信**: 仅 PostgreSQL（持久化出站队列（outbox）+ 租约轮询；
-  LISTEN/NOTIFY 作为有损唤醒）。
+- **进程/容器**: `@soulcloud/api` (REST, :8080)、`@soulcloud/broker`
+  （MQTT over WebSocket, :1883/mqtt）、`@soulcloud/plugin-dispatcher`
+  （插件事件调度）和按插件拆分的 `@soulcloud/plugin-host` 容器，以及
+  `@soulcloud/web`（SPA, Vite :5173 开发模式）和 PostgreSQL。
+- **进程间通信**: 核心进程之间仅 PostgreSQL（持久化出站队列（outbox）+ 租约轮询；
+  LISTEN/NOTIFY 作为有损唤醒）；dispatcher 与 plugin-host 之间为容器网络上的
+  HTTP JSON-RPC（`PLUGIN_HOST_URLS`，§6.5）。
 - **协议**: MQTT 3.1.1 over WebSocket；命令使用 MessagePack payload；
   日志使用原始 on9log 包（单包或 MsgPack 打包——见
   [protocol-log-packaging.md](protocol-log-packaging.md)）。
