@@ -17,7 +17,7 @@ import {
   canonicalDescriptor,
   ensureEntityDescriptorsInTransaction,
   registerDeviceEntitiesInTransaction,
-  upsertRegistryRows,
+  upsertRegistryRowsForDevices,
 } from "./entity";
 import { findProfile, type PluginManifest } from "@soulcloud/plugin-sdk";
 
@@ -451,10 +451,13 @@ async function reconcileInstallationDevicesInTransaction(
       params.manifest.id,
       profile,
     );
-    for (const deviceRow of groupDevices) {
-      await upsertRegistryRows(tx, deviceRow.id, params.manifest.id, revisionIds);
-      devices += 1;
-    }
+    await upsertRegistryRowsForDevices(
+      tx,
+      groupDevices.map((device) => device.id),
+      params.manifest.id,
+      revisionIds,
+    );
+    devices += groupDevices.length;
     // Deprecation is scoped PER PROFILE GROUP: a key removed from profile A
     // must stay active for profile-B devices that still declare it.
     const groupKeys = profile.entities.map((e) => e.key);

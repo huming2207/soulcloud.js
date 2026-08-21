@@ -409,9 +409,26 @@ describe("reconcileInstallationDevices (H2)", () => {
         projectId: recProject,
       },
     });
+    const recDevice2 = randomUUID();
+    await prisma.device.create({
+      data: {
+        id: recDevice2,
+        deviceUid: `rec-${randomUUID().slice(0, 12)}`,
+        assignedId: "reconcile-device-2",
+        passwordHash: "unused",
+        projectId: recProject,
+      },
+    });
     try {
       await bindDeviceToInstallation(prisma, {
         deviceId: recDevice,
+        installationId: recInstall.id,
+        profileId: chaosTestPlugin.profiles[0]!.id,
+        profileVersion: chaosTestPlugin.profiles[0]!.version,
+        manifest: chaosTestPlugin,
+      });
+      await bindDeviceToInstallation(prisma, {
+        deviceId: recDevice2,
         installationId: recInstall.id,
         profileId: chaosTestPlugin.profiles[0]!.id,
         profileVersion: chaosTestPlugin.profiles[0]!.version,
@@ -437,9 +454,9 @@ describe("reconcileInstallationDevices (H2)", () => {
         installationId: recInstall.id,
         manifest: drifted,
       });
-      expect(result.devices).toBe(1);
+      expect(result.devices).toBe(2);
       expect(result.missingProfiles).toEqual([]);
-      expect(result.deprecatedRegistryRows).toBe(1);
+      expect(result.deprecatedRegistryRows).toBe(2);
 
       const rows = await prisma.$queryRaw<
         { entity_key: string; deprecated: boolean; unit: string | null }[]

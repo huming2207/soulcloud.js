@@ -161,18 +161,30 @@ export async function upsertRegistryRows(
   pluginId: string,
   revisionIds: ReadonlyMap<string, string>,
 ): Promise<void> {
+  await upsertRegistryRowsForDevices(prisma, [deviceId], pluginId, revisionIds);
+}
+
+/** Upserts one profile's registry rows for all devices in a group. */
+export async function upsertRegistryRowsForDevices(
+  prisma: DbExecutor,
+  deviceIds: readonly string[],
+  pluginId: string,
+  revisionIds: ReadonlyMap<string, string>,
+): Promise<void> {
   const entries = [...revisionIds.entries()];
-  if (entries.length === 0) return;
+  if (deviceIds.length === 0 || entries.length === 0) return;
   await prisma.$executeRaw`
     INSERT INTO entity_registry (id, device_id, plugin_id, entity_key, descriptor_revision_id, deprecated)
-    SELECT gen_random_uuid(), ${deviceId}, ${pluginId}, k, r, false
-    FROM (
-      SELECT * FROM (VALUES ${Prisma.join(
-        entries.map(([key, revisionId]) =>
-          Prisma.sql`(${key}::text, ${revisionId}::uuid)`,
-        ),
-      )}) AS t(key, revision_id)
-    ) AS pairs(k, r)
+    SELECT gen_random_uuid(), devices.device_id, ${pluginId}, pairs.entity_key,
+           pairs.revision_id, false
+    FROM (VALUES ${Prisma.join(
+      deviceIds.map((id) => Prisma.sql`(${id}::uuid)`),
+    )}) AS devices(device_id)
+    CROSS JOIN (VALUES ${Prisma.join(
+      entries.map(([key, revisionId]) =>
+        Prisma.sql`(${key}::text, ${revisionId}::uuid)`,
+      ),
+    )}) AS pairs(entity_key, revision_id)
     ON CONFLICT (device_id, plugin_id, entity_key)
     DO UPDATE SET descriptor_revision_id = EXCLUDED.descriptor_revision_id,
                   deprecated = false
