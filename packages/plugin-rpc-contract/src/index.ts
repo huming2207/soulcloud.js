@@ -124,6 +124,13 @@ export function assertRpcValueBudget(value: unknown, budget: RpcValueBudget): vo
     if (depth > budget.maxDepth) throw new Error("RPC value depth limit exceeded");
     if (typeof current === "string") { strings += new TextEncoder().encode(current).byteLength; if (strings > budget.maxStringBytes) throw new Error("RPC string byte limit exceeded"); return; }
     if (current instanceof Blob) { blobs += 1; totalBlobBytes += current.size; if (blobs > budget.maxBlobs || current.size > budget.maxBlobBytes || totalBlobBytes > budget.maxTotalBlobBytes) throw new Error("RPC Blob limit exceeded"); return; }
+    if (current instanceof ArrayBuffer || ArrayBuffer.isView(current)) {
+      const byteLength = current instanceof ArrayBuffer ? current.byteLength : current.byteLength;
+      blobs += 1;
+      totalBlobBytes += byteLength;
+      if (blobs > budget.maxBlobs || byteLength > budget.maxBlobBytes || totalBlobBytes > budget.maxTotalBlobBytes) throw new Error("RPC binary limit exceeded");
+      return;
+    }
     if (!current || typeof current !== "object") return;
     if (seen.has(current)) throw new Error("RPC cyclic value"); seen.add(current);
     if (Array.isArray(current)) { if (current.length > budget.maxArrayItems) throw new Error("RPC array item limit exceeded"); for (const value of current) visit(value, depth + 1); }

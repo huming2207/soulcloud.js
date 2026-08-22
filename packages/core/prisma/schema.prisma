@@ -469,6 +469,7 @@ model PluginDeviceBinding {
   updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz()
 
   @@index([installationId])
+  @@index([installationId, profileId, profileVersion], map: "plugin_device_bindings_installation_profile_idx")
   @@map("plugin_device_bindings")
 }
 
