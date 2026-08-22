@@ -4,10 +4,9 @@
  * The host constructs the PluginContext handed to worker code. In this
  * stage the context carries installation identity, a logger that is returned
  * as bounded per-request log entries, and the deadline signal.
- * The scoped services (devices/commands/entities/jobs) are declared in
- * the SDK for forward compatibility; their implementations require the
- * reverse RPC channel that later stages add — using them now fails with
- * a clear error instead of silently doing nothing.
+ * Device UID is a local snapshot. Entity reads and command enqueue are bound
+ * to the current operation's reverse RPC capability; jobs remain unavailable
+ * until the station workflow layer exists.
  */
 
 import type {

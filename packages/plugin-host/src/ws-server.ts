@@ -174,6 +174,7 @@ export function createPluginHostWsConnection(
           options.log(`[plugin-host ${options.manifest.id}] [${level}] ${boundedMessage}`, fields);
         };
         const bindings: PluginContextBindings = {
+          getDeviceUid: async () => input.device.deviceUid,
           getEntity: async (entityKey, signal) => snapshotToWire(await context.reverse.entityGet({
             operationId: input.operationId,
             operationToken: input.operationToken,

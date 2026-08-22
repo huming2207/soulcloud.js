@@ -451,6 +451,7 @@ async function handleRequest(
         operationId: params.eventId,
       },
       emitLog,
+      { getDeviceUid: async () => params.device.deviceUid },
     );
     const result = await worker.onEvent(ctx, {
       eventId: params.eventId,
