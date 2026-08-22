@@ -1,6 +1,6 @@
 import { RPCLink } from "@orpc/client/websocket";
 import { createContractClientFactory } from "@orpc/contract";
-import { implement } from "@orpc/server";
+import { implement, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/websocket";
 import {
   PLUGIN_RPC_D2H_PREFIX,
@@ -10,17 +10,16 @@ import {
   type CommandArgumentWire,
   type EntityGetOutput,
 } from "@soulcloud/plugin-rpc-contract";
-import type {
-  CommandArgument,
-  EntityStateSnapshot,
-  PluginManifest,
-  PluginWorker,
-} from "@soulcloud/plugin-sdk";
+import type { EntityStateSnapshot, PluginManifest, PluginWorker } from "@soulcloud/plugin-sdk";
 import { validateActionInput, validateEventUpdates } from "@soulcloud/plugin-sdk";
 import { createPluginContext, type PluginContextBindings } from "./context";
 
 const MAX_LOGS_PER_EVENT = 32;
 const MAX_LOG_MESSAGE_BYTES = 4 * 1024;
+
+function rpcError(code: string, message: string): never {
+  throw new ORPCError(code as never, { message });
+}
 
 type Listener = (event: unknown) => void;
 
@@ -52,18 +51,6 @@ function createServerWebSocketBridge(ws: Bun.ServerWebSocket<unknown>) {
     },
   };
   return bridge;
-}
-
-async function commandArgsFromWire(args: CommandArgumentWire[]): Promise<CommandArgument[]> {
-  const result: CommandArgument[] = [];
-  for (const arg of args) {
-    result.push({
-      [arg.name]: arg.value instanceof Blob
-        ? new Uint8Array(await arg.value.arrayBuffer())
-        : arg.value,
-    });
-  }
-  return result;
 }
 
 function snapshotToWire(snapshot: EntityStateSnapshot | null): EntityGetOutput {
@@ -105,6 +92,7 @@ export function createPluginHostWsConnection(
   });
   const reverseClient = createContractClientFactory(reverseLink)(hostToDispatcherContract);
   let running = 0;
+  const activeSignals = new Set<AbortController>();
 
   type HostContext = { reverse: typeof reverseClient };
   const implemented = implement(dispatcherToHostContract).$context<HostContext>();
@@ -117,22 +105,31 @@ export function createPluginHostWsConnection(
     })),
     ping: implemented.ping.handler(({ input }) => input),
     encodeAction: implemented.encodeAction.handler(async ({ input }) => {
-      if (running >= options.maxConcurrentHandlers) throw new Error("overloaded: too many concurrent executions");
+      if (running >= options.maxConcurrentHandlers) rpcError("OVERLOADED", "too many concurrent executions");
       running += 1;
       try {
         const action = options.manifest.actions.find((candidate) => candidate.id === input.actionId);
-        if (!action) throw new Error(`invalid_params: unknown action "${input.actionId}"`);
+        if (!action) rpcError("INVALID_ACTION_INPUT", `unknown action "${input.actionId}"`);
         const check = validateActionInput(action.inputSchema, input.input ?? {});
         if (!check.ok) {
-          throw new Error(`invalid_params: invalid action input — ${check.failures.map((f) => `${f.field} ${f.error}`).join("; ")}`);
+          rpcError("INVALID_ACTION_INPUT", `invalid action input — ${check.failures.map((f) => `${f.field} ${f.error}`).join("; ")}`);
         }
-        const args = action.wire.encode(input.input);
+        let args;
+        try {
+          args = action.wire.encode(input.input);
+        } catch (error) {
+          rpcError("HANDLER_ERROR", `action encoder threw: ${(error as Error).message}`);
+        }
+        if (!Array.isArray(args) || args.length > 256) rpcError("INVALID_ACTION_OUTPUT", "encoder returned an invalid argument array");
         return {
           cmd: action.wire.command,
           args: args.map((arg) => {
             const name = Object.keys(arg)[0]!;
             const value = arg[name];
-            if (value === undefined) throw new Error("invalid_action_output: encoder argument contains undefined");
+            if (value === undefined) rpcError("INVALID_ACTION_OUTPUT", "encoder argument contains undefined");
+            if (Object.keys(arg).length !== 1) rpcError("INVALID_ACTION_OUTPUT", "encoder argument must be a single-key map");
+            const scalar = value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "bigint" || value instanceof Uint8Array || (typeof value === "number" && Number.isFinite(value));
+            if (!scalar) rpcError("INVALID_ACTION_OUTPUT", "encoder argument contains a non-scalar value");
             return { name, value: value instanceof Uint8Array ? new Blob([value]) : value };
           }),
           schemaVersion: action.wire.schemaVersion,
@@ -142,13 +139,15 @@ export function createPluginHostWsConnection(
       }
     }),
     handleEvent: implemented.handleEvent.handler(async ({ input, context }) => {
-      if (running >= options.maxConcurrentHandlers) throw new Error("overloaded: too many concurrent executions");
+      if (running >= options.maxConcurrentHandlers) rpcError("OVERLOADED", "too many concurrent executions");
       running += 1;
+      let operationController: AbortController | undefined;
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         const profile = options.manifest.profiles.find(
           (candidate) => candidate.id === input.device.profileId && candidate.version === input.device.profileVersion,
         );
-        if (!profile) throw new Error(`internal_error: unknown profile ${input.device.profileId} v${input.device.profileVersion}`);
+        if (!profile) rpcError("INTERNAL_SERVER_ERROR", `unknown profile ${input.device.profileId} v${input.device.profileVersion}`);
         const emitLog = (
           level: "debug" | "info" | "warn" | "error",
           message: string,
@@ -173,15 +172,18 @@ export function createPluginHostWsConnection(
               args: args.map((arg) => {
                 const name = Object.keys(arg)[0]!;
                 const value = arg[name];
-                if (value === undefined) throw new Error("invalid_action_output: command argument contains undefined");
+                if (value === undefined) rpcError("INVALID_ACTION_OUTPUT", "command argument contains undefined");
                 return { name, value: value instanceof Uint8Array ? new Blob([value]) : value };
               }),
             }, { signal });
           },
         };
+        operationController = new AbortController();
+        deadlineTimer = setTimeout(() => operationController?.abort(), input.deadlineMs);
+        activeSignals.add(operationController);
         const ctx = createPluginContext(
           input.installation,
-          AbortSignal.timeout(input.deadlineMs),
+          operationController.signal,
           {
             pluginId: options.manifest.id,
             installationId: input.installation.id,
@@ -202,10 +204,12 @@ export function createPluginHostWsConnection(
         const updates = result?.updates ?? [];
         const check = validateEventUpdates(profile.entities, updates);
         if (!check.ok) {
-          throw new Error(`invalid_params: invalid plugin output — ${check.failures.slice(0, 5).map((f) => `${f.entityKey}: ${f.error}`).join("; ")}`);
+          rpcError("INVALID_PLUGIN_OUTPUT", `invalid plugin output — ${check.failures.slice(0, 5).map((f) => `${f.entityKey}: ${f.error}`).join("; ")}`);
         }
         return { updates };
       } finally {
+        if (deadlineTimer) clearTimeout(deadlineTimer);
+        if (operationController) activeSignals.delete(operationController);
         running -= 1;
       }
     }),
@@ -219,6 +223,8 @@ export function createPluginHostWsConnection(
     handler,
     reverseClient,
     async close() {
+      for (const controller of activeSignals) controller.abort();
+      activeSignals.clear();
       bridge.close();
       await handler.close(ws);
     },

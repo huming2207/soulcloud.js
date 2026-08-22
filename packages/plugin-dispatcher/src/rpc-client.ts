@@ -420,6 +420,17 @@ class PluginHostWsClient implements PluginHostClientLike {
       const coded = error as Error & { code?: string };
       const prefix = message.match(/^([a-z_]+):\s*(.*)$/i);
       if (prefix) coded.code = prefix[1];
+      if (coded.code) {
+        const codeMap: Record<string, string> = {
+          INVALID_ACTION_INPUT: "invalid_params",
+          INVALID_ACTION_OUTPUT: "invalid_action_output",
+          INVALID_PLUGIN_OUTPUT: "invalid_params",
+          OVERLOADED: "overloaded",
+          HANDLER_ERROR: "handler_error",
+          INTERNAL_SERVER_ERROR: "handler_error",
+        };
+        coded.code = codeMap[coded.code] ?? codeMap[coded.code.toUpperCase()] ?? coded.code.toLowerCase();
+      }
       if (coded.code) throw coded;
       throw new PluginHostUnavailableError(message);
     } finally {

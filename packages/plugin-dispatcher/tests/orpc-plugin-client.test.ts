@@ -103,3 +103,15 @@ test("oRPC WebSocket client performs handshake, event and action calls", async (
     client.close();
   }
 });
+
+test("oRPC application errors keep input failures distinct from transport failures", async () => {
+  const client = await PluginHostClient.connect({ baseUrl: host.wsUrl });
+  try {
+    await expect(client.request("action.encode", {
+      actionId: "does-not-exist",
+      input: {},
+    }, 5_000)).rejects.toMatchObject({ code: "invalid_params" });
+  } finally {
+    client.close();
+  }
+});
