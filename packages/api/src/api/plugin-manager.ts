@@ -1,4 +1,4 @@
-import type { JwtConfig, PrismaClient } from "@soulcloud/core";
+import { signPluginUiSession, type JwtConfig, type PrismaClient } from "@soulcloud/core";
 import { Elysia } from "elysia";
 import type { PluginManagerOptions } from "./app";
 import { authenticateRequest, userCanAccessProject } from "./validate";
@@ -103,5 +103,18 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
         set.status = result.status;
         return result.value;
       } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
+    })
+    .get("/v1/plugin-installations/:id/ui-session/:routeId", async ({ request, params, query, set }) => {
+      const user = await authenticateRequest(prisma, jwt, request);
+      if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      if (!options?.uiSessionSecret) { set.status = 503; return { error: "plugin_ui_unavailable", message: "plugin UI sessions are not configured" }; }
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true } });
+      if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
+      if (installation.state !== "enabled" || !(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "plugin installation access denied" }; }
+      const snapshot = await prisma.pluginManifestSnapshot.findUnique({ where: { pluginId_pluginVersion: { pluginId: installation.pluginId, pluginVersion: installation.pluginVersion } }, select: { canonicalManifest: true, manifestHash: true } });
+      const manifest = snapshot?.canonicalManifest as { ui?: { routes?: Array<{ id: string }> } } | undefined;
+      if (!snapshot || snapshot.manifestHash.trim() !== installation.manifestHash.trim() || !manifest?.ui?.routes?.some((route) => route.id === params.routeId)) { set.status = 404; return { error: "not_found", message: "plugin UI route not found" }; }
+      const locale = typeof query?.locale === "string" && query.locale.length <= 32 ? query.locale : "en";
+      return { session: signPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds: options.uiSessionTtlSeconds ?? 300 }, { sub: user.user.id, projectId: installation.projectId, installationId: params.id, pluginId: installation.pluginId, pluginVersion: installation.pluginVersion, manifestHash: installation.manifestHash.trim(), routeId: params.routeId, permissions: [], locale }) };
     });
 }

@@ -30,6 +30,8 @@ export const envSchema = z.object({
   PLUGIN_MANAGER_INTERNAL_URL: z.string().url().default("http://127.0.0.1:8091"),
   PLUGIN_MANAGER_SERVICE_TOKEN: z.string().min(16).optional(),
   PLUGIN_MANAGER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(5_000),
+  PLUGIN_MANAGER_UI_SESSION_SECRET: z.string().min(32).optional(),
+  PLUGIN_UI_SESSION_TTL_SECONDS: z.coerce.number().int().positive().max(900).default(300),
 });
 
 export type ApiConfig = BaseConfig & z.infer<typeof envSchema>;

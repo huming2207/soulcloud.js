@@ -7,6 +7,8 @@ const config = loadPluginManagerConfig();
 const manager = new PluginManager({
   endpoints: parsePluginEndpoints(config.PLUGIN_ENDPOINTS),
   prisma,
+  uiSessionSecret: config.PLUGIN_MANAGER_UI_SESSION_SECRET,
+  uiSessionTtlSeconds: config.PLUGIN_UI_SESSION_TTL_SECONDS,
   authToken: process.env.PLUGIN_RPC_AUTH_TOKEN,
   maxFrameBytes: config.PLUGIN_RPC_MAX_FRAME_BYTES,
   maxPendingRequests: config.PLUGIN_RPC_MAX_PENDING_REQUESTS,
@@ -23,7 +25,7 @@ const manager = new PluginManager({
   eventMaxAttempts: config.PLUGIN_EVENT_MAX_ATTEMPTS,
 });
 await manager.start();
-const server = startPluginManagerServer({ hostname: config.PLUGIN_MANAGER_INTERNAL_BIND, port: config.PLUGIN_MANAGER_INTERNAL_PORT, serviceToken: config.PLUGIN_MANAGER_SERVICE_TOKEN, manager });
+const server = startPluginManagerServer({ hostname: config.PLUGIN_MANAGER_INTERNAL_BIND, port: config.PLUGIN_MANAGER_INTERNAL_PORT, serviceToken: config.PLUGIN_MANAGER_SERVICE_TOKEN, manager, uiSessionSecret: config.PLUGIN_MANAGER_UI_SESSION_SECRET, uiSessionTtlSeconds: config.PLUGIN_UI_SESSION_TTL_SECONDS });
 console.log(`[soulcloud-plugin-manager] listening on ${server.url}`);
 let stopping = false;
 async function shutdown(signal: string) { if (stopping) return; stopping = true; console.log(`[soulcloud-plugin-manager] ${signal}`); server.stop(); await manager.stop(); await prisma.$disconnect(); process.exit(0); }

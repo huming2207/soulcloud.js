@@ -33,6 +33,7 @@ export * from "./ota/deploy";
 export * from "./ota/rollout";
 export * from "./security/password";
 export * from "./auth/tokens";
+export * from "./auth/plugin-ui-session";
 export { prisma, ping, createPrisma, Prisma } from "./db";
 export type { PrismaClient } from "./db";
 export { SharedEnv, loadEnv } from "./config";

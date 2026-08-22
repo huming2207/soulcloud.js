@@ -17,6 +17,7 @@ import {
   type LeasedPluginEvent,
   type EntityUpdateInput,
   type CommandArgument,
+  type PluginUiSession,
   type BindDeviceInput,
   type CreateInstallationInput,
   type PrismaClient,
@@ -33,6 +34,8 @@ export interface PluginManagerOptions {
   heartbeatTimeoutMs: number;
   reconnectMs: number;
   prisma?: PrismaClient;
+  uiSessionSecret?: string;
+  uiSessionTtlSeconds?: number;
   manifestStore?: ManifestStore;
   reverseHandlers?: Partial<ReverseHandlers>;
   eventStore?: PluginEventStore;
@@ -215,6 +218,42 @@ export class PluginManager {
       }
       const batch = await enqueueBatch(this.options.prisma, [input.deviceId], { cmd: encoded.command, args });
       return { batchId: batch.id, deviceCount: batch.deviceCount };
+    } finally {
+      this.operations.delete(operationId);
+    }
+  }
+
+  async renderPluginUi(session: PluginUiSession, requestId: string, params: Record<string, string>): Promise<unknown> {
+    return this.callUi(session, "ui.render", { requestId, params });
+  }
+
+  async handlePluginUiAction(session: PluginUiSession, requestId: string, params: Record<string, string>, action: unknown): Promise<unknown> {
+    return this.callUi(session, "ui.handleAction", { requestId, params, action });
+  }
+
+  private async callUi(session: PluginUiSession, method: "ui.render" | "ui.handleAction", input: { requestId: string; params: Record<string, string>; action?: unknown }): Promise<unknown> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    const installation = await this.options.prisma.pluginInstallation.findUnique({ where: { id: session.installationId }, select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true } });
+    if (!installation || installation.state !== "enabled" || installation.projectId !== session.projectId || installation.pluginId !== session.pluginId || installation.pluginVersion !== session.pluginVersion || installation.manifestHash.trim() !== session.manifestHash) throw new Error("plugin UI session is no longer valid");
+    const manifest = this.getManifest(session.pluginId, session.pluginVersion);
+    if (!manifest?.ui?.routes.some((route) => route.id === session.routeId)) throw new Error("plugin UI route is not declared");
+    const connection = this.connections.get(session.pluginId);
+    if (!connection?.isOpen) throw new Error("plugin is unavailable");
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    this.operations.set(operationId, { operationToken, connectionId: connection.id, installationId: session.installationId, projectId: session.projectId, pluginId: session.pluginId, pluginVersion: session.pluginVersion });
+    try {
+      return await connection.request(method, {
+        operationId,
+        operationToken,
+        requestId,
+        routeId: session.routeId,
+        installationId: session.installationId,
+        projectId: session.projectId,
+        user: { id: session.sub, locale: session.locale, permissions: session.permissions },
+        params,
+        ...(method === "ui.handleAction" ? { action: input.action } : {}),
+      }, 30_000);
     } finally {
       this.operations.delete(operationId);
     }

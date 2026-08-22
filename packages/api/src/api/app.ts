@@ -75,6 +75,8 @@ export interface PluginManagerOptions {
   internalUrl: string;
   serviceToken?: string;
   requestTimeoutMs?: number;
+  uiSessionSecret?: string;
+  uiSessionTtlSeconds?: number;
 }
 
 export function createApp(

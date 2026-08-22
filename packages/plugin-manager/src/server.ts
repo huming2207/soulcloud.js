@@ -1,6 +1,7 @@
 import { PluginManager } from "./manager";
+import { verifyPluginUiSession } from "@soulcloud/core";
 
-export interface PluginManagerServerOptions { hostname: string; port: number; serviceToken: string; manager: PluginManager; }
+export interface PluginManagerServerOptions { hostname: string; port: number; serviceToken: string; manager: PluginManager; uiSessionSecret?: string; uiSessionTtlSeconds?: number; }
 function json(status: number, value: unknown): Response { return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } }); }
 function authorized(request: Request, token: string): boolean { return request.headers.get("authorization") === `Bearer ${token}`; }
 
@@ -17,6 +18,15 @@ function failure(error: unknown): Response {
   return json(mapped, { error: mapped === 400 ? "invalid_request" : mapped === 502 ? "plugin_action_failed" : "plugin_manager_error", message });
 }
 
+function renderDocument(html: string, title?: string): Response {
+  const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title ?? "Soulcloud")}</title></head><body>${html}</body></html>`;
+  return new Response(page, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" } });
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
+}
+
 export function startPluginManagerServer(options: PluginManagerServerOptions): { url: string; stop(): void } {
   const server = Bun.serve({
     hostname: options.hostname,
@@ -25,6 +35,41 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health/live") return json(200, { status: "ok" });
       if (request.method === "GET" && url.pathname === "/health/ready") return json(200, { status: "ready" });
+      if (url.pathname.startsWith("/plugins/")) {
+        if (!options.uiSessionSecret) return json(503, { error: "plugin_ui_unavailable" });
+        const token = request.headers.get("x-soulcloud-plugin-session");
+        if (!token) return json(401, { error: "plugin_ui_session_required" });
+        let session;
+        try {
+          session = verifyPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds: options.uiSessionTtlSeconds ?? 300 }, token);
+        } catch { return json(401, { error: "invalid_plugin_ui_session" }); }
+        if (!url.pathname.startsWith(`/plugins/${session.installationId}/`)) return json(403, { error: "plugin_ui_scope_mismatch" });
+        const manifest = options.manager.getManifest(session.pluginId, session.pluginVersion);
+        const route = manifest?.ui?.routes.find((item) => item.id === session.routeId);
+        const routePath = route?.path.startsWith("/") ? route.path : `/${route?.path ?? ""}`;
+        if (!route || url.pathname !== `/plugins/${session.installationId}${routePath}`) return json(404, { error: "plugin_ui_route_not_found" });
+        const params = Object.fromEntries(url.searchParams.entries());
+        try {
+          if (request.method === "GET") {
+            const output = await options.manager.renderPluginUi(session, crypto.randomUUID(), params) as { html?: unknown; title?: string; status?: number };
+            if (typeof output.html !== "string") return json(502, { error: "plugin_ui_invalid_output" });
+            const response = renderDocument(output.html, output.title);
+            if (output.status && output.status !== 200) return new Response(response.body, { status: output.status, headers: response.headers });
+            return response;
+          }
+          if (request.method !== "POST") return json(405, { error: "method_not_allowed" });
+          const body = await requestJson(request) as { action?: unknown };
+          const actionResult = await options.manager.handlePluginUiAction(session, crypto.randomUUID(), params, body.action);
+          if (actionResult && typeof actionResult === "object" && "redirect" in actionResult && typeof (actionResult as { redirect?: unknown }).redirect === "string") {
+            const redirect = (actionResult as { redirect: string }).redirect;
+            if (!redirect.startsWith("/") || redirect.startsWith("//")) return json(502, { error: "plugin_ui_invalid_redirect" });
+            return new Response(null, { status: 303, headers: { location: redirect } });
+          }
+          const output = await options.manager.renderPluginUi(session, crypto.randomUUID(), params) as { html?: unknown; title?: string };
+          if (typeof output.html !== "string") return json(502, { error: "plugin_ui_invalid_output" });
+          return renderDocument(output.html, output.title);
+        } catch (error) { return failure(error); }
+      }
       if (!url.pathname.startsWith("/internal/plugins/")) return json(404, { error: "not_found" });
       if (!authorized(request, options.serviceToken)) return json(401, { error: "unauthorized" });
       if (request.method === "GET" && url.pathname === "/internal/plugins/catalog") return json(200, { plugins: options.manager.listCatalog() });

@@ -46,6 +46,8 @@ const app = createApp(
     internalUrl: config.PLUGIN_MANAGER_INTERNAL_URL,
     serviceToken: config.PLUGIN_MANAGER_SERVICE_TOKEN,
     requestTimeoutMs: config.PLUGIN_MANAGER_REQUEST_TIMEOUT_MS,
+    uiSessionSecret: config.PLUGIN_MANAGER_UI_SESSION_SECRET,
+    uiSessionTtlSeconds: config.PLUGIN_UI_SESSION_TTL_SECONDS,
   },
 );
 // WEB-09: Bun buffers request bodies up to maxRequestBodySize before
