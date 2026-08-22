@@ -38,6 +38,9 @@ export const LOG_EVENTS_CHANNEL = "soulcloud_log_events";
  */
 export const COMMAND_RESULT_CHANNEL = "soulcloud_command_results";
 
+/** Wake-up channel for newly persisted generic device plugin events. */
+export const PLUGIN_EVENTS_CHANNEL = "soulcloud_plugin_events";
+
 /**
  * Rollout lifecycle notifications for the web console (payload = JSON
  * { type, rollout_id, project_id, ts }). Fired after the state

@@ -18,6 +18,10 @@ describe("parseDeviceTopic", () => {
       deviceUid: "dev-42",
       kind: "stat",
     });
+    expect(parseDeviceTopic("soulcloud/v1/devices/dev-42/event")).toEqual({
+      deviceUid: "dev-42",
+      kind: "event",
+    });
     expect(parseDeviceTopic("soulcloud/v1/devices/dev-42/cmd/result")).toEqual({
       deviceUid: "dev-42",
       kind: "cmd/result",
@@ -69,12 +73,13 @@ describe("isValidDeviceUid", () => {
 });
 
 describe("DEVICE_TO_PLATFORM_FILTERS", () => {
-  test("contains the four uplink filters", () => {
+  test("contains the five uplink filters", () => {
     expect(DEVICE_TO_PLATFORM_FILTERS).toEqual([
       "soulcloud/v1/devices/+/cmd/result",
       "soulcloud/v1/devices/+/ota/result",
       "soulcloud/v1/devices/+/log",
       "soulcloud/v1/devices/+/stat",
+      "soulcloud/v1/devices/+/event",
     ]);
   });
 });

@@ -80,6 +80,7 @@ model Project {
   otaJobs      OtaJob[]
   rollouts     OtaRollout[]
   userLinks    UserProject[]
+  pluginInstallations PluginInstallation[]
 
   @@map("projects")
 }
@@ -105,6 +106,8 @@ model Device {
   logEvents        RawLogEvent[]
   otaTargets       OtaTarget[]
   rolloutPool      OtaRolloutPool[]
+  pluginBindings   PluginDeviceBinding[]
+  pluginEvents     PluginEvent[]
 
   @@unique([projectId, assignedId], map: "devices_project_assigned_id_unique")
   @@map("devices")
@@ -426,4 +429,77 @@ model PluginManifestSnapshot {
   @@unique([pluginId, pluginVersion], map: "plugin_manifest_snapshots_plugin_version_unique")
   @@index([pluginId, firstSeenAt])
   @@map("plugin_manifest_snapshots")
+}
+
+/// A project-level enablement of one immutable plugin manifest snapshot.
+model PluginInstallation {
+  id            String   @id @default(uuid()) @db.Uuid
+  projectId     String   @map("project_id") @db.Uuid
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  pluginId      String   @map("plugin_id") @db.VarChar(128)
+  pluginVersion String   @map("plugin_version") @db.VarChar(128)
+  manifestHash  String   @map("manifest_hash") @db.Char(64)
+  /// enabled | disabled
+  state         String   @default("enabled") @db.VarChar(16)
+  config        Json
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  bindings      PluginDeviceBinding[]
+  events        PluginEvent[]
+
+  @@unique([projectId, pluginId], map: "plugin_installations_project_plugin_unique")
+  @@index([pluginId, state])
+  @@map("plugin_installations")
+}
+
+/// Device-to-plugin profile binding used to route generic device events.
+model PluginDeviceBinding {
+  deviceId       String            @id @map("device_id") @db.Uuid
+  device         Device            @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  installationId String            @map("installation_id") @db.Uuid
+  installation   PluginInstallation @relation(fields: [installationId], references: [id], onDelete: Restrict)
+  profileId      String            @map("profile_id") @db.VarChar(128)
+  profileVersion Int               @map("profile_version")
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@index([installationId])
+  @@map("plugin_device_bindings")
+}
+
+/// Durable device event envelope. `payload` is the original MessagePack
+/// envelope; plugin-specific data is intentionally opaque to the broker.
+model PluginEvent {
+  id             String             @id @default(uuid()) @db.Uuid
+  eventId        String             @map("event_id") @db.Char(32)
+  deviceId       String             @map("device_id") @db.Uuid
+  device         Device             @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  seq            BigInt
+  kind           String             @db.VarChar(128)
+  schema         Int
+  payload        Bytes
+  receivedAt     DateTime           @default(now()) @map("received_at") @db.Timestamptz()
+  installationId String?            @map("installation_id") @db.Uuid
+  installation   PluginInstallation? @relation(fields: [installationId], references: [id], onDelete: SetNull)
+  pluginId       String?            @map("plugin_id") @db.VarChar(128)
+  pluginVersion  String?            @map("plugin_version") @db.VarChar(128)
+  manifestHash   String?            @map("manifest_hash") @db.Char(64)
+  profileId      String?            @map("profile_id") @db.VarChar(128)
+  profileVersion Int?               @map("profile_version")
+  installationConfig Json?         @map("installation_config")
+  /// queued | leased | completed | dead
+  state          String             @default("queued") @db.VarChar(16)
+  attemptCount   Int                @default(0) @map("attempt_count")
+  availableAt    DateTime           @default(now()) @map("available_at") @db.Timestamptz()
+  leaseExpiresAt DateTime?          @map("lease_expires_at") @db.Timestamptz()
+  leaseToken    String?            @map("lease_token") @db.VarChar(64)
+  finishedAt     DateTime?          @map("finished_at") @db.Timestamptz()
+  lastError      String?            @map("last_error") @db.Text
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@unique([deviceId, eventId], map: "plugin_events_device_event_unique")
+  @@index([state, availableAt], map: "plugin_events_state_available_idx")
+  @@index([installationId, state, availableAt], map: "plugin_events_installation_state_idx")
+  @@index([finishedAt], map: "plugin_events_finished_idx")
+  @@map("plugin_events")
 }

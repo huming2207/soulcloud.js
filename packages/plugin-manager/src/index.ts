@@ -1,6 +1,6 @@
 import { prisma } from "@soulcloud/core";
 import { loadPluginManagerConfig, parsePluginEndpoints } from "./config";
-import { PluginManager, PrismaManifestStore } from "./manager";
+import { PluginManager, PrismaManifestStore, PrismaPluginEventStore } from "./manager";
 import { startPluginManagerServer } from "./server";
 
 const config = loadPluginManagerConfig();
@@ -14,6 +14,12 @@ const manager = new PluginManager({
   heartbeatTimeoutMs: config.PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS,
   reconnectMs: config.PLUGIN_MANAGER_RECONNECT_MS,
   manifestStore: new PrismaManifestStore(prisma),
+  eventStore: new PrismaPluginEventStore(prisma),
+  eventPollIntervalMs: config.PLUGIN_EVENT_POLL_INTERVAL_MS,
+  eventLeaseMs: config.PLUGIN_EVENT_LEASE_MS,
+  eventBatchSize: config.PLUGIN_EVENT_BATCH_SIZE,
+  eventTimeoutMs: config.PLUGIN_EVENT_TIMEOUT_MS,
+  eventMaxAttempts: config.PLUGIN_EVENT_MAX_ATTEMPTS,
 });
 await manager.start();
 const server = startPluginManagerServer({ hostname: config.PLUGIN_MANAGER_INTERNAL_BIND, port: config.PLUGIN_MANAGER_INTERNAL_PORT, serviceToken: config.PLUGIN_MANAGER_SERVICE_TOKEN, manager });

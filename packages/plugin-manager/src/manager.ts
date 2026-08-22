@@ -1,6 +1,14 @@
 import { validateManifest, type PluginManifest } from "@soulcloud/plugin-sdk";
 import { canonicalJson, sha256Hex, type HandshakeOutput } from "@soulcloud/plugin-rpc-contract";
-import { Prisma, type PrismaClient } from "@soulcloud/core";
+import {
+  completePluginEvent,
+  decodeDeviceEvent,
+  leasePluginEvents,
+  releasePluginEvent,
+  Prisma,
+  type LeasedPluginEvent,
+  type PrismaClient,
+} from "@soulcloud/core";
 import { PluginConnection, type PluginConnectionOptions, type ReverseHandlers } from "./connection";
 
 export interface PluginManagerOptions {
@@ -14,7 +22,28 @@ export interface PluginManagerOptions {
   reconnectMs: number;
   manifestStore?: ManifestStore;
   reverseHandlers?: Partial<ReverseHandlers>;
+  eventStore?: PluginEventStore;
+  eventPollIntervalMs?: number;
+  eventLeaseMs?: number;
+  eventBatchSize?: number;
+  eventTimeoutMs?: number;
+  eventMaxAttempts?: number;
   log?: (message: string, fields?: Record<string, unknown>) => void;
+}
+
+export interface PluginEventStore {
+  lease(limit: number, leaseMs: number): Promise<LeasedPluginEvent[]>;
+  complete(eventId: string, leaseToken: string): Promise<boolean>;
+  release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number): Promise<boolean>;
+}
+
+export class PrismaPluginEventStore implements PluginEventStore {
+  constructor(private readonly prisma: PrismaClient) {}
+  lease(limit: number, leaseMs: number) { return leasePluginEvents(this.prisma, limit, leaseMs); }
+  complete(eventId: string, leaseToken: string) { return completePluginEvent(this.prisma, eventId, leaseToken); }
+  release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number) {
+    return releasePluginEvent(this.prisma, eventId, leaseToken, permanent, error, retryMs);
+  }
 }
 
 export interface CatalogEntry {
@@ -59,6 +88,8 @@ export class PluginManager {
   private readonly connections = new Map<string, PluginConnection>();
   private readonly catalog = new Map<string, CatalogEntry>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private eventTimer: ReturnType<typeof setInterval> | null = null;
+  private eventPollRunning = false;
   private stopping = false;
   private readonly log: (message: string, fields?: Record<string, unknown>) => void;
 
@@ -71,6 +102,12 @@ export class PluginManager {
       for (const entry of await this.options.manifestStore.list()) this.catalog.set(`${entry.pluginId}@${entry.pluginVersion}`, { ...entry, connected: false });
     }
     for (const [pluginId] of this.options.endpoints) void this.connect(pluginId);
+    if (this.options.eventStore) {
+      const interval = this.options.eventPollIntervalMs ?? 500;
+      this.eventTimer = setInterval(() => void this.consumeEvents(), interval);
+      this.eventTimer.unref?.();
+      void this.consumeEvents();
+    }
   }
 
   private connectionFor(pluginId: string): PluginConnection {
@@ -126,9 +163,90 @@ export class PluginManager {
     timer.unref?.(); this.timers.set(pluginId, timer);
   }
 
+  private async consumeEvents(): Promise<void> {
+    if (this.stopping || this.eventPollRunning || !this.options.eventStore) return;
+    this.eventPollRunning = true;
+    try {
+      const events = await this.options.eventStore.lease(
+        this.options.eventBatchSize ?? 32,
+        this.options.eventLeaseMs ?? 60_000,
+      );
+      for (const event of events) await this.dispatchEvent(event);
+    } catch (error) {
+      this.log("event poll failed", { error: (error as Error).message });
+    } finally {
+      this.eventPollRunning = false;
+    }
+  }
+
+  private async dispatchEvent(event: LeasedPluginEvent): Promise<void> {
+    const store = this.options.eventStore!;
+    const connection = this.connections.get(event.plugin_id);
+    if (!connection?.isOpen) {
+      await this.releaseEvent(event, false, "plugin is unavailable");
+      return;
+    }
+    try {
+      const envelope = decodeDeviceEvent(event.payload);
+      const result = await connection.request("plugin.handleEvent", {
+        operationId: crypto.randomUUID(),
+        operationToken: `${crypto.randomUUID()}${crypto.randomUUID()}`,
+        event: {
+          id: event.event_id.trim(),
+          kind: envelope.kind,
+          schema: envelope.schema,
+          receivedAt: event.received_at.toISOString(),
+          payload: envelope.data,
+        },
+        installation: {
+          id: event.installation_id,
+          projectId: event.project_id,
+          pluginId: event.plugin_id,
+          pluginVersion: event.plugin_version,
+          config: event.installation_config,
+        },
+        device: {
+          id: event.device_id,
+          uid: event.device_uid,
+          profileId: event.profile_id,
+          profileVersion: event.profile_version,
+        },
+      }, this.options.eventTimeoutMs ?? 30_000);
+      void result;
+      await store.complete(event.id, event.lease_token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code = typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code: unknown }).code)
+        : "";
+      const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT";
+      await this.releaseEvent(event, permanent, message);
+    }
+  }
+
+  private async releaseEvent(event: LeasedPluginEvent, permanent: boolean, message: string): Promise<void> {
+    const attempts = event.attempt_count;
+    const maxAttempts = this.options.eventMaxAttempts ?? 5;
+    const dead = permanent || attempts >= maxAttempts;
+    const retryMs = Math.min(60_000, 1_000 * 2 ** Math.min(attempts, 6));
+    try {
+      await this.options.eventStore!.release(event.id, event.lease_token, dead, message.slice(0, 2_000), retryMs);
+    } catch (error) {
+      this.log("event lease release failed", { eventId: event.id, error: (error as Error).message });
+    }
+  }
+
   listCatalog(): CatalogEntry[] { return [...this.catalog.values()].map((entry) => ({ ...entry, connected: this.connections.get(entry.pluginId)?.isOpen ?? false })); }
   getConnection(pluginId: string): PluginConnection | undefined { return this.connections.get(pluginId); }
   getManifest(pluginId: string, version: string): PluginManifest | undefined { return this.catalog.get(`${pluginId}@${version}`)?.manifest; }
 
-  async stop(): Promise<void> { this.stopping = true; for (const timer of this.timers.values()) clearTimeout(timer); this.timers.clear(); for (const connection of this.connections.values()) connection.close(); this.connections.clear(); }
+  async stop(): Promise<void> {
+    this.stopping = true;
+    if (this.eventTimer) clearInterval(this.eventTimer);
+    this.eventTimer = null;
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+    for (const connection of this.connections.values()) connection.close();
+    this.connections.clear();
+  }
 }

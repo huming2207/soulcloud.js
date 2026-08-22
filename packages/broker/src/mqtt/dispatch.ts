@@ -7,6 +7,8 @@
  *   - stat: validate; persistence semantics are not yet defined, so only
  *     log metadata (same as the Rust version)
  *   - log: payload contract not yet defined; log metadata only
+ *   - event: validate the generic envelope and persist an opaque, immutable
+ *     plugin event row; plugin-specific data is never decoded by the broker
  *
  * Unexpected topics and invalid payloads are logged without the raw payload
  * (avoid leaking device data and log amplification).
@@ -20,6 +22,8 @@ import {
   decodeDeviceCommandResult,
   decodeDeviceStat,
   decodeOtaResult,
+  decodeDeviceEvent,
+  ingestDeviceEvent,
   ingestLogBundle,
   LogContainerError,
   LogIngestError,
@@ -278,6 +282,48 @@ async function handleUplink(
     case "log":
       await handleLog(prisma, deviceUid, payload, log, parsedLog);
       break;
+    case "event":
+      await handleEvent(prisma, deviceUid, payload, log);
+      break;
+  }
+}
+
+async function handleEvent(
+  prisma: PrismaClient,
+  deviceUid: string,
+  payload: Uint8Array,
+  log: DispatchLog,
+): Promise<void> {
+  let event;
+  try {
+    event = decodeDeviceEvent(payload);
+  } catch (error) {
+    log.warn("ignored invalid device event", {
+      deviceUid,
+      payloadBytes: payload.length,
+      error: (error as Error).message,
+    });
+    return;
+  }
+
+  try {
+    const outcome = await ingestDeviceEvent(prisma, deviceUid, event, payload);
+    if (outcome.status === "unknown_device") {
+      log.warn("ignored event from unknown device", { deviceUid });
+      return;
+    }
+    log.debug("persisted device plugin event", {
+      deviceUid,
+      eventId: outcome.eventId,
+      status: outcome.status,
+      kind: event.kind,
+    });
+  } catch (error) {
+    log.warn("failed to persist device plugin event", {
+      deviceUid,
+      eventId: bytesToUuid(event.id),
+      error: (error as Error).message,
+    });
   }
 }
 

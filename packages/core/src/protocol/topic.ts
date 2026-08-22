@@ -11,6 +11,7 @@
  *                       soulcloud/v1/devices/{dev_uid}/ota/result
  *                       soulcloud/v1/devices/{dev_uid}/log
  *                       soulcloud/v1/devices/{dev_uid}/stat
+ *                       soulcloud/v1/devices/{dev_uid}/event
  */
 
 export const TOPIC_PREFIX = "soulcloud/v1/devices";
@@ -21,9 +22,10 @@ export const DEVICE_TO_PLATFORM_FILTERS = [
   `${TOPIC_PREFIX}/+/ota/result`,
   `${TOPIC_PREFIX}/+/log`,
   `${TOPIC_PREFIX}/+/stat`,
+  `${TOPIC_PREFIX}/+/event`,
 ] as const;
 
-export type DeviceMessageKind = "cmd/result" | "ota/result" | "log" | "stat";
+export type DeviceMessageKind = "cmd/result" | "ota/result" | "log" | "stat" | "event";
 
 export interface DeviceTopic {
   deviceUid: string;
@@ -83,7 +85,10 @@ export function parseDeviceTopic(topic: string): DeviceTopic {
   }
   const deviceUid = segments[3]!;
   let kind: DeviceMessageKind | undefined;
-  if (segments.length === 5 && (segments[4] === "log" || segments[4] === "stat")) {
+  if (
+    segments.length === 5 &&
+    (segments[4] === "log" || segments[4] === "stat" || segments[4] === "event")
+  ) {
     kind = segments[4] as DeviceMessageKind;
   } else if (segments.length === 6 && segments[4] === "cmd" && segments[5] === "result") {
     kind = "cmd/result";
