@@ -76,7 +76,7 @@ function commandWire(args: CommandArgument[]): Array<{ name: string; value: stri
 
 function createBridge(ws: Bun.ServerWebSocket<unknown>) {
   const listeners = new Map<string, Set<(event: unknown) => void>>();
-  let readyState = 1;
+  let readyState: 0 | 1 | 2 | 3 = 1;
   return {
     get readyState() { return readyState; },
     send(data: string | Uint8Array<ArrayBuffer>) { return ws.send(data); },
@@ -207,9 +207,9 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
         finally { clearTimeout(timer); running -= 1; }
       }),
     },
-    ui: {
+      ui: {
       render: implemented.ui.render.handler(async ({ input, context }) => { if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required"); const renderer = definition.render?.[input.routeId]; if (!renderer) rpcError("NOT_FOUND", "unknown UI route"); const result = await renderer(input); assertRpcValueBudget(result.html, budget); return result; }),
-      handleAction: implemented.ui.handleAction.handler(async ({ input, context }) => { if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required"); const handler = definition.handleAction?.[input.routeId]; if (!handler) rpcError("NOT_FOUND", "unknown UI route"); return handler(input.action, input); }),
+      handleAction: implemented.ui.handleAction.handler(async ({ input, context }) => { if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required"); const actionHandler = definition.handleAction?.[input.routeId]; if (!actionHandler) rpcError("NOT_FOUND", "unknown UI route"); return await actionHandler(input.action, input) as { redirect?: string; errors?: { field: string; message: string }[] }; }),
     },
   };
   const handler = new RPCHandler(router, { encodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX }, decodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX } });

@@ -12,16 +12,17 @@ import {
   pluginToManagerContract,
   type CommandEnqueueInput,
   type EntityGetInput,
+  type EntityGetOutput,
   type PluginCallInput,
-  type UiRenderInput,
+  type UiDataInput,
   type HandshakeOutput,
 } from "@soulcloud/plugin-rpc-contract";
 
 export interface ReverseHandlers {
-  entityGet(input: EntityGetInput, signal: AbortSignal, connectionId: string): Promise<unknown>;
+  entityGet(input: EntityGetInput, signal: AbortSignal, connectionId: string): Promise<EntityGetOutput>;
   commandEnqueue(input: CommandEnqueueInput, signal: AbortSignal, connectionId: string): Promise<{ accepted: true }>;
   pluginCall(input: PluginCallInput, signal: AbortSignal, connectionId: string): Promise<unknown>;
-  uiGetData(input: UiRenderInput & { key: string }, signal: AbortSignal, connectionId: string): Promise<unknown>;
+  uiGetData(input: UiDataInput, signal: AbortSignal, connectionId: string): Promise<unknown>;
 }
 
 export interface PluginConnectionOptions {
@@ -89,7 +90,7 @@ export class PluginConnection {
             entities: { get: reverseImpl.context.entities.get.handler(({ input, context }) => this.options.reverseHandlers.entityGet(input, context.signal, this.connectionId)) },
             commands: { enqueue: reverseImpl.context.commands.enqueue.handler(({ input, context }) => this.options.reverseHandlers.commandEnqueue(input, context.signal, this.connectionId)) },
             plugins: { callScoped: reverseImpl.context.plugins.callScoped.handler(({ input, context }) => this.options.reverseHandlers.pluginCall(input, context.signal, this.connectionId)) },
-            ui: { getData: reverseImpl.context.ui.getData.handler(({ input, context }) => this.options.reverseHandlers.uiGetData(input as UiRenderInput & { key: string }, context.signal, this.connectionId)) },
+            ui: { getData: reverseImpl.context.ui.getData.handler(({ input, context }) => this.options.reverseHandlers.uiGetData(input, context.signal, this.connectionId)) },
           },
         };
         this.reverseHandler = new RPCHandler(handler, { encodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX }, decodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX } });
@@ -99,7 +100,7 @@ export class PluginConnection {
           const bytes = typeof data === "string" ? new TextEncoder().encode(data).byteLength : data instanceof ArrayBuffer ? data.byteLength : data.byteLength;
           if (bytes > this.options.maxFrameBytes) { socket.close(1009, "RPC frame too large"); return; }
           if (!hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) return;
-          void this.reverseHandler?.message(bridge, data, { context: { signal: AbortSignal.timeout(10_000) } });
+          void this.reverseHandler?.message(bridge, data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">, { context: { signal: AbortSignal.timeout(10_000) } });
         });
         socket.addEventListener("close", () => this.onClose());
         this.finishHandshake().then(() => { settled = true; resolve(); }).catch((error) => { socket.close(1002, "handshake failed"); fail(error instanceof Error ? error : new Error(String(error))); });

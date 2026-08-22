@@ -59,7 +59,7 @@ export const eventOutput = z.object({
 export const actionInput = operation.extend({ actionId: z.string().min(1).max(128), input: z.unknown() }).strict();
 export const actionOutput = z.object({ command: z.string().min(1).max(256), args: z.array(commandArgument).max(256), schemaVersion: z.number().int().positive() }).strict();
 
-export const uiRenderInput = operation.extend({ routeId: z.string().min(1).max(128), installationId: z.string().uuid(), projectId: z.string().uuid(), user: uiUser, params: z.record(z.string().max(128), z.string().max(1024)).refine((value) => Object.keys(value).length <= 32) }).strict();
+export const uiRenderInput = operation.extend({ requestId: z.string().min(1).max(128), routeId: z.string().min(1).max(128), installationId: z.string().uuid(), projectId: z.string().uuid(), user: uiUser, params: z.record(z.string().max(128), z.string().max(1024)).refine((value) => Object.keys(value).length <= 32) }).strict();
 export const uiRenderOutput = z.object({ html: z.string().max(2 * 1024 * 1024), title: z.string().max(256).optional(), status: z.number().int().min(200).max(599).optional(), cache: z.literal("no-store").or(z.object({ maxAgeSeconds: z.number().int().nonnegative().max(86_400) })).optional() }).strict();
 export const uiActionInput = uiRenderInput.extend({ action: z.unknown() }).strict();
 export const uiActionOutput = z.object({ redirect: z.string().max(2048).optional(), errors: z.array(z.object({ field: z.string().max(128), message: z.string().max(2048) }).strict()).max(64).optional() }).strict();
@@ -109,6 +109,8 @@ export type ActionInput = z.infer<typeof actionInput>;
 export type ActionOutput = z.infer<typeof actionOutput>;
 export type UiRenderInput = z.infer<typeof uiRenderInput>;
 export type UiRenderOutput = z.infer<typeof uiRenderOutput>;
+export type UiActionOutput = z.infer<typeof uiActionOutput>;
+export type UiDataInput = z.infer<typeof uiDataInput>;
 export type EntityGetInput = z.infer<typeof entityGetInput>;
 export type CommandEnqueueInput = z.infer<typeof commandEnqueueInput>;
 export type PluginCallInput = z.infer<typeof pluginCallInput>;
