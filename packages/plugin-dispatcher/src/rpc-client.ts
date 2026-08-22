@@ -257,6 +257,7 @@ export class PluginHostClient {
 /** oRPC v2 client for the one-socket, two-prefix transport. */
 class PluginHostWsClient implements PluginHostClientLike {
   private readonly wsUrl: string;
+  private readonly maxFrameBytes: number;
   private currentConnectionId: string | undefined;
   private readonly handshakeTimeoutMs: number;
   private readonly authToken?: string;
@@ -275,6 +276,7 @@ class PluginHostWsClient implements PluginHostClientLike {
 
   private constructor(options: PluginHostClientOptions) {
     this.wsUrl = options.baseUrl.replace(/\/$/, "");
+    this.maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000;
     this.authToken = options.authToken;
     this.reverseHandlers = options.reverseHandlers;
@@ -365,12 +367,38 @@ class PluginHostWsClient implements PluginHostClientLike {
           decodePeerMessage: { prefix: PLUGIN_RPC_H2D_PREFIX },
         });
         socket.addEventListener("message", (event) => {
-          if (!matchesRpcPrefix(event.data, PLUGIN_RPC_D2H_PREFIX) && !matchesRpcPrefix(event.data, PLUGIN_RPC_H2D_PREFIX)) {
+          const data = event.data as unknown;
+          const frameBytes = typeof data === "string"
+            ? Buffer.byteLength(data, "utf8")
+            : data instanceof Blob
+              ? data.size
+              : data instanceof ArrayBuffer
+                ? data.byteLength
+                : ArrayBuffer.isView(data)
+                  ? data.byteLength
+                  : Number.POSITIVE_INFINITY;
+          if (frameBytes > this.maxFrameBytes) {
+            socket.close(1009, "RPC frame too large");
+            return;
+          }
+          if (!(typeof data === "string" || data instanceof ArrayBuffer || ArrayBuffer.isView(data))) {
             socket.close(1002, "unknown RPC prefix");
             return;
           }
-          if (!matchesRpcPrefix(event.data, PLUGIN_RPC_H2D_PREFIX)) return;
-          void this.h2dHandler?.message(bridge, event.data, { context: {} });
+          const prefixData = (typeof data === "string" || data instanceof ArrayBuffer
+            ? data
+            : data instanceof Uint8Array
+              ? data
+              : new Uint8Array(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength)) as
+            | string
+            | ArrayBuffer
+            | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">;
+          if (!matchesRpcPrefix(prefixData, PLUGIN_RPC_D2H_PREFIX) && !matchesRpcPrefix(prefixData, PLUGIN_RPC_H2D_PREFIX)) {
+            socket.close(1002, "unknown RPC prefix");
+            return;
+          }
+          if (!matchesRpcPrefix(prefixData, PLUGIN_RPC_H2D_PREFIX)) return;
+          void this.h2dHandler?.message(bridge, prefixData, { context: {} });
         });
         const link = new RPCLink({
           connect: () => socket,
