@@ -185,8 +185,8 @@ export function startDispatcher(
     {
       ...options,
       reverseHandlers: {
-        entityGet: (input, signal) => operations.entityGet(input, signal).then((snapshot) => snapshot),
-        commandEnqueue: (input, signal) => operations.commandEnqueue(input, signal),
+        entityGet: (input, signal, connectionId) => operations.entityGet(input, signal, connectionId),
+        commandEnqueue: (input, signal, connectionId) => operations.commandEnqueue(input, signal, connectionId),
       },
     },
     logger,
@@ -338,7 +338,7 @@ export function startDispatcher(
         return;
       }
 
-      const operation = operations.begin(event, options.eventTimeoutMs);
+      const operation = operations.begin(event, options.eventTimeoutMs, client.connectionId);
       let finishedOperation: FinishedPluginOperation | null = null;
       let result: unknown;
       try {

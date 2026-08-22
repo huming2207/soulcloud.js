@@ -39,6 +39,7 @@ interface OperationState {
   readonly operationId: string;
   readonly token: string;
   readonly event: PluginEventRow;
+  readonly connectionId: string;
   readonly deadlineAt: number;
   activeReverseCalls: number;
   totalReverseCalls: number;
@@ -71,7 +72,7 @@ export class PluginOperationRegistry {
     private readonly readEntity: EntityReader,
   ) {}
 
-  begin(event: PluginEventRow, deadlineMs: number): { operationId: string; token: string } {
+  begin(event: PluginEventRow, deadlineMs: number, connectionId = "local"): { operationId: string; token: string } {
     if (this.operations.size >= this.limits.maxOperations) {
       throw new PluginOperationLimitError("maximum concurrent plugin operations reached");
     }
@@ -79,6 +80,7 @@ export class PluginOperationRegistry {
       operationId: crypto.randomUUID(),
       token: crypto.randomUUID().replaceAll("-", ""),
       event,
+      connectionId,
       deadlineAt: Date.now() + deadlineMs,
       activeReverseCalls: 0,
       totalReverseCalls: 0,
@@ -91,8 +93,8 @@ export class PluginOperationRegistry {
     return { operationId: state.operationId, token: state.token };
   }
 
-  async entityGet(input: EntityGetInput, signal: AbortSignal): Promise<EntityStateSnapshot | null> {
-    const state = this.acquire(input.operationId, input.operationToken);
+  async entityGet(input: EntityGetInput, signal: AbortSignal, connectionId = "local"): Promise<EntityStateSnapshot | null> {
+    const state = this.acquire(input.operationId, input.operationToken, connectionId);
     try {
       return await this.readEntity(state.event, input.entityKey, signal);
     } finally {
@@ -100,8 +102,8 @@ export class PluginOperationRegistry {
     }
   }
 
-  async commandEnqueue(input: CommandEnqueueInput, signal: AbortSignal): Promise<{ ok: true }> {
-    const state = this.acquire(input.operationId, input.operationToken);
+  async commandEnqueue(input: CommandEnqueueInput, signal: AbortSignal, connectionId = "local"): Promise<{ ok: true }> {
+    const state = this.acquire(input.operationId, input.operationToken, connectionId);
     try {
       if (state.stagedCommands.length >= this.limits.maxStagedCommandsPerOperation) {
         throw new PluginOperationLimitError("maximum staged commands per operation reached");
@@ -158,9 +160,9 @@ export class PluginOperationRegistry {
     this.operations.delete(token);
   }
 
-  private acquire(operationId: string, token: string): OperationState {
+  private acquire(operationId: string, token: string, connectionId: string): OperationState {
     const state = this.operations.get(token);
-    if (!state || state.sealed || state.operationId !== operationId) {
+    if (!state || state.sealed || state.operationId !== operationId || state.connectionId !== connectionId) {
       throw new Error("plugin operation is not active");
     }
     if (Date.now() >= state.deadlineAt) throw new Error("plugin operation deadline exceeded");

@@ -66,3 +66,14 @@ test("operation limits reject extra staged commands and calls", async () => {
   await expect(operations.commandEnqueue({ ...wire, command: "test", args: [] }, new AbortController().signal)).rejects.toBeInstanceOf(PluginOperationLimitError);
   operations.discard(operation.token);
 });
+
+test("operation token is bound to the creating WebSocket connection", async () => {
+  const operations = registry();
+  const operation = operations.begin(event, 5_000, "connection-a");
+  await expect(operations.entityGet({
+    operationId: operation.operationId,
+    operationToken: operation.token,
+    entityKey: "counter",
+  }, new AbortController().signal, "connection-b")).rejects.toThrow("not active");
+  operations.discard(operation.token);
+});

@@ -36,8 +36,8 @@ import {
 } from "@soulcloud/plugin-sdk";
 
 export interface PluginHostReverseHandlers {
-  entityGet(input: EntityGetInput, signal: AbortSignal): Promise<EntityGetOutput>;
-  commandEnqueue(input: CommandEnqueueInput, signal: AbortSignal): Promise<{ ok: true }>;
+  entityGet(input: EntityGetInput, signal: AbortSignal, connectionId?: string): Promise<EntityGetOutput>;
+  commandEnqueue(input: CommandEnqueueInput, signal: AbortSignal, connectionId?: string): Promise<{ ok: true }>;
 }
 
 export interface PluginHostClientOptions {
@@ -54,6 +54,7 @@ export interface PluginHostClientOptions {
 
 export interface PluginHostClientLike {
   readonly isOpen: boolean;
+  readonly connectionId?: string;
   request(method: string, params: unknown, deadlineMs: number): Promise<unknown>;
   handshake(expected: { pluginId: string; pluginVersion: string; apiVersion: number }): Promise<void>;
   close(): void;
@@ -255,6 +256,7 @@ export class PluginHostClient {
 /** oRPC v2 client for the one-socket, two-prefix transport. */
 class PluginHostWsClient implements PluginHostClientLike {
   private readonly wsUrl: string;
+  readonly connectionId = crypto.randomUUID();
   private readonly handshakeTimeoutMs: number;
   private readonly authToken?: string;
   private readonly reverseHandlers?: PluginHostReverseHandlers;
@@ -325,13 +327,13 @@ class PluginHostWsClient implements PluginHostClientLike {
             entities: {
               get: implemented.context.entities.get.handler(({ input }) => {
                 if (!reverse) throw new Error("reverse entity reads are not configured");
-                return reverse.entityGet(input, AbortSignal.timeout(10_000));
+                return reverse.entityGet(input, AbortSignal.timeout(10_000), this.connectionId);
               }),
             },
             commands: {
               enqueue: implemented.context.commands.enqueue.handler(({ input }) => {
                 if (!reverse) throw new Error("reverse command enqueue is not configured");
-                return reverse.commandEnqueue(input, AbortSignal.timeout(10_000));
+                return reverse.commandEnqueue(input, AbortSignal.timeout(10_000), this.connectionId);
               }),
             },
           },
