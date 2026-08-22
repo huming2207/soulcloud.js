@@ -146,6 +146,13 @@ export function createPluginHostWsConnection(
           rpcError("HANDLER_ERROR", `action encoder threw: ${(error as Error).message}`);
         }
         if (!Array.isArray(args) || args.length > 256) rpcError("INVALID_ACTION_OUTPUT", "encoder returned an invalid argument array");
+        try {
+          // Check the plugin-owned Uint8Array values before wrapping them in
+          // Blob objects, so rejected output does not allocate a second copy.
+          assertRpcValueBudget(args, options.valueBudget);
+        } catch (error) {
+          rpcError("INVALID_ACTION_OUTPUT", (error as Error).message);
+        }
         const output = {
           cmd: action.wire.command,
           args: args.map((arg) => {
@@ -213,17 +220,17 @@ export function createPluginHostWsConnection(
             entityKey,
           }, { signal })),
           enqueueCommand: async (command, args, signal) => {
+            try {
+              assertRpcValueBudget({ command, args }, options.valueBudget);
+            } catch (error) {
+              rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+            }
             const wireArgs = args.map((arg) => {
               const name = Object.keys(arg)[0]!;
               const value = arg[name];
               if (value === undefined) rpcError("INVALID_ACTION_OUTPUT", "command argument contains undefined");
               return { name, value: value instanceof Uint8Array ? new Blob([value]) : value };
             });
-            try {
-              assertRpcValueBudget({ command, args: wireArgs }, options.valueBudget);
-            } catch (error) {
-              rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
-            }
             await context.reverse.context.commands.enqueue({
               operationId: input.operationId,
               operationToken: input.operationToken,
