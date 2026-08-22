@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "../db";
 import {
+  deprecateUnboundInstallationProfilesInTransaction,
   registerInstallationProfileEntitiesInTransaction,
   type EntityDescriptorInput,
 } from "./entities";
@@ -105,6 +106,7 @@ export async function bindDeviceToPluginInstallation(
         profileVersion: input.profileVersion,
       },
     });
+    await deprecateUnboundInstallationProfilesInTransaction(tx, input.installationId);
   });
 }
 
@@ -142,6 +144,14 @@ export async function migratePluginInstallation(
       where: { installationId },
       data: { deprecated: true },
     });
+    const bindings = await tx.pluginDeviceBinding.findMany({ where: { installationId }, select: { profileId: true, profileVersion: true } });
+    const profiles = new Map(bindings.map((binding) => [`${binding.profileId}\u0000${binding.profileVersion}`, binding]));
+    for (const binding of profiles.values()) {
+      const profile = manifest.profiles.find((item) => item.id === binding.profileId && item.version === binding.profileVersion);
+      if (!profile) continue;
+      await registerInstallationProfileEntitiesInTransaction(tx, installationId, profile.id, profile.version, profile.entities);
+    }
+    await deprecateUnboundInstallationProfilesInTransaction(tx, installationId);
   });
 }
 
@@ -161,6 +171,7 @@ export async function reconcilePluginInstallation(
       if (!profile) continue;
       await registerInstallationProfileEntitiesInTransaction(tx, installationId, profile.id, profile.version, profile.entities);
     }
+    await deprecateUnboundInstallationProfilesInTransaction(tx, installationId);
   });
 }
 
@@ -199,6 +210,11 @@ export async function getPluginEntityState(
       ON d.installation_id = s.installation_id
      AND d.entity_key = s.entity_key
      AND d.revision = s.descriptor_revision
+    JOIN plugin_device_bindings b
+      ON b.device_id = s.device_id
+     AND b.installation_id = s.installation_id
+     AND b.profile_id = d.profile_id
+     AND b.profile_version = d.profile_version
     WHERE s.installation_id = ${installationId}::uuid
       AND s.device_id = ${deviceId}::uuid
       AND s.entity_key = ${entityKey}

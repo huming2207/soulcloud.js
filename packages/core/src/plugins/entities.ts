@@ -97,9 +97,12 @@ export async function registerInstallationProfileEntitiesInTransaction(
     }
 
     for (const row of existing) {
+      // A single installation may serve devices with different manifest
+      // profiles. Only the profile being reconciled may be deprecated here;
+      // another profile remains active while any device still uses it.
       if (
-        row.profileId !== profileId ||
-        row.profileVersion !== profileVersion ||
+        row.profileId === profileId &&
+        row.profileVersion === profileVersion &&
         !wanted.has(row.entityKey)
       ) {
         deprecatedIds.push(row.id);
@@ -125,6 +128,25 @@ export async function registerInstallationProfileEntitiesInTransaction(
         })),
       });
     }
+}
+
+/** Deprecates descriptors whose profile is no longer used by any binding. */
+export async function deprecateUnboundInstallationProfilesInTransaction(
+  tx: TransactionClient,
+  installationId: string,
+): Promise<void> {
+  await tx.$executeRaw`
+    UPDATE plugin_entity_descriptors AS d
+    SET deprecated = true
+    WHERE d.installation_id = ${installationId}::uuid
+      AND NOT EXISTS (
+        SELECT 1
+        FROM plugin_device_bindings AS b
+        WHERE b.installation_id = d.installation_id
+          AND b.profile_id = d.profile_id
+          AND b.profile_version = d.profile_version
+      )
+  `;
 }
 
 export interface ApplyEntityUpdatesOptions {
@@ -252,7 +274,7 @@ function toJsonValue(value: unknown): Prisma.InputJsonValue | typeof Prisma.Json
     const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
     return { $binary: Buffer.from(bytes).toString("base64") };
   }
-  if (value instanceof Blob) return { $binary: "" };
+  if (value instanceof Blob) throw new Error("Blob entity values are not supported; use Uint8Array");
   if (Array.isArray(value)) return value.map((item) => toJsonValue(item) as Prisma.InputJsonValue);
   if (typeof value === "object" && value !== null) {
     const result: Record<string, Prisma.InputJsonValue> = {};
