@@ -4,6 +4,11 @@
 （Action 与声明式 Web UI）已实施（见 §17.1–§17.3 的代码位置）；其余阶段仍为设计提案
 **日期**：2026-08-21
 
+> **后续协议决策（2026-08-22）**：当前 HTTP MessagePack-RPC 仍是已实施基线；下一阶段
+> 将按 [Plugin Dispatcher ↔ Plugin Host 双向 RPC 协议与实施计划](plugin-rpc-protocol.md)
+> 迁移到 oRPC v2 + 单 WebSocket 双 prefix。设备协议、DeviceCommand、日志打包和数据库中的
+> MessagePack 不在迁移范围内。
+
 本文规划 SoulcloudJS 面向商用设备、生产测试和烧录治具的插件能力。目标类似
 Home Assistant/Mi Home 的设备集成体验，但不照搬面向民用智能家居的 Entity
 分类、自动化模型或运行时插件市场。

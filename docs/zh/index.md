@@ -27,6 +27,7 @@ SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平
 | [web.md](web.md) | Web 控制台：技术栈、认证流程、页面、i18n、测试 |
 | [plugin-and-station-architecture.md](plugin-and-station-architecture.md) | 商用设备插件、工业 Entity、插件隔离、烧录工位和弱网通信规划（仅中文提案） |
 | [plugin-implementation-stage1-2.md](plugin-implementation-stage1-2.md) | 插件系统阶段 1+2 实施记录：SDK、编译期注册表、entity 模型、事件队列、dispatcher/host 容器隔离（仅中文） |
+| [plugin-rpc-protocol.md](plugin-rpc-protocol.md) | Dispatcher ↔ Plugin Host 的 oRPC v2/WebSocket 双向 RPC 协议、资源治理和兼容迁移计划（仅中文，待实施） |
 
 ## 快速事实
 
