@@ -103,17 +103,33 @@ export class PluginConnection {
         };
         this.reverseHandler = new RPCHandler(handler, { encodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX }, decodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX } });
         this.forward = createContractClientFactory(new RPCLink({ connect: () => bridge, encodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX }, decodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX } }))(managerToPluginContract);
-        socket.addEventListener("message", (event) => {
-          const data = event.data as string | ArrayBuffer | ArrayBufferView;
-          const bytes = typeof data === "string" ? new TextEncoder().encode(data).byteLength : data instanceof ArrayBuffer ? data.byteLength : data.byteLength;
-          if (bytes > this.options.maxFrameBytes) { socket.close(1009, "RPC frame too large"); return; }
-          if (!hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) return;
-          void this.reverseHandler?.message(bridge, data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">, { context: { signal: AbortSignal.timeout(10_000) } });
-        });
+        socket.addEventListener("message", (event) => { void this.handleSocketMessage(socket, bridge, event); });
         socket.addEventListener("close", () => this.onClose(socket));
         this.finishHandshake().then(() => { settled = true; resolve(); }).catch((error) => { socket.close(1002, "handshake failed"); fail(error instanceof Error ? error : new Error(String(error))); });
       });
     });
+  }
+
+  private async handleSocketMessage(
+    socket: WebSocket,
+    bridge: ReturnType<typeof createClientBridge>,
+    event: MessageEvent,
+  ): Promise<void> {
+    if (this.socket !== socket) return;
+    const received = event.data;
+    const data: string | ArrayBuffer | ArrayBufferView = received instanceof Blob
+      ? new Uint8Array(await received.arrayBuffer())
+      : received as string | ArrayBuffer | ArrayBufferView;
+    const bytes = typeof data === "string"
+      ? new TextEncoder().encode(data).byteLength
+      : data instanceof ArrayBuffer ? data.byteLength : data.byteLength;
+    if (bytes > this.options.maxFrameBytes) { socket.close(1009, "RPC frame too large"); return; }
+    if (!hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) return;
+    await this.reverseHandler?.message(
+      bridge,
+      data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">,
+      { context: { signal: AbortSignal.timeout(10_000) } },
+    );
   }
 
   private async finishHandshake(): Promise<void> {
@@ -156,11 +172,12 @@ export class PluginConnection {
     if (socket && socket !== this.socket) return;
     const connectionId = this.connectionId;
     const reverseHandler = this.reverseHandler;
+    const bridge = this.bridge;
     this.handshaken = false; this.forward = null; this.manifestInfo = null; this.bridge = null;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer); this.heartbeatTimer = null;
     this.reverseHandler = null; this.socket = null;
     this.connectionId = crypto.randomUUID();
-    if (reverseHandler && socket) void reverseHandler.close(socket);
+    if (reverseHandler && bridge) void reverseHandler.close(bridge);
     this.options.onDisconnect?.(connectionId);
   }
 

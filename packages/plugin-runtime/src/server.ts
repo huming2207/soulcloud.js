@@ -254,5 +254,5 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
     },
   };
   const handler = new RPCHandler(router, { encodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX }, decodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX } });
-  return { bridge, handler, async close() { bridge.close(); await handler.close(ws); log("plugin connection closed"); } };
+  return { bridge, handler, async close() { bridge.close(); await handler.close(bridge); log("plugin connection closed"); } };
 }
