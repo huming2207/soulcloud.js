@@ -64,7 +64,7 @@ interface LogStreamHubOptions {
 
 interface LogStreamHub {
   /** Registers a socket for a device; starts the listener on first use. */
-  subscribe(deviceId: string, ws: ServerWebSocket): void;
+  subscribe(deviceId: string, ws: ServerWebSocket): Promise<void>;
   unsubscribe(deviceId: string, ws: ServerWebSocket): void;
   /** Closes the LISTEN connection (process shutdown / tests). */
   close(): Promise<void>;
@@ -98,25 +98,22 @@ export function getLogStreamHub(
 
   /**
    * Establishes the initial high-water mark for a device as its current
-   * max event id. Fire-and-forget at subscribe time; a notify that races
-   * this query is handled by the fallback in `flush` (the event stays
-   * queryable via REST — the stream is lossy by design).
+   * max event id. The route awaits this before sending its ready frame so a
+   * newly inserted event cannot be mistaken for history by a fire-and-forget
+   * baseline query.
    */
-  function initBaseline(deviceId: string) {
+  async function initBaseline(deviceId: string): Promise<void> {
     if (lastPushed.has(deviceId)) return;
-    void prisma.rawLogEvent
-      .aggregate({ where: { deviceId }, _max: { id: true } })
-      .then((res) => {
-        const max = res._max.id;
-        // only set if nobody pushed in the meantime
-        if (!lastPushed.has(deviceId)) {
-          lastPushed.set(deviceId, max ?? 0n);
-        }
-      })
-      .catch(() => {
-        // baseline failure: flush falls back to establishing it; the
-        // stream simply stays silent for this device until then
-      });
+    try {
+      const res = await prisma.rawLogEvent.aggregate({ where: { deviceId }, _max: { id: true } });
+      // only set if nobody pushed in the meantime
+      if (!lastPushed.has(deviceId)) {
+        lastPushed.set(deviceId, res._max.id ?? 0n);
+      }
+    } catch {
+      // baseline failure: flush falls back to establishing it; the
+      // stream simply stays silent for this device until then
+    }
   }
 
   // Per-device in-flight guard: a flush that is still querying/sending must
@@ -200,7 +197,7 @@ export function getLogStreamHub(
   );
 
   hubSingleton = {
-    subscribe(deviceId: string, ws: ServerWebSocket) {
+    async subscribe(deviceId: string, ws: ServerWebSocket): Promise<void> {
       if (connectionCount >= maxConnections) {
         try {
           ws.close(4401, "too many connections");
@@ -217,8 +214,8 @@ export function getLogStreamHub(
       }
       set.add(ws);
       connectionCount += 1;
-      initBaseline(key);
       listener.start();
+      await initBaseline(key);
     },
     unsubscribe(deviceId: string, ws: ServerWebSocket) {
       const key = deviceId.toLowerCase();
@@ -451,7 +448,7 @@ export function createLogStreamRoutes(
         return;
       }
       const socket = rawSocket(ws);
-      hub.subscribe(deviceId, socket);
+      await hub.subscribe(deviceId, socket);
       // membership re-check (Kimi round-8 low): a user removed from the
       // project must stop receiving frames even on an established socket
       const protocol = data.headers?.["sec-websocket-protocol"] ?? "";
