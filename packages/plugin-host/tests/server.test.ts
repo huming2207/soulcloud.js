@@ -208,6 +208,10 @@ describe("plugin host HTTP MessagePack-RPC", () => {
         }),
       });
       expect(response.status).toBe(401);
+      const websocketResponse = await fetch(`${authHost.url}/rpc/ws`, {
+        headers: { "x-soulcloud-rpc-protocol": "1" },
+      });
+      expect(websocketResponse.status).toBe(401);
     } finally {
       await authHost.close();
     }

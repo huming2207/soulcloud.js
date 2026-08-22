@@ -122,6 +122,19 @@ test("oRPC application errors keep input failures distinct from transport failur
   }
 });
 
+test("oRPC handshake rejects a mismatched host identity", async () => {
+  const client = await PluginHostClient.connect({ baseUrl: host.wsUrl });
+  try {
+    await expect(client.handshake({
+      pluginId: CHAOS_PLUGIN_ID,
+      pluginVersion: "9.9.9",
+      apiVersion: chaosTestPlugin.apiVersion,
+    })).rejects.toMatchObject({ code: "unauthorized" });
+  } finally {
+    client.close();
+  }
+});
+
 test("host closes frames without a recognized direction prefix", async () => {
   const socket = new WebSocket(host.wsUrl, {
     headers: { "x-soulcloud-rpc-protocol": PLUGIN_RPC_PROTOCOL_HEADER },
