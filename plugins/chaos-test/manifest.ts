@@ -89,6 +89,7 @@ export const chaosTestPlugin = definePlugin({
   events: [
     { kind: "ok", schemaVersion: 1 },
     { kind: "reverse", schemaVersion: 1 },
+    { kind: "unawaited", schemaVersion: 1 },
     { kind: "updates", schemaVersion: 1 },
     { kind: "fail", schemaVersion: 1 },
     { kind: "crash", schemaVersion: 1 },

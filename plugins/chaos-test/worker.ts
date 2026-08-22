@@ -62,6 +62,9 @@ export const chaosTestWorker: PluginWorker = {
           updates: [{ entityKey: "chaos.last_kind", value: "reverse" }],
         };
       }
+      case "unawaited":
+        void ctx.entities.get("chaos.counter").catch(() => undefined);
+        return { updates: [{ entityKey: "chaos.last_kind", value: "unawaited" }] };
       case "updates":
         return {
           updates: (payload.updates ?? []) as PluginEventResult["updates"],

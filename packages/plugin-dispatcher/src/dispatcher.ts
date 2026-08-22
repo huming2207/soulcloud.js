@@ -483,6 +483,16 @@ export function startDispatcher(
           );
           return;
         }
+        if (coded.code === "operation_closed" || coded.code === "unawaited_reverse_call") {
+          await markFailed(
+            event,
+            `plugin operation lifecycle error: ${coded.message}`,
+            false,
+            runtime,
+            false,
+          );
+          return;
+        }
         // handler_error and anything unknown: retryable — plugin bugs may
         // be data-dependent, attempts bound the damage.
         await markFailed(

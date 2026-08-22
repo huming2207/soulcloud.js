@@ -179,109 +179,145 @@ export function createPluginHostWsConnection(
     },
     plugin: {
       handleEvent: implemented.plugin.handleEvent.handler(async ({ input, context }) => {
-      if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "plugin handshake required");
-      if (running >= options.maxConcurrentHandlers) rpcError("OVERLOADED", "too many concurrent executions");
-      running += 1;
-      let operationController: AbortController | undefined;
-      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-      try {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "plugin handshake required");
+        if (running >= options.maxConcurrentHandlers) rpcError("OVERLOADED", "too many concurrent executions");
+        running += 1;
+        let operationController: AbortController | undefined;
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        let operationClosed = false;
+        let activeReverseCalls = 0;
+        const beginReverseCall = (): (() => void) => {
+          if (operationClosed) rpcError("OPERATION_CLOSED", "plugin operation is already closed");
+          activeReverseCalls += 1;
+          let released = false;
+          return () => {
+            if (released) return;
+            released = true;
+            activeReverseCalls -= 1;
+          };
+        };
         try {
-          assertRpcValueBudget(input.payload, options.valueBudget);
-        } catch (error) {
-          rpcError("INVALID_EVENT_INPUT", (error as Error).message);
-        }
-        const profile = options.manifest.profiles.find(
-          (candidate) => candidate.id === input.device.profileId && candidate.version === input.device.profileVersion,
-        );
-        if (!profile) rpcError("INTERNAL_SERVER_ERROR", `unknown profile ${input.device.profileId} v${input.device.profileVersion}`);
-        const emitLog = (
-          level: "debug" | "info" | "warn" | "error",
-          message: string,
-          fields?: Record<string, unknown>,
-        ) => {
-          const boundedMessage = Buffer.byteLength(message, "utf8") > MAX_LOG_MESSAGE_BYTES
-            ? `${message.slice(0, MAX_LOG_MESSAGE_BYTES)}…`
-            : message;
-          let boundedFields = fields;
-          if (fields !== undefined) {
-            try {
-              assertRpcValueBudget(fields, options.valueBudget);
-            } catch {
-              boundedFields = { truncated: true };
-            }
+          try {
+            assertRpcValueBudget(input.payload, options.valueBudget);
+          } catch (error) {
+            rpcError("INVALID_EVENT_INPUT", (error as Error).message);
           }
-          options.log(`[plugin-host ${options.manifest.id}] [${level}] ${boundedMessage}`, boundedFields);
-        };
-        const bindings: PluginContextBindings = {
-          getDeviceUid: async () => input.device.deviceUid,
-          getEntity: async (entityKey, signal) => snapshotToWire(await context.reverse.context.entities.get({
-            operationId: input.operationId,
-            operationToken: input.operationToken,
-            entityKey,
-          }, { signal })),
-          enqueueCommand: async (command, args, signal) => {
-            try {
-              assertRpcValueBudget({ command, args }, options.valueBudget);
-            } catch (error) {
-              rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+          const profile = options.manifest.profiles.find(
+            (candidate) => candidate.id === input.device.profileId && candidate.version === input.device.profileVersion,
+          );
+          if (!profile) rpcError("INTERNAL_SERVER_ERROR", `unknown profile ${input.device.profileId} v${input.device.profileVersion}`);
+          const emitLog = (
+            level: "debug" | "info" | "warn" | "error",
+            message: string,
+            fields?: Record<string, unknown>,
+          ) => {
+            const boundedMessage = Buffer.byteLength(message, "utf8") > MAX_LOG_MESSAGE_BYTES
+              ? `${message.slice(0, MAX_LOG_MESSAGE_BYTES)}…`
+              : message;
+            let boundedFields = fields;
+            if (fields !== undefined) {
+              try {
+                assertRpcValueBudget(fields, options.valueBudget);
+              } catch {
+                boundedFields = { truncated: true };
+              }
             }
-            const wireArgs = args.map((arg) => {
-              const name = Object.keys(arg)[0]!;
-              const value = arg[name];
-              if (value === undefined) rpcError("INVALID_ACTION_OUTPUT", "command argument contains undefined");
-              return { name, value: value instanceof Uint8Array ? new Blob([value]) : value };
-            });
-            await context.reverse.context.commands.enqueue({
+            options.log(`[plugin-host ${options.manifest.id}] [${level}] ${boundedMessage}`, boundedFields);
+          };
+          const bindings: PluginContextBindings = {
+            getDeviceUid: async () => input.device.deviceUid,
+            getEntity: async (entityKey, signal) => {
+              const release = beginReverseCall();
+              try {
+                return snapshotToWire(await context.reverse.context.entities.get({
+                  operationId: input.operationId,
+                  operationToken: input.operationToken,
+                  entityKey,
+                }, { signal }));
+              } finally {
+                release();
+              }
+            },
+            enqueueCommand: async (command, args, signal) => {
+              const release = beginReverseCall();
+              try {
+                try {
+                  assertRpcValueBudget({ command, args }, options.valueBudget);
+                } catch (error) {
+                  rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+                }
+                const wireArgs = args.map((arg) => {
+                  const name = Object.keys(arg)[0]!;
+                  const value = arg[name];
+                  if (value === undefined) rpcError("INVALID_ACTION_OUTPUT", "command argument contains undefined");
+                  return { name, value: value instanceof Uint8Array ? new Blob([value]) : value };
+                });
+                await context.reverse.context.commands.enqueue({
+                  operationId: input.operationId,
+                  operationToken: input.operationToken,
+                  command,
+                  args: wireArgs,
+                }, { signal });
+              } finally {
+                release();
+              }
+            },
+          };
+          operationController = new AbortController();
+          deadlineTimer = setTimeout(() => operationController?.abort(), input.deadlineMs);
+          activeSignals.add(operationController);
+          const ctx = createPluginContext(
+            input.installation,
+            operationController.signal,
+            {
+              pluginId: options.manifest.id,
+              installationId: input.installation.id,
+              projectId: input.installation.projectId,
               operationId: input.operationId,
-              operationToken: input.operationToken,
-              command,
-              args: wireArgs,
-            }, { signal });
-          },
-        };
-        operationController = new AbortController();
-        deadlineTimer = setTimeout(() => operationController?.abort(), input.deadlineMs);
-        activeSignals.add(operationController);
-        const ctx = createPluginContext(
-          input.installation,
-          operationController.signal,
-          {
-            pluginId: options.manifest.id,
-            installationId: input.installation.id,
-            projectId: input.installation.projectId,
-            operationId: input.operationId,
-          },
-          emitLog,
-          bindings,
-        );
-        const result = await options.worker.onEvent(ctx, {
-          eventId: input.eventId,
-          eventKind: input.eventKind,
-          schemaVersion: input.schemaVersion,
-          payload: input.payload,
-          device: input.device,
-          receivedAt: input.receivedAt,
-        });
-        const updates = result?.updates ?? [];
-        try {
-          assertRpcValueBudget(updates, options.valueBudget);
-        } catch (error) {
-          rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+            },
+            emitLog,
+            bindings,
+          );
+          const result = await options.worker.onEvent(ctx, {
+            eventId: input.eventId,
+            eventKind: input.eventKind,
+            schemaVersion: input.schemaVersion,
+            payload: input.payload,
+            device: input.device,
+            receivedAt: input.receivedAt,
+          });
+          if (activeReverseCalls > 0) {
+            rpcError("UNAWAITED_REVERSE_CALL", `plugin operation returned with ${activeReverseCalls} reverse call(s) still active`);
+          }
+          const updates = result?.updates ?? [];
+          try {
+            assertRpcValueBudget(updates, options.valueBudget);
+          } catch (error) {
+            rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+          }
+          const check = validateEventUpdates(profile.entities, updates);
+          if (!check.ok) {
+            rpcError("INVALID_PLUGIN_OUTPUT", `invalid plugin output — ${check.failures.slice(0, 5).map((f) => `${f.entityKey}: ${f.error}`).join("; ")}`);
+          }
+          return { updates };
+        } finally {
+          if (deadlineTimer) clearTimeout(deadlineTimer);
+          operationClosed = true;
+          // Let the RPC handler send the parent error before cancelling a
+          // reverse call that was left unawaited by the plugin.
+          const controller = operationController;
+          if (controller && activeReverseCalls > 0) {
+            const abortTimer = setTimeout(() => {
+              controller.abort();
+              activeSignals.delete(controller);
+            }, 0);
+            abortTimer.unref?.();
+          } else {
+            controller?.abort();
+            if (controller) activeSignals.delete(controller);
+          }
+          running -= 1;
         }
-        const check = validateEventUpdates(profile.entities, updates);
-        if (!check.ok) {
-          rpcError("INVALID_PLUGIN_OUTPUT", `invalid plugin output — ${check.failures.slice(0, 5).map((f) => `${f.entityKey}: ${f.error}`).join("; ")}`);
-        }
-        return { updates };
-      } finally {
-        if (deadlineTimer) clearTimeout(deadlineTimer);
-        // Returning from the parent handler seals the operation. Abort the
-        // shared context signal so an unawaited reverse call cannot outlive
-        // the operation and keep transport/database work alive.
-        operationController?.abort();
-        if (operationController) activeSignals.delete(operationController);
-        running -= 1;
-      }
       }),
     },
   };

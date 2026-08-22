@@ -135,6 +135,52 @@ test("oRPC handshake rejects a mismatched host identity", async () => {
   }
 });
 
+test("oRPC rejects a handler that leaves a reverse call unawaited", async () => {
+  const client = await PluginHostClient.connect({
+    baseUrl: host.wsUrl,
+    reverseHandlers: {
+      async entityGet() {
+        return {
+          entityKey: "chaos.counter",
+          value: 7,
+          quality: "good",
+          sourceTimestamp: null,
+          ingestedAt: new Date().toISOString(),
+          alarm: null,
+        };
+      },
+      async commandEnqueue() {
+        return { ok: true };
+      },
+    },
+  });
+  try {
+    await client.handshake({
+      pluginId: CHAOS_PLUGIN_ID,
+      pluginVersion: chaosTestPlugin.version,
+      apiVersion: chaosTestPlugin.apiVersion,
+    });
+    await expect(client.request("plugin.handleEvent", {
+      operationId: crypto.randomUUID(),
+      operationToken: "0123456789abcdef0123456789abcdef",
+      eventId: crypto.randomUUID(),
+      eventKind: "unawaited",
+      schemaVersion: 1,
+      payload: {},
+      device: {
+        id: crypto.randomUUID(),
+        deviceUid: "ws-test-device",
+        profileId: chaosTestPlugin.profiles[0]!.id,
+        profileVersion: chaosTestPlugin.profiles[0]!.version,
+      },
+      installation: { id: crypto.randomUUID(), projectId: crypto.randomUUID(), config: {} },
+      receivedAt: new Date().toISOString(),
+    }, 5_000)).rejects.toMatchObject({ code: "unawaited_reverse_call" });
+  } finally {
+    client.close();
+  }
+});
+
 test("host closes frames without a recognized direction prefix", async () => {
   const socket = new WebSocket(host.wsUrl, {
     headers: { "x-soulcloud-rpc-protocol": PLUGIN_RPC_PROTOCOL_HEADER },

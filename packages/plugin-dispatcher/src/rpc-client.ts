@@ -343,6 +343,9 @@ class PluginHostWsClient implements PluginHostClientLike {
             if (code === "invalid_plugin_output") {
               throw new ORPCError("INVALID_PLUGIN_OUTPUT" as never, { message: (error as Error).message });
             }
+            if (code === "operation_closed" || code === "unawaited_reverse_call") {
+              throw new ORPCError("OPERATION_CLOSED" as never, { message: (error as Error).message });
+            }
             throw error;
           }
         };
@@ -505,6 +508,8 @@ class PluginHostWsClient implements PluginHostClientLike {
           INVALID_PLUGIN_OUTPUT: "invalid_params",
           INVALID_EVENT_INPUT: "invalid_params",
           CALLBACK_OVERLOADED: "callback_overloaded",
+          OPERATION_CLOSED: "operation_closed",
+          UNAWAITED_REVERSE_CALL: "unawaited_reverse_call",
           OVERLOADED: "overloaded",
           HANDLER_ERROR: "handler_error",
           INTERNAL_SERVER_ERROR: "handler_error",
