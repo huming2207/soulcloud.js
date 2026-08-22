@@ -23,6 +23,7 @@ export interface OperationLimits {
   maxReverseCallsPerOperation: number;
   maxStagedCommandsPerOperation: number;
   maxBlobsPerOperation: number;
+  maxBlobBytesPerBlob: number;
   maxBlobBytesPerOperation: number;
 }
 
@@ -49,9 +50,16 @@ interface OperationState {
   sealed: boolean;
 }
 
+function createOperationToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Buffer.from(bytes).toString("base64url");
+}
+
 export interface FinishedPluginOperation {
   operationId: string;
   token: string;
+  activeReverseCalls: number;
   stagedCommands: StagedPluginCommand[];
 }
 
@@ -78,10 +86,13 @@ export class PluginOperationRegistry {
     }
     const state: OperationState = {
       operationId: crypto.randomUUID(),
-      token: crypto.randomUUID().replaceAll("-", ""),
+      token: createOperationToken(),
       event,
       connectionId,
-      deadlineAt: Date.now() + deadlineMs,
+      // This deadline only governs in-process RPC capability lifetime. Use a
+      // monotonic clock so wall-clock adjustments cannot extend or truncate
+      // an operation; durable event leases continue to use database time.
+      deadlineAt: performance.now() + deadlineMs,
       activeReverseCalls: 0,
       totalReverseCalls: 0,
       stagedCommands: [],
@@ -118,6 +129,9 @@ export class PluginOperationRegistry {
           const blob = arg.value;
           blobCount += 1;
           blobBytes += blob.size;
+          if (blob.size > this.limits.maxBlobBytesPerBlob) {
+            throw new PluginOperationLimitError("maximum Blob size reached");
+          }
           if (blobCount > this.limits.maxBlobsPerOperation || state.blobCount + blobCount > this.limits.maxBlobsPerOperation) {
             throw new PluginOperationLimitError("maximum operation Blob count reached");
           }
@@ -149,6 +163,7 @@ export class PluginOperationRegistry {
     return {
       operationId: state.operationId,
       token: state.token,
+      activeReverseCalls: state.activeReverseCalls,
       stagedCommands: state.stagedCommands.slice(),
     };
   }
@@ -165,7 +180,7 @@ export class PluginOperationRegistry {
     if (!state || state.sealed || state.operationId !== operationId || state.connectionId !== connectionId) {
       throw new Error("plugin operation is not active");
     }
-    if (Date.now() >= state.deadlineAt) throw new Error("plugin operation deadline exceeded");
+    if (performance.now() >= state.deadlineAt) throw new Error("plugin operation deadline exceeded");
     const pluginInFlight = this.pluginReverseInFlight.get(state.event.pluginId) ?? 0;
     const installationInFlight = this.installationReverseInFlight.get(state.event.pluginInstallationId) ?? 0;
     if (

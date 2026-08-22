@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { CHAOS_PLUGIN_ID, chaosTestPlugin } from "@soulcloud/plugins";
+import { PLUGIN_RPC_PROTOCOL_HEADER } from "@soulcloud/plugin-rpc-contract";
 import { startPluginHost, type PluginHostHandle } from "../../plugin-host/src/server";
 import { PluginHostClient } from "../src/rpc-client";
 
@@ -119,4 +120,22 @@ test("oRPC application errors keep input failures distinct from transport failur
   } finally {
     client.close();
   }
+});
+
+test("host closes frames without a recognized direction prefix", async () => {
+  const socket = new WebSocket(host.wsUrl, {
+    headers: { "x-soulcloud-rpc-protocol": PLUGIN_RPC_PROTOCOL_HEADER },
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener("open", () => socket.send("soulcloud:unknown:v1:{}"));
+    socket.addEventListener("error", () => reject(new Error("WebSocket test error")));
+    socket.addEventListener("close", (event) => {
+      try {
+        expect(event.code).toBe(1002);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 });

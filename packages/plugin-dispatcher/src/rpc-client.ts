@@ -9,12 +9,13 @@
 
 import { RPCLink } from "@orpc/client/websocket";
 import { createContractClientFactory } from "@orpc/contract";
-import { implement } from "@orpc/server";
+import { implement, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/websocket";
 import {
   PLUGIN_RPC_D2H_PREFIX,
   PLUGIN_RPC_H2D_PREFIX,
   PLUGIN_RPC_PROTOCOL_HEADER,
+  matchesRpcPrefix,
   dispatcherToHostContract,
   hostToDispatcherContract,
   type CommandEnqueueInput,
@@ -319,6 +320,19 @@ class PluginHostWsClient implements PluginHostClientLike {
         const bridge = socket;
         const reverse = this.reverseHandlers;
         const implemented = implement(hostToDispatcherContract).$context<object>();
+        const reverseCall = async <T>(
+          call: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => {
+          try {
+            return await call(AbortSignal.timeout(10_000));
+          } catch (error) {
+            const code = (error as Error & { code?: string }).code;
+            if (code === "overloaded") {
+              throw new ORPCError("OVERLOADED" as never, { message: (error as Error).message });
+            }
+            throw error;
+          }
+        };
         const router = {
           system: {
             ping: implemented.system.ping.handler(({ input }) => input),
@@ -327,13 +341,13 @@ class PluginHostWsClient implements PluginHostClientLike {
             entities: {
               get: implemented.context.entities.get.handler(({ input }) => {
                 if (!reverse) throw new Error("reverse entity reads are not configured");
-                return reverse.entityGet(input, AbortSignal.timeout(10_000), this.connectionId);
+                return reverseCall((signal) => reverse.entityGet(input, signal, this.connectionId));
               }),
             },
             commands: {
               enqueue: implemented.context.commands.enqueue.handler(({ input }) => {
                 if (!reverse) throw new Error("reverse command enqueue is not configured");
-                return reverse.commandEnqueue(input, AbortSignal.timeout(10_000), this.connectionId);
+                return reverseCall((signal) => reverse.commandEnqueue(input, signal, this.connectionId));
               }),
             },
           },
@@ -343,6 +357,11 @@ class PluginHostWsClient implements PluginHostClientLike {
           decodePeerMessage: { prefix: PLUGIN_RPC_H2D_PREFIX },
         });
         socket.addEventListener("message", (event) => {
+          if (!matchesRpcPrefix(event.data, PLUGIN_RPC_D2H_PREFIX) && !matchesRpcPrefix(event.data, PLUGIN_RPC_H2D_PREFIX)) {
+            socket.close(1002, "unknown RPC prefix");
+            return;
+          }
+          if (!matchesRpcPrefix(event.data, PLUGIN_RPC_H2D_PREFIX)) return;
           void this.h2dHandler?.message(bridge, event.data, { context: {} });
         });
         const link = new RPCLink({
@@ -439,6 +458,7 @@ class PluginHostWsClient implements PluginHostClientLike {
           INVALID_ACTION_INPUT: "invalid_params",
           INVALID_ACTION_OUTPUT: "invalid_action_output",
           INVALID_PLUGIN_OUTPUT: "invalid_params",
+          INVALID_EVENT_INPUT: "invalid_params",
           OVERLOADED: "overloaded",
           HANDLER_ERROR: "handler_error",
           INTERNAL_SERVER_ERROR: "handler_error",

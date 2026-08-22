@@ -30,6 +30,7 @@ function registry(overrides: Partial<ConstructorParameters<typeof PluginOperatio
     maxReverseCallsPerOperation: 2,
     maxStagedCommandsPerOperation: 1,
     maxBlobsPerOperation: 1,
+    maxBlobBytesPerBlob: 8,
     maxBlobBytesPerOperation: 8,
     ...overrides,
   }, async (_event, entityKey) => ({
@@ -45,6 +46,7 @@ function registry(overrides: Partial<ConstructorParameters<typeof PluginOperatio
 test("operation scopes reverse reads and stages commands until finish", async () => {
   const operations = registry();
   const operation = operations.begin(event, 5_000);
+  expect(operation.token.length).toBe(43);
   const wire = { operationId: operation.operationId, operationToken: operation.token };
   const state = await operations.entityGet({ ...wire, entityKey: "counter" }, new AbortController().signal);
   expect(state?.value).toBe(3);
@@ -76,4 +78,40 @@ test("operation token is bound to the creating WebSocket connection", async () =
     entityKey: "counter",
   }, new AbortController().signal, "connection-b")).rejects.toThrow("not active");
   operations.discard(operation.token);
+});
+
+test("finishing an operation reports unawaited reverse calls", async () => {
+  let releaseRead!: () => void;
+  const operations = new PluginOperationRegistry({
+    maxOperations: 1,
+    maxReverseInFlight: 1,
+    perPluginReverseInFlight: 1,
+    perInstallationReverseInFlight: 1,
+    perOperationReverseInFlight: 1,
+    maxReverseCallsPerOperation: 2,
+    maxStagedCommandsPerOperation: 1,
+    maxBlobsPerOperation: 1,
+    maxBlobBytesPerBlob: 8,
+    maxBlobBytesPerOperation: 8,
+  }, async (_event, entityKey) => {
+    await new Promise<void>((resolve) => { releaseRead = resolve; });
+    return {
+      entityKey,
+      value: 1,
+      quality: "good",
+      sourceTimestamp: null,
+      ingestedAt: new Date().toISOString(),
+      alarm: null,
+    };
+  });
+  const operation = operations.begin(event, 5_000);
+  const read = operations.entityGet({
+    operationId: operation.operationId,
+    operationToken: operation.token,
+    entityKey: "counter",
+  }, new AbortController().signal);
+  await Bun.sleep(0);
+  expect(operations.finish(operation.token)?.activeReverseCalls).toBe(1);
+  releaseRead();
+  await read;
 });

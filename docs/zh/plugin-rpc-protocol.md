@@ -1,6 +1,6 @@
 # Plugin Dispatcher ↔ Plugin Host 双向 RPC 协议与实施计划
 
-**状态**：设计已确认；oRPC/WebSocket、共享契约、operation scope 和基础治理已实施，仍保留 HTTP MessagePack 兼容路径
+**状态**：设计已确认；oRPC/WebSocket、共享契约、operation scope、值/Blob 配额、前缀校验、背压、心跳和重连退避已实施，仍保留 HTTP MessagePack 兼容路径
 
 **日期**：2026-08-22
 

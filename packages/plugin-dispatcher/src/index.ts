@@ -46,7 +46,17 @@ if (config.PLUGIN_DISPATCHER_HTTP_PORT > 0) {
       hostname: config.PLUGIN_DISPATCHER_HTTP_BIND,
       authToken: config.PLUGIN_DISPATCHER_AUTH_TOKEN,
       encodeTimeoutMs: config.PLUGIN_ENCODE_TIMEOUT_MS,
-      maxFrameBytes: config.PLUGIN_HOST_MAX_FRAME_BYTES,
+      maxFrameBytes:
+        config.PLUGIN_RPC_MAX_FRAME_BYTES ?? config.PLUGIN_HOST_MAX_FRAME_BYTES,
+      valueBudget: {
+        maxDepth: config.PLUGIN_RPC_MAX_DEPTH,
+        maxNodes: config.PLUGIN_RPC_MAX_NODES,
+        maxArrayItems: config.PLUGIN_RPC_MAX_ARRAY_ITEMS,
+        maxStringBytes: config.PLUGIN_RPC_MAX_STRING_BYTES,
+        maxBlobs: config.PLUGIN_RPC_MAX_BLOBS,
+        maxBlobBytes: config.PLUGIN_RPC_MAX_BLOB_BYTES,
+        maxTotalBlobBytes: config.PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES,
+      },
     },
     logger,
   );

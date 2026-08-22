@@ -7,6 +7,8 @@ import {
   PLUGIN_RPC_H2D_PREFIX,
   dispatcherToHostContract,
   hostToDispatcherContract,
+  assertRpcValueBudget,
+  type RpcValueBudget,
   type CommandArgumentWire,
   type EntityGetOutput,
 } from "@soulcloud/plugin-rpc-contract";
@@ -70,6 +72,7 @@ export interface PluginHostWsRuntimeOptions {
   worker: PluginWorker;
   maxConcurrentHandlers: number;
   log: (message: string, fields?: Record<string, unknown>) => void;
+  valueBudget: RpcValueBudget;
 }
 
 export interface PluginHostWsConnection {
@@ -125,6 +128,11 @@ export function createPluginHostWsConnection(
       if (running >= options.maxConcurrentHandlers) rpcError("OVERLOADED", "too many concurrent executions");
       running += 1;
       try {
+        try {
+          assertRpcValueBudget(input.input, options.valueBudget);
+        } catch (error) {
+          rpcError("INVALID_ACTION_INPUT", (error as Error).message);
+        }
         const action = options.manifest.actions.find((candidate) => candidate.id === input.actionId);
         if (!action) rpcError("INVALID_ACTION_INPUT", `unknown action "${input.actionId}"`);
         const check = validateActionInput(action.inputSchema, input.input ?? {});
@@ -138,7 +146,7 @@ export function createPluginHostWsConnection(
           rpcError("HANDLER_ERROR", `action encoder threw: ${(error as Error).message}`);
         }
         if (!Array.isArray(args) || args.length > 256) rpcError("INVALID_ACTION_OUTPUT", "encoder returned an invalid argument array");
-        return {
+        const output = {
           cmd: action.wire.command,
           args: args.map((arg) => {
             const name = Object.keys(arg)[0]!;
@@ -151,6 +159,12 @@ export function createPluginHostWsConnection(
           }),
           schemaVersion: action.wire.schemaVersion,
         };
+        try {
+          assertRpcValueBudget(output, options.valueBudget);
+        } catch (error) {
+          rpcError("INVALID_ACTION_OUTPUT", (error as Error).message);
+        }
+        return output;
       } finally {
         running -= 1;
       }
@@ -164,6 +178,11 @@ export function createPluginHostWsConnection(
       let operationController: AbortController | undefined;
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
       try {
+        try {
+          assertRpcValueBudget(input.payload, options.valueBudget);
+        } catch (error) {
+          rpcError("INVALID_EVENT_INPUT", (error as Error).message);
+        }
         const profile = options.manifest.profiles.find(
           (candidate) => candidate.id === input.device.profileId && candidate.version === input.device.profileVersion,
         );
@@ -176,7 +195,15 @@ export function createPluginHostWsConnection(
           const boundedMessage = Buffer.byteLength(message, "utf8") > MAX_LOG_MESSAGE_BYTES
             ? `${message.slice(0, MAX_LOG_MESSAGE_BYTES)}…`
             : message;
-          options.log(`[plugin-host ${options.manifest.id}] [${level}] ${boundedMessage}`, fields);
+          let boundedFields = fields;
+          if (fields !== undefined) {
+            try {
+              assertRpcValueBudget(fields, options.valueBudget);
+            } catch {
+              boundedFields = { truncated: true };
+            }
+          }
+          options.log(`[plugin-host ${options.manifest.id}] [${level}] ${boundedMessage}`, boundedFields);
         };
         const bindings: PluginContextBindings = {
           getDeviceUid: async () => input.device.deviceUid,
@@ -223,6 +250,11 @@ export function createPluginHostWsConnection(
           receivedAt: input.receivedAt,
         });
         const updates = result?.updates ?? [];
+        try {
+          assertRpcValueBudget(updates, options.valueBudget);
+        } catch (error) {
+          rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+        }
         const check = validateEventUpdates(profile.entities, updates);
         if (!check.ok) {
           rpcError("INVALID_PLUGIN_OUTPUT", `invalid plugin output — ${check.failures.slice(0, 5).map((f) => `${f.entityKey}: ${f.error}`).join("; ")}`);
@@ -230,6 +262,10 @@ export function createPluginHostWsConnection(
         return { updates };
       } finally {
         if (deadlineTimer) clearTimeout(deadlineTimer);
+        // Returning from the parent handler seals the operation. Abort the
+        // shared context signal so an unawaited reverse call cannot outlive
+        // the operation and keep transport/database work alive.
+        operationController?.abort();
         if (operationController) activeSignals.delete(operationController);
         running -= 1;
       }

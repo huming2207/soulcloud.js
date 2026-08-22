@@ -47,6 +47,7 @@ import {
   validateEventUpdates,
 } from "@soulcloud/plugin-sdk";
 import type { EntityUpdate, PluginManifest } from "@soulcloud/plugin-sdk";
+import { assertRpcValueBudget } from "@soulcloud/plugin-rpc-contract";
 import { DeviceCommandSchema } from "@soulcloud/core";
 import { HostSupervisor, type SupervisorLogger } from "./supervisor";
 import { PluginHostTimeoutError, PluginHostUnavailableError, type PluginHostClientLike } from "./rpc-client";
@@ -171,7 +172,8 @@ export function startDispatcher(
     maxReverseCallsPerOperation: options.rpcMaxReverseCallsPerOperation ?? 64,
     maxStagedCommandsPerOperation: options.rpcMaxStagedCommandsPerOperation ?? 16,
     maxBlobsPerOperation: options.rpcMaxBlobs ?? 16,
-    maxBlobBytesPerOperation: options.rpcMaxBlobBytes ?? 256 * 1024,
+    maxBlobBytesPerBlob: options.rpcMaxBlobBytes ?? 65_536,
+    maxBlobBytesPerOperation: options.rpcMaxTotalBlobBytes ?? 256 * 1024,
   };
   const operations = new PluginOperationRegistry(operationLimits, async (event, entityKey) =>
     getDeviceEntityState(prisma, {
@@ -180,6 +182,15 @@ export function startDispatcher(
       entityKey,
     }),
   );
+  const valueBudget = {
+    maxDepth: options.rpcMaxDepth ?? 32,
+    maxNodes: options.rpcMaxNodes ?? 4096,
+    maxArrayItems: options.rpcMaxArrayItems ?? 4096,
+    maxStringBytes: options.rpcMaxStringBytes ?? 65_536,
+    maxBlobs: options.rpcMaxBlobs ?? 16,
+    maxBlobBytes: options.rpcMaxBlobBytes ?? 65_536,
+    maxTotalBlobBytes: options.rpcMaxTotalBlobBytes ?? 256 * 1024,
+  };
 
   const supervisor = new HostSupervisor(
     {
@@ -223,6 +234,7 @@ export function startDispatcher(
     error: string,
     permanent: boolean,
     runtime: InstallationRuntime,
+    countForBreaker = !permanent,
   ): Promise<void> {
     const outcome = await failPluginEvent(prisma, {
       eventId: event.id,
@@ -235,7 +247,7 @@ export function startDispatcher(
     if (outcome.state === "dead") deadLettered += 1;
     // Permanent data/routing errors cannot be repaired by retrying the host;
     // they must not pause healthy events in the same installation.
-    if (!permanent) runtime.breaker.recordFailure();
+    if (countForBreaker) runtime.breaker.recordFailure();
     logger.warn("plugin event failed", {
       eventId: event.id,
       pluginId: event.pluginId,
@@ -338,6 +350,23 @@ export function startDispatcher(
         return;
       }
 
+      // Bound values before oRPC serializes them. The WebSocket frame ceiling
+      // remains the final transport guard, but checking the database payload
+      // here avoids constructing a large request that can never be sent.
+      try {
+        assertRpcValueBudget(event.payload, valueBudget);
+        assertRpcValueBudget(event.installationConfig, valueBudget);
+      } catch (error) {
+        await markFailed(
+          event,
+          `invalid event input: ${(error as Error).message}`,
+          true,
+          runtime,
+          false,
+        );
+        return;
+      }
+
       const operation = operations.begin(event, options.eventTimeoutMs, client.connectionId);
       let finishedOperation: FinishedPluginOperation | null = null;
       let result: unknown;
@@ -396,13 +425,23 @@ export function startDispatcher(
           return;
         }
         const coded = error as Error & { code?: string };
-        if (coded.code === "invalid_params") {
+        if (coded.code === "invalid_params" || coded.code === "invalid_event_input") {
           // host pre-check rejected the plugin output — deterministic
           await markFailed(
             event,
             `invalid plugin output: ${coded.message}`,
             true,
             runtime,
+          );
+          return;
+        }
+        if (coded.code === "invalid_action_output" || coded.code === "invalid_plugin_output") {
+          await markFailed(
+            event,
+            `invalid plugin output: ${coded.message}`,
+            true,
+            runtime,
+            false,
           );
           return;
         }
@@ -426,8 +465,24 @@ export function startDispatcher(
       }
 
       finishedOperation = operations.finish(operation.token);
+      if (finishedOperation && finishedOperation.activeReverseCalls > 0) {
+        await markFailed(
+          event,
+          `plugin operation returned with ${finishedOperation.activeReverseCalls} reverse call(s) still active`,
+          false,
+          runtime,
+          false,
+        );
+        return;
+      }
 
       // Authoritative validation of plugin output (§6.3).
+      try {
+        assertRpcValueBudget(result, valueBudget);
+      } catch (error) {
+        await markFailed(event, `invalid plugin output: ${(error as Error).message}`, true, runtime);
+        return;
+      }
       const { updates, logs } = (result ?? { updates: [] }) as {
         updates?: EntityUpdate[];
         logs?: Array<{

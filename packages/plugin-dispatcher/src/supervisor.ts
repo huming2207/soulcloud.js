@@ -23,6 +23,8 @@ interface HostState {
   starting: Promise<PluginHostClientLike> | null;
   failureTimes: number[];
   benchedUntil: number;
+  reconnectAttempt: number;
+  reconnectAt: number;
 }
 
 export class HostSupervisor {
@@ -65,6 +67,8 @@ export class HostSupervisor {
         starting: null,
         failureTimes: [],
         benchedUntil: 0,
+        reconnectAttempt: 0,
+        reconnectAt: 0,
       };
       this.hosts.set(pluginId, host);
     }
@@ -73,10 +77,17 @@ export class HostSupervisor {
       host.client = null;
       host.pluginVersion = pluginVersion;
       host.baseUrl = baseUrl;
+      host.reconnectAttempt = 0;
+      host.reconnectAt = 0;
     }
     if (host.benchedUntil > Date.now()) {
       throw new PluginHostUnavailableError(
         `plugin ${pluginId} is benched after repeated host failures until ${new Date(host.benchedUntil).toISOString()}`,
+      );
+    }
+    if ((host.baseUrl.startsWith("ws://") || host.baseUrl.startsWith("wss://")) && host.reconnectAt > Date.now()) {
+      throw new PluginHostUnavailableError(
+        `plugin ${pluginId} reconnect backoff until ${new Date(host.reconnectAt).toISOString()}`,
       );
     }
     if (host.client?.isOpen) return host.client;
@@ -117,6 +128,8 @@ export class HostSupervisor {
         : new PluginHostUnavailableError((error as Error).message);
     }
     host.client = client;
+    host.reconnectAttempt = 0;
+    host.reconnectAt = 0;
     this.logger.info("plugin host ready", {
       pluginId: host.pluginId,
       pluginVersion: host.pluginVersion,
@@ -127,6 +140,15 @@ export class HostSupervisor {
 
   private recordFailure(host: HostState, reason: string): void {
     const now = Date.now();
+    if (host.baseUrl.startsWith("ws://") || host.baseUrl.startsWith("wss://")) {
+      host.reconnectAttempt += 1;
+      const base = host.reconnectAttempt <= 1
+        ? this.options.rpcReconnectBaseMs ?? 500
+        : (this.options.rpcReconnectBaseMs ?? 500) * 2 ** (host.reconnectAttempt - 1);
+      const max = this.options.rpcReconnectMaxMs ?? 30_000;
+      const jitter = 0.75 + Math.random() * 0.5;
+      host.reconnectAt = now + Math.min(base, max) * jitter;
+    }
     host.failureTimes.push(now);
     host.failureTimes = host.failureTimes.filter(
       (time) => now - time <= this.options.crashWindowMs,
@@ -139,6 +161,8 @@ export class HostSupervisor {
     if (host.failureTimes.length >= this.options.crashThreshold) {
       host.benchedUntil = now + this.options.crashCooldownMs;
       host.failureTimes = [];
+      host.reconnectAttempt = 0;
+      host.reconnectAt = host.benchedUntil;
       this.logger.error("plugin host benched after repeated failures", {
         pluginId: host.pluginId,
         cooldownMs: this.options.crashCooldownMs,

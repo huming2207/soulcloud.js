@@ -6,6 +6,29 @@ export const PLUGIN_RPC_D2H_PREFIX = "soulcloud:d2h:v1:";
 export const PLUGIN_RPC_H2D_PREFIX = "soulcloud:h2d:v1:";
 export const PLUGIN_RPC_PATH = "/rpc/ws";
 export const PLUGIN_RPC_PROTOCOL_HEADER = "1";
+
+const prefixEncoder = new TextEncoder();
+const d2hPrefixBytes = prefixEncoder.encode(PLUGIN_RPC_D2H_PREFIX);
+const h2dPrefixBytes = prefixEncoder.encode(PLUGIN_RPC_H2D_PREFIX);
+
+export function matchesRpcPrefix(data: string | ArrayBuffer | ArrayBufferView, prefix: string): boolean {
+  if (typeof data === "string") return data.startsWith(prefix);
+  const bytes = data instanceof ArrayBuffer
+    ? new Uint8Array(data)
+    : data instanceof Uint8Array
+      ? data
+      : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  const prefixBytes = prefix === PLUGIN_RPC_D2H_PREFIX
+    ? d2hPrefixBytes
+    : prefix === PLUGIN_RPC_H2D_PREFIX
+      ? h2dPrefixBytes
+      : prefixEncoder.encode(prefix);
+  if (bytes.byteLength < prefixBytes.byteLength) return false;
+  for (let index = 0; index < prefixBytes.byteLength; index += 1) {
+    if (bytes[index] !== prefixBytes[index]) return false;
+  }
+  return true;
+}
 export const PLUGIN_RPC_API_VERSION = 1;
 
 const scalar = z.union([
@@ -170,3 +193,67 @@ export type EncodeActionOutput = z.infer<typeof encodeActionOutput>;
 export type EntityGetInput = z.infer<typeof entityGetInput>;
 export type EntityGetOutput = z.infer<typeof entityGetOutput>;
 export type CommandEnqueueInput = z.infer<typeof commandEnqueueInput>;
+
+export interface RpcValueBudget {
+  maxDepth: number;
+  maxNodes: number;
+  maxArrayItems: number;
+  maxStringBytes: number;
+  maxBlobs: number;
+  maxBlobBytes: number;
+  maxTotalBlobBytes: number;
+}
+
+/**
+ * Bounds unknown JSON/Blob values before business validation or Blob reads.
+ * Repeated object references are rejected as cycles/aliasing so the walker
+ * never needs to retain an unbounded graph of visited nodes.
+ */
+export function assertRpcValueBudget(value: unknown, budget: RpcValueBudget): void {
+  const seen = new WeakSet<object>();
+  let nodes = 0;
+  let blobCount = 0;
+  let blobBytes = 0;
+  let stringBytes = 0;
+  const accountBlob = (size: number): void => {
+    blobCount += 1;
+    blobBytes += size;
+    if (blobCount > budget.maxBlobs) throw new Error("RPC Blob count limit exceeded");
+    if (size > budget.maxBlobBytes) throw new Error("RPC Blob size limit exceeded");
+    if (blobBytes > budget.maxTotalBlobBytes) throw new Error("RPC total Blob bytes limit exceeded");
+  };
+  const visit = (current: unknown, depth: number): void => {
+    nodes += 1;
+    if (nodes > budget.maxNodes) throw new Error("RPC value node limit exceeded");
+    if (depth > budget.maxDepth) throw new Error("RPC value depth limit exceeded");
+    if (typeof current === "string") {
+      stringBytes += Buffer.byteLength(current, "utf8");
+      if (stringBytes > budget.maxStringBytes) throw new Error("RPC string byte limit exceeded");
+      return;
+    }
+    if (current instanceof Blob) {
+      accountBlob(current.size);
+      return;
+    }
+    if (current instanceof ArrayBuffer || ArrayBuffer.isView(current)) {
+      accountBlob(current.byteLength);
+      return;
+    }
+    if (current === null || typeof current !== "object") return;
+    if (seen.has(current)) throw new Error("RPC value contains a cycle or repeated object");
+    seen.add(current);
+    if (Array.isArray(current)) {
+      if (current.length > budget.maxArrayItems) throw new Error("RPC array item limit exceeded");
+      for (const item of current) visit(item, depth + 1);
+      return;
+    }
+    const entries = Object.entries(current);
+    if (entries.length > budget.maxArrayItems) throw new Error("RPC object item limit exceeded");
+    for (const [key, item] of entries) {
+      stringBytes += Buffer.byteLength(key, "utf8");
+      if (stringBytes > budget.maxStringBytes) throw new Error("RPC string byte limit exceeded");
+      visit(item, depth + 1);
+    }
+  };
+  visit(value, 0);
+}

@@ -23,11 +23,18 @@ const envSchema = z.object({
   PLUGIN_RPC_MAX_REVERSE_CALLS_PER_OPERATION: z.coerce.number().int().positive().default(64),
   PLUGIN_RPC_MAX_STAGED_COMMANDS_PER_OPERATION: z.coerce.number().int().positive().default(16),
   PLUGIN_RPC_MAX_BLOBS: z.coerce.number().int().positive().default(16),
-  PLUGIN_RPC_MAX_BLOB_BYTES: z.coerce.number().int().positive().default(256 * 1024),
+  PLUGIN_RPC_MAX_BLOB_BYTES: z.coerce.number().int().positive().default(65_536),
+  PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES: z.coerce.number().int().positive().default(256 * 1024),
+  PLUGIN_RPC_MAX_DEPTH: z.coerce.number().int().positive().default(32),
+  PLUGIN_RPC_MAX_NODES: z.coerce.number().int().positive().default(4096),
+  PLUGIN_RPC_MAX_ARRAY_ITEMS: z.coerce.number().int().positive().default(4096),
+  PLUGIN_RPC_MAX_STRING_BYTES: z.coerce.number().int().positive().default(65_536),
   PLUGIN_RPC_BACKPRESSURE_BYTES: z.coerce.number().int().positive().default(4 * 1024 * 1024),
   PLUGIN_RPC_MAX_PENDING_REQUESTS: z.coerce.number().int().positive().default(128),
   PLUGIN_RPC_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(3_000),
+  PLUGIN_RPC_RECONNECT_BASE_MS: z.coerce.number().int().positive().default(500),
+  PLUGIN_RPC_RECONNECT_MAX_MS: z.coerce.number().int().positive().default(30_000),
   /// Optional bearer token shared by the dispatcher and plugin-host
   /// containers. Keep this in the deployment secret store/.env.
   PLUGIN_HOST_AUTH_TOKEN: z.string().min(16).optional(),
@@ -46,6 +53,7 @@ const envSchema = z.object({
   PLUGIN_PER_INSTALLATION_CONCURRENCY: z.coerce.number().int().positive().default(4),
   /// Maximum serialized HTTP MessagePack-RPC request/response body shared with hosts.
   PLUGIN_HOST_MAX_FRAME_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
+  PLUGIN_RPC_MAX_FRAME_BYTES: z.coerce.number().int().positive().optional(),
   /// Rapid-crash circuit: after this many host exits inside the window the
   /// plugin is benched for the cooldown.
   PLUGIN_HOST_CRASH_THRESHOLD: z.coerce.number().int().positive().default(5),
@@ -91,6 +99,36 @@ export function loadDispatcherConfig(): DispatcherConfig {
         "(the lease must outlive one attempt so a timed-out host request can be marked failed, not recovered blind)",
     );
   }
+  if (
+    config &&
+    config.PLUGIN_RPC_RECONNECT_MAX_MS < config.PLUGIN_RPC_RECONNECT_BASE_MS
+  ) {
+    throw new Error(
+      "PLUGIN_RPC_RECONNECT_MAX_MS must be >= PLUGIN_RPC_RECONNECT_BASE_MS",
+    );
+  }
+  if (config && config.PLUGIN_RPC_MAX_OPERATIONS < config.PLUGIN_MAX_IN_FLIGHT) {
+    throw new Error(
+      "PLUGIN_RPC_MAX_OPERATIONS must be >= PLUGIN_MAX_IN_FLIGHT",
+    );
+  }
+  if (
+    config &&
+    config.PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS >= config.PLUGIN_RPC_HEARTBEAT_INTERVAL_MS
+  ) {
+    throw new Error(
+      "PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS must be < PLUGIN_RPC_HEARTBEAT_INTERVAL_MS",
+    );
+  }
+  if (
+    config &&
+    config.PLUGIN_RPC_MAX_BLOB_BYTES >
+      (config.PLUGIN_RPC_MAX_FRAME_BYTES ?? config.PLUGIN_HOST_MAX_FRAME_BYTES)
+  ) {
+    throw new Error(
+      "PLUGIN_RPC_MAX_BLOB_BYTES must be <= the RPC frame limit",
+    );
+  }
   return config;
 }
 
@@ -117,10 +155,17 @@ export interface DispatcherCoreOptions {
   rpcMaxStagedCommandsPerOperation?: number;
   rpcMaxBlobs?: number;
   rpcMaxBlobBytes?: number;
+  rpcMaxTotalBlobBytes?: number;
+  rpcMaxDepth?: number;
+  rpcMaxNodes?: number;
+  rpcMaxArrayItems?: number;
+  rpcMaxStringBytes?: number;
   rpcBackpressureBytes?: number;
   rpcMaxPendingRequests?: number;
   rpcHeartbeatIntervalMs?: number;
   rpcHeartbeatTimeoutMs?: number;
+  rpcReconnectBaseMs?: number;
+  rpcReconnectMaxMs?: number;
   crashThreshold: number;
   crashWindowMs: number;
   crashCooldownMs: number;
@@ -187,7 +232,7 @@ export function dispatcherCoreOptionsFromConfig(
     backoffMaxMs: config.PLUGIN_EVENT_BACKOFF_MAX_MS,
     maxInFlight: config.PLUGIN_MAX_IN_FLIGHT,
     perInstallationConcurrency: config.PLUGIN_PER_INSTALLATION_CONCURRENCY,
-    maxFrameBytes: config.PLUGIN_HOST_MAX_FRAME_BYTES,
+    maxFrameBytes: config.PLUGIN_RPC_MAX_FRAME_BYTES ?? config.PLUGIN_HOST_MAX_FRAME_BYTES,
     rpcMaxOperations: config.PLUGIN_RPC_MAX_OPERATIONS,
     rpcMaxReverseInFlight: config.PLUGIN_RPC_MAX_REVERSE_IN_FLIGHT,
     rpcPerPluginReverseInFlight: config.PLUGIN_RPC_PER_PLUGIN_REVERSE_IN_FLIGHT,
@@ -197,10 +242,17 @@ export function dispatcherCoreOptionsFromConfig(
     rpcMaxStagedCommandsPerOperation: config.PLUGIN_RPC_MAX_STAGED_COMMANDS_PER_OPERATION,
     rpcMaxBlobs: config.PLUGIN_RPC_MAX_BLOBS,
     rpcMaxBlobBytes: config.PLUGIN_RPC_MAX_BLOB_BYTES,
+    rpcMaxTotalBlobBytes: config.PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES,
+    rpcMaxDepth: config.PLUGIN_RPC_MAX_DEPTH,
+    rpcMaxNodes: config.PLUGIN_RPC_MAX_NODES,
+    rpcMaxArrayItems: config.PLUGIN_RPC_MAX_ARRAY_ITEMS,
+    rpcMaxStringBytes: config.PLUGIN_RPC_MAX_STRING_BYTES,
     rpcBackpressureBytes: config.PLUGIN_RPC_BACKPRESSURE_BYTES,
     rpcMaxPendingRequests: config.PLUGIN_RPC_MAX_PENDING_REQUESTS,
     rpcHeartbeatIntervalMs: config.PLUGIN_RPC_HEARTBEAT_INTERVAL_MS,
     rpcHeartbeatTimeoutMs: config.PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS,
+    rpcReconnectBaseMs: config.PLUGIN_RPC_RECONNECT_BASE_MS,
+    rpcReconnectMaxMs: config.PLUGIN_RPC_RECONNECT_MAX_MS,
     crashThreshold: config.PLUGIN_HOST_CRASH_THRESHOLD,
     crashWindowMs: config.PLUGIN_HOST_CRASH_WINDOW_MS,
     crashCooldownMs: config.PLUGIN_HOST_CRASH_COOLDOWN_MS,

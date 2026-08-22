@@ -43,7 +43,7 @@ const hostname = args.hostname ?? process.env.PLUGIN_HOST_BIND ?? "0.0.0.0";
 const port = args.port ?? Number.parseInt(process.env.PLUGIN_HOST_PORT ?? "8090", 10);
 const authToken = args.authToken ?? process.env.PLUGIN_HOST_AUTH_TOKEN;
 const maxFrameBytes = args.maxFrameBytes ?? Number.parseInt(
-  process.env.PLUGIN_HOST_MAX_FRAME_BYTES ?? String(1024 * 1024),
+  process.env.PLUGIN_RPC_MAX_FRAME_BYTES ?? process.env.PLUGIN_HOST_MAX_FRAME_BYTES ?? String(1024 * 1024),
   10,
 );
 const websocketBackpressureLimit = Number.parseInt(
@@ -58,6 +58,15 @@ const maxWebSocketConnections = Number.parseInt(
   process.env.PLUGIN_HOST_MAX_WS_CONNECTIONS ?? "16",
   10,
 );
+const valueBudget = {
+  maxDepth: Number.parseInt(process.env.PLUGIN_RPC_MAX_DEPTH ?? "32", 10),
+  maxNodes: Number.parseInt(process.env.PLUGIN_RPC_MAX_NODES ?? "4096", 10),
+  maxArrayItems: Number.parseInt(process.env.PLUGIN_RPC_MAX_ARRAY_ITEMS ?? "4096", 10),
+  maxStringBytes: Number.parseInt(process.env.PLUGIN_RPC_MAX_STRING_BYTES ?? "65536", 10),
+  maxBlobs: Number.parseInt(process.env.PLUGIN_RPC_MAX_BLOBS ?? "16", 10),
+  maxBlobBytes: Number.parseInt(process.env.PLUGIN_RPC_MAX_BLOB_BYTES ?? "65536", 10),
+  maxTotalBlobBytes: Number.parseInt(process.env.PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES ?? String(256 * 1024), 10),
+};
 
 if (!pluginId || !Number.isSafeInteger(port) || port < 0 || port > 65_535) {
   console.error(
@@ -75,6 +84,7 @@ const handle = await startPluginHost({
   websocketBackpressureLimit,
   websocketIdleTimeoutSeconds,
   maxWebSocketConnections,
+  valueBudget,
 });
 
 console.log(

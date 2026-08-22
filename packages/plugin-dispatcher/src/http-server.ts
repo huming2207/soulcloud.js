@@ -28,6 +28,10 @@ import { findAction, validateEncodedAction } from "@soulcloud/core";
 import type { HostSupervisor } from "./supervisor";
 import type { SupervisorLogger } from "./supervisor";
 import { PluginHostTimeoutError, PluginHostUnavailableError } from "./rpc-client";
+import {
+  assertRpcValueBudget,
+  type RpcValueBudget,
+} from "@soulcloud/plugin-rpc-contract";
 
 export interface DispatcherHttpOptions {
   port: number;
@@ -37,6 +41,7 @@ export interface DispatcherHttpOptions {
   /** Per-request deadline for the host encode round trip. */
   encodeTimeoutMs: number;
   maxFrameBytes: number;
+  valueBudget?: RpcValueBudget;
 }
 
 export interface DispatcherHttpHandle {
@@ -161,6 +166,9 @@ export function startDispatcherHttp(
 
       let result: unknown;
       try {
+        if (options.valueBudget) {
+          assertRpcValueBudget(params?.input ?? {}, options.valueBudget);
+        }
         const client = await supervisor.ensureClient(
           manifest.id,
           manifest.version,
@@ -176,6 +184,13 @@ export function startDispatcherHttp(
           options.encodeTimeoutMs,
         );
       } catch (error) {
+        if (error instanceof Error && error.message.startsWith("RPC ")) {
+          return rpcResponse(
+            errorResponse(requestId, "invalid_params", error.message),
+            options.maxFrameBytes,
+            400,
+          );
+        }
         if (error instanceof PluginHostTimeoutError) {
           supervisor.killHost(manifest.id);
           return rpcResponse(
@@ -246,6 +261,9 @@ export function startDispatcherHttp(
           args?: unknown;
           schemaVersion?: unknown;
         };
+        if (options.valueBudget) {
+          assertRpcValueBudget(encoded, options.valueBudget);
+        }
         const validated = validateEncodedAction({
           action,
           cmd: typeof encoded.cmd === "string" ? encoded.cmd : "",

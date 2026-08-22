@@ -32,7 +32,14 @@ import {
 import type { PluginManifest, PluginWorker } from "@soulcloud/plugin-sdk";
 import { createPluginContext } from "./context";
 import { createPluginHostWsConnection, type PluginHostWsConnection } from "./ws-server";
-import { PLUGIN_RPC_PROTOCOL_HEADER } from "@soulcloud/plugin-rpc-contract";
+import {
+  PLUGIN_RPC_D2H_PREFIX,
+  PLUGIN_RPC_H2D_PREFIX,
+  PLUGIN_RPC_PROTOCOL_HEADER,
+  assertRpcValueBudget,
+  matchesRpcPrefix,
+  type RpcValueBudget,
+} from "@soulcloud/plugin-rpc-contract";
 
 export interface PluginHostOptions {
   pluginId: string;
@@ -44,6 +51,7 @@ export interface PluginHostOptions {
   websocketBackpressureLimit?: number;
   websocketIdleTimeoutSeconds?: number;
   maxWebSocketConnections?: number;
+  valueBudget?: Partial<RpcValueBudget>;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -60,6 +68,15 @@ const DEFAULT_MAX_CONCURRENT_HANDLERS = 8;
 const DEFAULT_WS_BACKPRESSURE_LIMIT = 4 * 1024 * 1024;
 const DEFAULT_WS_IDLE_TIMEOUT_SECONDS = 60;
 const DEFAULT_MAX_WS_CONNECTIONS = 16;
+const DEFAULT_RPC_VALUE_BUDGET: RpcValueBudget = {
+  maxDepth: 32,
+  maxNodes: 4096,
+  maxArrayItems: 4096,
+  maxStringBytes: 65_536,
+  maxBlobs: 16,
+  maxBlobBytes: 65_536,
+  maxTotalBlobBytes: 256 * 1024,
+};
 const MAX_LOGS_PER_EVENT = 32;
 const MAX_LOG_MESSAGE_BYTES = 4 * 1024;
 const MAX_LOG_FIELDS_BYTES = 16 * 1024;
@@ -112,6 +129,7 @@ export async function startPluginHost(
   const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
   const maxConcurrent =
     options.maxConcurrentHandlers ?? DEFAULT_MAX_CONCURRENT_HANDLERS;
+  const valueBudget = { ...DEFAULT_RPC_VALUE_BUDGET, ...options.valueBudget };
   const hostname = options.hostname ?? "127.0.0.1";
   const log = options.log ?? ((message, fields) => console.log(message, fields ?? ""));
   let running = 0;
@@ -199,6 +217,7 @@ export async function startPluginHost(
       return handleRequest(parsed, worker, manifest, {
         maxFrameBytes,
         maxConcurrent,
+        valueBudget,
         getRunning: () => running,
         onRunningDelta: (delta) => {
           running += delta;
@@ -219,12 +238,17 @@ export async function startPluginHost(
           worker,
           maxConcurrentHandlers: maxConcurrent,
           log,
+          valueBudget,
         });
       },
       message(ws, message) {
         const connection = ws.data.connection;
         if (!connection) {
           ws.close(1011, "connection not initialized");
+          return;
+        }
+        if (!matchesRpcPrefix(message, PLUGIN_RPC_D2H_PREFIX) && !matchesRpcPrefix(message, PLUGIN_RPC_H2D_PREFIX)) {
+          ws.close(1002, "unknown RPC prefix");
           return;
         }
         // Both oRPC peers observe every frame and filter by their direction
@@ -238,6 +262,9 @@ export async function startPluginHost(
             markHandshaken: () => { ws.data.handshaken = true; },
           },
         });
+      },
+      drain(ws) {
+        ws.data.connection?.bridge.dispatch("drain", {});
       },
       close(ws) {
         activeWebSocketConnections = Math.max(0, activeWebSocketConnections - 1);
@@ -268,6 +295,7 @@ export async function startPluginHost(
 interface HandlerEnv {
   maxFrameBytes: number;
   maxConcurrent: number;
+  valueBudget: RpcValueBudget;
   getRunning: () => number;
   onRunningDelta: (delta: number) => void;
   log: (message: string, fields?: Record<string, unknown>) => void;
@@ -318,6 +346,13 @@ async function handleRequest(
         );
       }
       const input = params.input ?? {};
+      try {
+        assertRpcValueBudget(input, env.valueBudget);
+      } catch (error) {
+        return respond(
+          errorResponse(request.id, "invalid_action_input", (error as Error).message),
+        );
+      }
       const inputCheck = validateActionInput(action.inputSchema, input);
       if (!inputCheck.ok) {
         const detail = inputCheck.failures
@@ -381,6 +416,13 @@ async function handleRequest(
         args,
         schemaVersion: action.wire.schemaVersion,
       };
+      try {
+        assertRpcValueBudget(result, env.valueBudget);
+      } catch (error) {
+        return respond(
+          errorResponse(request.id, "invalid_action_output", (error as Error).message),
+        );
+      }
       if (encodedBytes(result, env.maxFrameBytes) > env.maxFrameBytes) {
         return respond(
           errorResponse(request.id, "response_too_large", "encoded action exceeds the frame ceiling"),
@@ -413,6 +455,14 @@ async function handleRequest(
       return respond(errorResponse(request.id, "invalid_params", "missing event parameters"));
     }
     const deadlineMs = Math.min(request.deadlineMs, 10 * 60 * 1000);
+    try {
+      assertRpcValueBudget(params.payload, env.valueBudget);
+      assertRpcValueBudget(params.installation?.config, env.valueBudget);
+    } catch (error) {
+      return respond(
+        errorResponse(request.id, "invalid_params", (error as Error).message),
+      );
+    }
     const logs: LogNotificationParams[] = [];
     const emitLog = (
       level: LogNotificationParams["level"],
@@ -462,6 +512,13 @@ async function handleRequest(
       receivedAt: params.receivedAt,
     });
     const updates = result?.updates ?? [];
+    try {
+      assertRpcValueBudget(updates, env.valueBudget);
+    } catch (error) {
+      return respond(
+        errorResponse(request.id, "invalid_action_output", (error as Error).message),
+      );
+    }
     const profile = manifest.profiles.find(
       (candidate) =>
         candidate.id === params.device.profileId &&

@@ -5,6 +5,7 @@ import {
   commandEnqueueInput,
   handleEventInput,
   handleEventOutput,
+  assertRpcValueBudget,
 } from "../src";
 
 test("contract keeps the two WebSocket directions distinct", () => {
@@ -44,4 +45,23 @@ test("contract accepts operation-scoped event and binary command arguments", () 
 
 test("contract bounds malformed plugin output", () => {
   expect(() => handleEventOutput.parse({ updates: Array(4097).fill({}) })).toThrow();
+});
+
+test("RPC value budget rejects deep graphs, cycles and oversized Blobs", () => {
+  const budget = {
+    maxDepth: 2,
+    maxNodes: 8,
+    maxArrayItems: 4,
+    maxStringBytes: 8,
+    maxBlobs: 1,
+    maxBlobBytes: 3,
+    maxTotalBlobBytes: 3,
+  };
+  expect(() => assertRpcValueBudget({ a: { b: { c: 1 } } }, budget)).toThrow("depth");
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  expect(() => assertRpcValueBudget(cyclic, budget)).toThrow("cycle");
+  expect(() => assertRpcValueBudget({ a: "1234", b: "5678" }, budget)).toThrow("string byte");
+  expect(() => assertRpcValueBudget(new Blob([new Uint8Array([1, 2, 3, 4])]), budget)).toThrow("Blob size");
+  expect(() => assertRpcValueBudget(new Uint8Array([1, 2, 3, 4]), budget)).toThrow("Blob size");
 });
