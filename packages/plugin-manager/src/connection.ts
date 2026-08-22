@@ -35,6 +35,7 @@ export interface PluginConnectionOptions {
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
   reverseHandlers: ReverseHandlers;
+  onDisconnect?: (connectionId: string) => void;
 }
 
 export class PluginConnectionError extends Error {}
@@ -50,7 +51,7 @@ export class PluginConnection {
   private pending = 0;
   private closed = false;
   private handshaken = false;
-  private readonly connectionId = crypto.randomUUID();
+  private connectionId = crypto.randomUUID();
   private manifestInfo: HandshakeOutput | null = null;
 
   constructor(private readonly options: PluginConnectionOptions) {
@@ -77,8 +78,15 @@ export class PluginConnection {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const socket = new WebSocket(this.options.endpoint, { headers: { "x-soulcloud-rpc-protocol": RPC_PROTOCOL_HEADER, ...(this.options.authToken ? { authorization: `Bearer ${this.options.authToken}` } : {}) } });
+      this.connectionId = crypto.randomUUID();
       this.socket = socket;
-      const fail = (error: Error) => { if (settled) return; settled = true; reject(error); };
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        try { socket.close(); } catch { /* already closed */ }
+        this.onClose(socket);
+        reject(error);
+      };
       socket.addEventListener("error", () => fail(new PluginConnectionError("plugin WebSocket error")));
       socket.addEventListener("open", () => {
         const bridge = createClientBridge(socket);
@@ -102,7 +110,7 @@ export class PluginConnection {
           if (!hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) return;
           void this.reverseHandler?.message(bridge, data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">, { context: { signal: AbortSignal.timeout(10_000) } });
         });
-        socket.addEventListener("close", () => this.onClose());
+        socket.addEventListener("close", () => this.onClose(socket));
         this.finishHandshake().then(() => { settled = true; resolve(); }).catch((error) => { socket.close(1002, "handshake failed"); fail(error instanceof Error ? error : new Error(String(error))); });
       });
     });
@@ -144,13 +152,34 @@ export class PluginConnection {
     try { await this.forward.system.ping({ nonce: crypto.randomUUID() }, { signal: controller.signal }); } catch { this.socket.close(1011, "heartbeat timeout"); } finally { clearTimeout(timer); }
   }
 
-  private onClose(): void {
+  private onClose(socket: WebSocket | null = this.socket): void {
+    if (socket && socket !== this.socket) return;
+    const connectionId = this.connectionId;
+    const reverseHandler = this.reverseHandler;
     this.handshaken = false; this.forward = null; this.manifestInfo = null; this.bridge = null;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer); this.heartbeatTimer = null;
-    void this.reverseHandler?.close(this.socket!); this.reverseHandler = null; this.socket = null;
+    this.reverseHandler = null; this.socket = null;
+    this.connectionId = crypto.randomUUID();
+    if (reverseHandler && socket) void reverseHandler.close(socket);
+    this.options.onDisconnect?.(connectionId);
   }
 
-  close(): void { this.closed = true; if (this.heartbeatTimer) clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; this.socket?.close(1000, "manager shutdown"); this.onClose(); }
+  disconnect(reason = "connection reset"): void {
+    const socket = this.socket;
+    if (socket) {
+      try { socket.close(1012, reason); } catch { /* already closed */ }
+      this.onClose(socket);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    const socket = this.socket;
+    if (socket) {
+      try { socket.close(1000, "manager shutdown"); } catch { /* already closed */ }
+      this.onClose(socket);
+    }
+  }
 }
 
 function hasPrefix(data: string | ArrayBuffer | ArrayBufferView, prefix: string): boolean {

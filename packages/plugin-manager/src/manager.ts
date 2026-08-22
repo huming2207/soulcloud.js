@@ -307,6 +307,12 @@ export class PluginManager {
       heartbeatIntervalMs: this.options.heartbeatIntervalMs,
       heartbeatTimeoutMs: this.options.heartbeatTimeoutMs,
       reverseHandlers: handlers,
+      onDisconnect: (connectionId) => {
+        for (const [operationId, operation] of this.operations) {
+          if (operation.connectionId === connectionId) this.operations.delete(operationId);
+        }
+        this.scheduleReconnect(pluginId);
+      },
     };
     connection = new PluginConnection(config);
     this.connections.set(pluginId, connection);
@@ -331,6 +337,7 @@ export class PluginManager {
       this.log("plugin connected", { pluginId, version: manifest.version, manifestHash: computed });
     } catch (error) {
       this.log("plugin unavailable", { pluginId, error: (error as Error).message });
+      connection.disconnect("handshake rejected");
       this.scheduleReconnect(pluginId);
     }
   }

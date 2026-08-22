@@ -77,13 +77,16 @@ function commandWire(args: CommandArgument[]): Array<{ name: string; value: stri
 function createBridge(ws: Bun.ServerWebSocket<unknown>) {
   const listeners = new Map<string, Set<(event: unknown) => void>>();
   let readyState: 0 | 1 | 2 | 3 = 1;
+  const dispatch = (type: string, event: unknown): void => {
+    for (const listener of listeners.get(type) ?? []) listener(event);
+  };
   return {
     get readyState() { return readyState; },
     send(data: string | Uint8Array<ArrayBuffer>) { return ws.send(data); },
     addEventListener(type: string, listener: (event: unknown) => void) { let set = listeners.get(type); if (!set) listeners.set(type, set = new Set()); set.add(listener); },
     removeEventListener(type: string, listener: (event: unknown) => void) { listeners.get(type)?.delete(listener); },
-    dispatch(type: string, event: unknown) { for (const listener of listeners.get(type) ?? []) listener(event); },
-    close() { readyState = 3; },
+    dispatch,
+    close() { readyState = 3; dispatch("close", {}); },
   };
 }
 
@@ -122,8 +125,20 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
         const connection = ws.data.connection;
         const data = message instanceof ArrayBuffer ? message : typeof message === "string" ? message : message instanceof Uint8Array ? message : new Uint8Array(message as ArrayBuffer);
         const bytes = typeof data === "string" ? new TextEncoder().encode(data).byteLength : data.byteLength;
-        if (bytes > maxFrameBytes || (!hasPrefix(data, MANAGER_TO_PLUGIN_PREFIX) && !hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX))) { ws.close(1009, "invalid RPC frame"); return; }
-        if (!connection || !hasPrefix(data, MANAGER_TO_PLUGIN_PREFIX)) return;
+        if (bytes > maxFrameBytes) { ws.close(1009, "RPC frame too large"); return; }
+        if (!hasPrefix(data, MANAGER_TO_PLUGIN_PREFIX) && !hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
+          ws.close(1002, "invalid RPC prefix");
+          return;
+        }
+        if (!connection) return;
+        if (hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
+          // Responses to plugin -> manager reverse calls use the reverse
+          // direction prefix even though they arrive on this socket from the
+          // manager. Feed them to the reverse RPC client; the server handler
+          // must not consume them as manager -> plugin requests.
+          connection.bridge.dispatch("message", { data });
+          return;
+        }
         void connection.handler.message(connection.bridge, data, { context: { isHandshaken: () => ws.data.handshaken, markHandshaken: () => { ws.data.handshaken = true; } } }).catch(() => ws.close(1011, "RPC handler error"));
       },
       close(ws) { activeConnections = Math.max(0, activeConnections - 1); void ws.data.connection?.close(); ws.data.connection = undefined; },
@@ -207,9 +222,35 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
         finally { clearTimeout(timer); running -= 1; }
       }),
     },
-      ui: {
-      render: implemented.ui.render.handler(async ({ input, context }) => { if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required"); const renderer = definition.render?.[input.routeId]; if (!renderer) rpcError("NOT_FOUND", "unknown UI route"); const result = await renderer(input); assertRpcValueBudget(result.html, budget); return result; }),
-      handleAction: implemented.ui.handleAction.handler(async ({ input, context }) => { if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required"); const actionHandler = definition.handleAction?.[input.routeId]; if (!actionHandler) rpcError("NOT_FOUND", "unknown UI route"); return await actionHandler(input.action, input) as { redirect?: string; errors?: { field: string; message: string }[] }; }),
+    ui: {
+      render: implemented.ui.render.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        const renderer = definition.render?.[input.routeId];
+        if (!renderer) rpcError("NOT_FOUND", "unknown UI route");
+        if (running >= maxConcurrent) rpcError("OVERLOADED", "plugin operation limit reached");
+        running += 1;
+        try {
+          const result = await renderer(input);
+          assertRpcValueBudget(result, budget);
+          return result;
+        } finally {
+          running -= 1;
+        }
+      }),
+      handleAction: implemented.ui.handleAction.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        const actionHandler = definition.handleAction?.[input.routeId];
+        if (!actionHandler) rpcError("NOT_FOUND", "unknown UI route");
+        if (running >= maxConcurrent) rpcError("OVERLOADED", "plugin operation limit reached");
+        running += 1;
+        try {
+          const result = await actionHandler(input.action, input) as { redirect?: string; errors?: { field: string; message: string }[] };
+          assertRpcValueBudget(result, budget);
+          return result;
+        } finally {
+          running -= 1;
+        }
+      }),
     },
   };
   const handler = new RPCHandler(router, { encodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX }, decodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX } });
