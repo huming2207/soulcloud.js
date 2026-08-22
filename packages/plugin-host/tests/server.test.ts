@@ -77,6 +77,15 @@ function client(): TestClient {
 }
 
 describe("plugin host HTTP MessagePack-RPC", () => {
+  test("rejects non-finite resource limits at startup", async () => {
+    await expect(startPluginHost({
+      pluginId: CHAOS_PLUGIN_ID,
+      hostname: "127.0.0.1",
+      port: 0,
+      valueBudget: { maxNodes: Number.NaN },
+    })).rejects.toThrow("valueBudget.maxNodes");
+  });
+
   test("health endpoint reports readiness", async () => {
     const response = await fetch(`${host.url}/health`);
     expect(response.ok).toBe(true);

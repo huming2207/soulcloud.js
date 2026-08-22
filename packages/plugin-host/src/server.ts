@@ -81,6 +81,13 @@ const MAX_LOGS_PER_EVENT = 32;
 const MAX_LOG_MESSAGE_BYTES = 4 * 1024;
 const MAX_LOG_FIELDS_BYTES = 16 * 1024;
 
+function requirePositiveInteger(name: string, value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
 type HostEventResult = HandleEventResult & { logs?: LogNotificationParams[] };
 
 function encodedBytes(value: unknown, maxFrameBytes: number): number {
@@ -130,6 +137,23 @@ export async function startPluginHost(
   const maxConcurrent =
     options.maxConcurrentHandlers ?? DEFAULT_MAX_CONCURRENT_HANDLERS;
   const valueBudget = { ...DEFAULT_RPC_VALUE_BUDGET, ...options.valueBudget };
+  requirePositiveInteger("maxFrameBytes", maxFrameBytes);
+  requirePositiveInteger("maxConcurrentHandlers", maxConcurrent);
+  requirePositiveInteger(
+    "websocketBackpressureLimit",
+    options.websocketBackpressureLimit ?? DEFAULT_WS_BACKPRESSURE_LIMIT,
+  );
+  requirePositiveInteger(
+    "websocketIdleTimeoutSeconds",
+    options.websocketIdleTimeoutSeconds ?? DEFAULT_WS_IDLE_TIMEOUT_SECONDS,
+  );
+  requirePositiveInteger(
+    "maxWebSocketConnections",
+    options.maxWebSocketConnections ?? DEFAULT_MAX_WS_CONNECTIONS,
+  );
+  for (const [name, value] of Object.entries(valueBudget)) {
+    requirePositiveInteger(`valueBudget.${name}`, value);
+  }
   const hostname = options.hostname ?? "127.0.0.1";
   const log = options.log ?? ((message, fields) => console.log(message, fields ?? ""));
   let running = 0;
