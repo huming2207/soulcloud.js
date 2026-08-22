@@ -1,12 +1,24 @@
-import { validateManifest, type PluginManifest } from "@soulcloud/plugin-sdk";
-import { canonicalJson, sha256Hex, type HandshakeOutput } from "@soulcloud/plugin-rpc-contract";
+import { validateActionInput, validateManifest, type PluginManifest } from "@soulcloud/plugin-sdk";
+import { canonicalJson, sha256Hex, type EntityGetInput, type CommandEnqueueInput, type HandshakeOutput } from "@soulcloud/plugin-rpc-contract";
 import {
   completePluginEvent,
+  completePluginEventWithUpdates,
   decodeDeviceEvent,
+  enqueueBatch,
+  getPluginEntityState,
+  bindDeviceToPluginInstallation,
+  createPluginInstallation,
+  migratePluginInstallation,
+  reconcilePluginInstallation,
+  setPluginInstallationState,
   leasePluginEvents,
   releasePluginEvent,
   Prisma,
   type LeasedPluginEvent,
+  type EntityUpdateInput,
+  type CommandArgument,
+  type BindDeviceInput,
+  type CreateInstallationInput,
   type PrismaClient,
 } from "@soulcloud/core";
 import { PluginConnection, type PluginConnectionOptions, type ReverseHandlers } from "./connection";
@@ -20,6 +32,7 @@ export interface PluginManagerOptions {
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
   reconnectMs: number;
+  prisma?: PrismaClient;
   manifestStore?: ManifestStore;
   reverseHandlers?: Partial<ReverseHandlers>;
   eventStore?: PluginEventStore;
@@ -34,6 +47,7 @@ export interface PluginManagerOptions {
 export interface PluginEventStore {
   lease(limit: number, leaseMs: number): Promise<LeasedPluginEvent[]>;
   complete(eventId: string, leaseToken: string): Promise<boolean>;
+  completeWithUpdates?(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[] }): Promise<boolean>;
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number): Promise<boolean>;
 }
 
@@ -41,6 +55,9 @@ export class PrismaPluginEventStore implements PluginEventStore {
   constructor(private readonly prisma: PrismaClient) {}
   lease(limit: number, leaseMs: number) { return leasePluginEvents(this.prisma, limit, leaseMs); }
   complete(eventId: string, leaseToken: string) { return completePluginEvent(this.prisma, eventId, leaseToken); }
+  completeWithUpdates(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[] }) {
+    return completePluginEventWithUpdates(this.prisma, eventId, leaseToken, context);
+  }
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number) {
     return releasePluginEvent(this.prisma, eventId, leaseToken, permanent, error, retryMs);
   }
@@ -84,10 +101,23 @@ export class PrismaManifestStore implements ManifestStore {
 
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
 
+interface ActiveOperation {
+  operationToken: string;
+  connectionId: string;
+  installationId: string;
+  projectId: string;
+  pluginId: string;
+  pluginVersion: string;
+  deviceId?: string;
+  profileId?: string;
+  profileVersion?: number;
+}
+
 export class PluginManager {
   private readonly connections = new Map<string, PluginConnection>();
   private readonly catalog = new Map<string, CatalogEntry>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly operations = new Map<string, ActiveOperation>();
   private eventTimer: ReturnType<typeof setInterval> | null = null;
   private eventPollRunning = false;
   private stopping = false;
@@ -110,12 +140,92 @@ export class PluginManager {
     }
   }
 
+  async createInstallation(input: CreateInstallationInput): Promise<{ id: string }> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return createPluginInstallation(this.options.prisma, input);
+  }
+
+  async bindDevice(input: BindDeviceInput): Promise<void> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return bindDeviceToPluginInstallation(this.options.prisma, input);
+  }
+
+  async setInstallationState(installationId: string, state: "enabled" | "disabled"): Promise<void> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return setPluginInstallationState(this.options.prisma, installationId, state);
+  }
+
+  async migrateInstallation(installationId: string, pluginVersion: string, manifestHash: string, config: unknown): Promise<void> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return migratePluginInstallation(this.options.prisma, installationId, pluginVersion, manifestHash, config);
+  }
+
+  async reconcileInstallation(installationId: string): Promise<void> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return reconcilePluginInstallation(this.options.prisma, installationId);
+  }
+
+  async encodeAction(input: {
+    installationId: string;
+    deviceId: string;
+    actionId: string;
+    actionInput: unknown;
+    timeoutMs?: number;
+  }): Promise<{ batchId: string; deviceCount: number }> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    const installation = await this.options.prisma.pluginInstallation.findUnique({
+      where: { id: input.installationId },
+      select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
+    });
+    if (!installation) throw new Error("plugin installation not found");
+    if (installation.state !== "enabled") throw new Error("plugin installation is disabled");
+    const manifest = this.getManifest(installation.pluginId, installation.pluginVersion);
+    if (!manifest || manifest.version !== installation.pluginVersion) throw new Error("plugin manifest is unavailable");
+    const action = manifest.actions.find((item) => item.id === input.actionId);
+    if (!action) throw new Error("action is not declared by the plugin manifest");
+    const validInput = validateActionInput(action.inputSchema, input.actionInput);
+    if (!validInput.ok) throw new Error(`invalid action input: ${validInput.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; ")}`);
+    const connection = this.connections.get(installation.pluginId);
+    if (!connection?.isOpen) throw new Error("plugin is unavailable");
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    this.operations.set(operationId, {
+      operationToken,
+      connectionId: connection.id,
+      installationId: installation.id,
+      projectId: installation.projectId,
+      pluginId: installation.pluginId,
+      pluginVersion: installation.pluginVersion,
+      deviceId: input.deviceId,
+    });
+    try {
+      const encoded = await connection.request("action.encode", {
+        operationId,
+        operationToken,
+        actionId: input.actionId,
+        input: input.actionInput,
+      }, input.timeoutMs ?? 30_000) as { command: string; args: Array<{ name: string; value: unknown }>; schemaVersion: number };
+      if (encoded.command !== action.wire.command || encoded.schemaVersion !== action.wire.schemaVersion) throw new Error("plugin encoder returned a command outside the declared action wire contract");
+      const binding = await this.options.prisma.pluginDeviceBinding.findUnique({ where: { deviceId: input.deviceId }, select: { installationId: true } });
+      if (!binding || binding.installationId !== installation.id) throw new Error("device is not bound to the plugin installation");
+      const args: CommandArgument[] = [];
+      for (const argument of encoded.args) {
+        const value = argument.value instanceof Blob ? new Uint8Array(await argument.value.arrayBuffer()) : argument.value;
+        args.push({ [argument.name]: value as CommandArgument[string] });
+      }
+      const batch = await enqueueBatch(this.options.prisma, [input.deviceId], { cmd: encoded.command, args });
+      return { batchId: batch.id, deviceCount: batch.deviceCount };
+    } finally {
+      this.operations.delete(operationId);
+    }
+  }
+
   private connectionFor(pluginId: string): PluginConnection {
     let connection = this.connections.get(pluginId);
     if (connection) return connection;
     const handlers: ReverseHandlers = {
-      entityGet: this.options.reverseHandlers?.entityGet ?? unavailable,
-      commandEnqueue: this.options.reverseHandlers?.commandEnqueue ?? unavailable,
+      entityGet: this.options.reverseHandlers?.entityGet ?? ((input, signal, connectionId) => this.reverseEntityGet(input, signal, connectionId)),
+      commandEnqueue: this.options.reverseHandlers?.commandEnqueue ?? ((input, signal, connectionId) => this.reverseCommandEnqueue(input, signal, connectionId)),
       pluginCall: this.options.reverseHandlers?.pluginCall ?? unavailable,
       uiGetData: this.options.reverseHandlers?.uiGetData ?? unavailable,
     };
@@ -186,11 +296,26 @@ export class PluginManager {
       await this.releaseEvent(event, false, "plugin is unavailable");
       return;
     }
+    let activeOperationId: string | undefined;
     try {
       const envelope = decodeDeviceEvent(event.payload);
+      const operationId = crypto.randomUUID();
+      activeOperationId = operationId;
+      const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+      this.operations.set(operationId, {
+        operationToken,
+        connectionId: connection.id,
+        installationId: event.installation_id,
+        projectId: event.project_id,
+        pluginId: event.plugin_id,
+        pluginVersion: event.plugin_version,
+        deviceId: event.device_id,
+        profileId: event.profile_id,
+        profileVersion: event.profile_version,
+      });
       const result = await connection.request("plugin.handleEvent", {
-        operationId: crypto.randomUUID(),
-        operationToken: `${crypto.randomUUID()}${crypto.randomUUID()}`,
+        operationId,
+        operationToken,
         event: {
           id: event.event_id.trim(),
           kind: envelope.kind,
@@ -212,8 +337,18 @@ export class PluginManager {
           profileVersion: event.profile_version,
         },
       }, this.options.eventTimeoutMs ?? 30_000);
-      void result;
-      await store.complete(event.id, event.lease_token);
+      const output = result as { updates?: readonly EntityUpdateInput[] };
+      if (store.completeWithUpdates) {
+        await store.completeWithUpdates(event.id, event.lease_token, {
+          installationId: event.installation_id,
+          deviceId: event.device_id,
+          profileId: event.profile_id,
+          profileVersion: event.profile_version,
+          updates: output.updates ?? [],
+        });
+      } else {
+        await store.complete(event.id, event.lease_token);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = typeof error === "object" && error !== null && "code" in error
@@ -221,7 +356,49 @@ export class PluginManager {
         : "";
       const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT";
       await this.releaseEvent(event, permanent, message);
+    } finally {
+      // Operation capabilities are valid only while the parent RPC is live.
+      if (activeOperationId) this.operations.delete(activeOperationId);
     }
+  }
+
+  private operationFor(input: { operationId: string; operationToken: string }, connectionId: string): ActiveOperation {
+    const operation = this.operations.get(input.operationId);
+    if (!operation || operation.connectionId !== connectionId || operation.operationToken !== input.operationToken) {
+      throw new Error("operation capability is invalid or expired");
+    }
+    return operation;
+  }
+
+  private async reverseEntityGet(input: EntityGetInput, signal: AbortSignal, connectionId: string) {
+    if (signal.aborted) throw new Error("operation aborted");
+    const operation = this.operationFor(input, connectionId);
+    if (!operation.deviceId) throw new Error("entity read requires a device scope");
+    if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
+    return getPluginEntityState(this.options.prisma, operation.installationId, operation.deviceId, input.entityKey);
+  }
+
+  private async reverseCommandEnqueue(input: CommandEnqueueInput, signal: AbortSignal, connectionId: string): Promise<{ accepted: true }> {
+    if (signal.aborted) throw new Error("operation aborted");
+    const operation = this.operationFor(input, connectionId);
+    if (!operation.deviceId) throw new Error("command enqueue requires a device scope");
+    if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
+    const binding = await this.options.prisma.pluginDeviceBinding.findUnique({
+      where: { deviceId: operation.deviceId },
+      select: { installationId: true, installation: { select: { state: true, projectId: true } } },
+    });
+    if (!binding || binding.installationId !== operation.installationId || binding.installation.projectId !== operation.projectId || binding.installation.state !== "enabled") {
+      throw new Error("device is not bound to the active plugin installation");
+    }
+    const args: CommandArgument[] = [];
+    for (const argument of input.args) {
+      const value = argument.value instanceof Blob
+        ? new Uint8Array(await argument.value.arrayBuffer())
+        : argument.value;
+      args.push({ [argument.name]: value as CommandArgument[string] });
+    }
+    await enqueueBatch(this.options.prisma, [operation.deviceId], { cmd: input.command, args });
+    return { accepted: true };
   }
 
   private async releaseEvent(event: LeasedPluginEvent, permanent: boolean, message: string): Promise<void> {

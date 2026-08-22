@@ -108,6 +108,8 @@ model Device {
   rolloutPool      OtaRolloutPool[]
   pluginBindings   PluginDeviceBinding[]
   pluginEvents     PluginEvent[]
+  pluginEntityStates PluginEntityState[]
+  pluginEntityHistory PluginEntityHistory[]
 
   @@unique([projectId, assignedId], map: "devices_project_assigned_id_unique")
   @@map("devices")
@@ -446,6 +448,9 @@ model PluginInstallation {
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz()
   bindings      PluginDeviceBinding[]
   events        PluginEvent[]
+  entityDescriptors PluginEntityDescriptor[]
+  entityStates   PluginEntityState[]
+  entityHistory  PluginEntityHistory[]
 
   @@unique([projectId, pluginId], map: "plugin_installations_project_plugin_unique")
   @@index([pluginId, state])
@@ -502,4 +507,70 @@ model PluginEvent {
   @@index([installationId, state, availableAt], map: "plugin_events_installation_state_idx")
   @@index([finishedAt], map: "plugin_events_finished_idx")
   @@map("plugin_events")
+}
+
+/// Immutable descriptor revisions copied from an installation manifest.
+model PluginEntityDescriptor {
+  id               String            @id @default(uuid()) @db.Uuid
+  installationId   String            @map("installation_id") @db.Uuid
+  installation     PluginInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  profileId        String            @map("profile_id") @db.VarChar(128)
+  profileVersion   Int               @map("profile_version")
+  entityKey        String            @map("entity_key") @db.VarChar(128)
+  revision         Int
+  valueType        String            @map("value_type") @db.VarChar(16)
+  category         String            @db.VarChar(32)
+  unit             String?           @db.VarChar(64)
+  enumValues       Json?             @map("enum_values")
+  staleAfterSeconds Int?            @map("stale_after_seconds")
+  history          String            @default("none") @db.VarChar(16)
+  deprecated       Boolean           @default(false)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@unique([installationId, profileId, profileVersion, entityKey, revision], map: "plugin_entity_descriptors_revision_unique")
+  @@index([installationId, profileId, profileVersion, deprecated], map: "plugin_entity_descriptors_lookup_idx")
+  @@map("plugin_entity_descriptors")
+}
+
+/// Latest state for one bound device/entity.
+model PluginEntityState {
+  installationId  String             @map("installation_id") @db.Uuid
+  installation    PluginInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  deviceId        String             @map("device_id") @db.Uuid
+  device           Device             @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  entityKey       String             @map("entity_key") @db.VarChar(128)
+  descriptorRevision Int             @map("descriptor_revision")
+  value           Json?
+  quality         String             @db.VarChar(16)
+  sourceTimestamp DateTime?          @map("source_timestamp") @db.Timestamptz()
+  ingestedAt      DateTime           @default(now()) @map("ingested_at") @db.Timestamptz()
+  sequence        BigInt?
+  alarmLevel      String?            @map("alarm_level") @db.VarChar(16)
+  alarmCode       String?            @map("alarm_code") @db.VarChar(256)
+
+  @@id([installationId, deviceId, entityKey], map: "plugin_entity_states_pkey")
+  @@index([deviceId, ingestedAt], map: "plugin_entity_states_device_time_idx")
+  @@map("plugin_entity_states")
+}
+
+/// Immutable history rows retained according to the descriptor history policy.
+model PluginEntityHistory {
+  id              BigInt             @id @default(autoincrement())
+  installationId  String             @map("installation_id") @db.Uuid
+  installation    PluginInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  deviceId        String             @map("device_id") @db.Uuid
+  device           Device             @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  entityKey       String             @map("entity_key") @db.VarChar(128)
+  descriptorRevision Int             @map("descriptor_revision")
+  value           Json?
+  quality         String             @db.VarChar(16)
+  sourceTimestamp DateTime?          @map("source_timestamp") @db.Timestamptz()
+  ingestedAt      DateTime           @default(now()) @map("ingested_at") @db.Timestamptz()
+  sequence        BigInt?
+  alarmLevel      String?            @map("alarm_level") @db.VarChar(16)
+  alarmCode       String?            @map("alarm_code") @db.VarChar(256)
+
+  @@index([deviceId, entityKey, ingestedAt, id], map: "plugin_entity_history_device_entity_time_idx")
+  @@index([installationId, ingestedAt], map: "plugin_entity_history_installation_time_idx")
+  @@map("plugin_entity_history")
 }

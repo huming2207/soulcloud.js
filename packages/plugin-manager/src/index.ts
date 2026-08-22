@@ -6,6 +6,7 @@ import { startPluginManagerServer } from "./server";
 const config = loadPluginManagerConfig();
 const manager = new PluginManager({
   endpoints: parsePluginEndpoints(config.PLUGIN_ENDPOINTS),
+  prisma,
   authToken: process.env.PLUGIN_RPC_AUTH_TOKEN,
   maxFrameBytes: config.PLUGIN_RPC_MAX_FRAME_BYTES,
   maxPendingRequests: config.PLUGIN_RPC_MAX_PENDING_REQUESTS,

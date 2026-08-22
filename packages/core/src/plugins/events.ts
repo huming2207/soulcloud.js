@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "../db";
 import { PLUGIN_EVENTS_CHANNEL } from "../queue/notify";
 import type { DeviceEventEnvelope } from "../protocol/event";
+import { applyEntityUpdates, type EntityUpdateInput } from "./entities";
 
 export type DeviceEventIngestStatus =
   | "inserted"
@@ -166,6 +167,37 @@ export async function completePluginEvent(
     WHERE id = ${eventId}::uuid AND state = 'leased' AND lease_token = ${leaseToken}
   `;
   return result === 1;
+}
+
+/** Completes an event and applies its Entity updates under the same commit. */
+export async function completePluginEventWithUpdates(
+  prisma: PrismaClient,
+  eventId: string,
+  leaseToken: string,
+  entityContext: {
+    installationId: string;
+    deviceId: string;
+    profileId: string;
+    profileVersion: number;
+    updates: readonly EntityUpdateInput[];
+  },
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM plugin_events
+      WHERE id = ${eventId}::uuid AND state = 'leased' AND lease_token = ${leaseToken}
+      FOR UPDATE
+    `;
+    if (locked.length === 0) return false;
+    await applyEntityUpdates(tx, entityContext);
+    const updated = await tx.$executeRaw`
+      UPDATE plugin_events
+      SET state = 'completed', lease_expires_at = NULL, lease_token = NULL,
+          finished_at = CURRENT_TIMESTAMP, last_error = NULL
+      WHERE id = ${eventId}::uuid AND state = 'leased' AND lease_token = ${leaseToken}
+    `;
+    return updated === 1;
+  });
 }
 
 export async function releasePluginEvent(
