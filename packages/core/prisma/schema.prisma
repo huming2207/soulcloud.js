@@ -411,3 +411,19 @@ model DeviceFirmwareState {
   reportedAt DateTime @default(now()) @map("reported_at") @db.Timestamptz()
   @@map("device_firmware_state")
 }
+
+/// Immutable manifest declaration received during an authenticated plugin
+/// handshake. A new hash for the same plugin/version is always rejected.
+model PluginManifestSnapshot {
+  id               String   @id @default(uuid()) @db.Uuid
+  pluginId         String   @map("plugin_id") @db.VarChar(128)
+  pluginVersion    String   @map("plugin_version") @db.VarChar(128)
+  manifestHash     String   @map("manifest_hash") @db.Char(64)
+  canonicalManifest Json    @map("canonical_manifest")
+  apiVersion       Int      @map("api_version")
+  firstSeenAt      DateTime @default(now()) @map("first_seen_at") @db.Timestamptz()
+
+  @@unique([pluginId, pluginVersion], map: "plugin_manifest_snapshots_plugin_version_unique")
+  @@index([pluginId, firstSeenAt])
+  @@map("plugin_manifest_snapshots")
+}

@@ -1,5 +1,6 @@
-import type { PluginManifest } from "@soulcloud/plugin-sdk";
+import { validateManifest, type PluginManifest } from "@soulcloud/plugin-sdk";
 import { canonicalJson, sha256Hex, type HandshakeOutput } from "@soulcloud/plugin-rpc-contract";
+import type { PrismaClient } from "@soulcloud/core";
 import { PluginConnection, type PluginConnectionOptions, type ReverseHandlers } from "./connection";
 
 export interface PluginManagerOptions {
@@ -11,6 +12,7 @@ export interface PluginManagerOptions {
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
   reconnectMs: number;
+  manifestStore?: ManifestStore;
   reverseHandlers?: Partial<ReverseHandlers>;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
@@ -21,6 +23,34 @@ export interface CatalogEntry {
   manifestHash: string;
   manifest: PluginManifest;
   connected: boolean;
+}
+
+export interface ManifestStore {
+  list(): Promise<Array<{ pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest }>>;
+  get(pluginId: string, pluginVersion: string): Promise<{ manifestHash: string; manifest: PluginManifest } | null>;
+  insert(snapshot: { pluginId: string; pluginVersion: string; manifestHash: string; apiVersion: number; manifest: PluginManifest }): Promise<void>;
+}
+
+/** PostgreSQL is the durable source of truth; no manifest is compiled here. */
+export class PrismaManifestStore implements ManifestStore {
+  constructor(private readonly prisma: PrismaClient) {}
+  async list() {
+    const rows = await this.prisma.pluginManifestSnapshot.findMany({ orderBy: [{ pluginId: "asc" }, { firstSeenAt: "desc" }] });
+    return rows.map((row) => ({ pluginId: row.pluginId, pluginVersion: row.pluginVersion, manifestHash: row.manifestHash.trim(), manifest: row.canonicalManifest as unknown as PluginManifest }));
+  }
+  async get(pluginId: string, pluginVersion: string) {
+    const row = await this.prisma.pluginManifestSnapshot.findUnique({ where: { pluginId_pluginVersion: { pluginId, pluginVersion } } });
+    return row ? { manifestHash: row.manifestHash.trim(), manifest: row.canonicalManifest as unknown as PluginManifest } : null;
+  }
+  async insert(snapshot: { pluginId: string; pluginVersion: string; manifestHash: string; apiVersion: number; manifest: PluginManifest }): Promise<void> {
+    try {
+      await this.prisma.pluginManifestSnapshot.create({ data: { pluginId: snapshot.pluginId, pluginVersion: snapshot.pluginVersion, manifestHash: snapshot.manifestHash, canonicalManifest: snapshot.manifest, apiVersion: snapshot.apiVersion } });
+    } catch (error) {
+      // A concurrent Manager may have inserted the same version. The caller
+      // re-reads it and rejects a hash mismatch; never overwrite a snapshot.
+      if (!(error instanceof Error) || !error.message.includes("Unique constraint")) throw error;
+    }
+  }
 }
 
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
@@ -36,7 +66,12 @@ export class PluginManager {
     this.log = options.log ?? ((message, fields) => console.log(`[soulcloud-plugin-manager] ${message}`, fields ?? ""));
   }
 
-  start(): void { for (const [pluginId] of this.options.endpoints) void this.connect(pluginId); }
+  async start(): Promise<void> {
+    if (this.options.manifestStore) {
+      for (const entry of await this.options.manifestStore.list()) this.catalog.set(`${entry.pluginId}@${entry.pluginVersion}`, { ...entry, connected: false });
+    }
+    for (const [pluginId] of this.options.endpoints) void this.connect(pluginId);
+  }
 
   private connectionFor(pluginId: string): PluginConnection {
     let connection = this.connections.get(pluginId);
@@ -68,12 +103,15 @@ export class PluginManager {
     const connection = this.connectionFor(pluginId);
     try {
       const handshake = await connection.connect();
-      const manifest = handshake.manifest as PluginManifest;
+      const manifest = validateManifest(handshake.manifest);
       const computed = await sha256Hex(canonicalJson(manifest));
       if (computed !== handshake.manifestHash) throw new Error(`manifest hash mismatch for ${pluginId}`);
       if (manifest.id !== pluginId || manifest.version !== handshake.pluginVersion) throw new Error(`manifest identity mismatch for ${pluginId}`);
-      const previous = this.catalog.get(`${manifest.id}@${manifest.version}`);
+      const previous = this.options.manifestStore
+        ? await this.options.manifestStore.get(manifest.id, manifest.version)
+        : this.catalog.get(`${manifest.id}@${manifest.version}`);
       if (previous && previous.manifestHash !== computed) throw new Error(`manifest drift for ${manifest.id}@${manifest.version}`);
+      if (!previous && this.options.manifestStore) await this.options.manifestStore.insert({ pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: computed, apiVersion: manifest.apiVersion, manifest });
       this.catalog.set(`${manifest.id}@${manifest.version}`, { pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: computed, manifest, connected: true });
       this.log("plugin connected", { pluginId, version: manifest.version, manifestHash: computed });
     } catch (error) {

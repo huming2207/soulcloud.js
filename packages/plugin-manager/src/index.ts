@@ -1,5 +1,6 @@
+import { prisma } from "@soulcloud/core";
 import { loadPluginManagerConfig, parsePluginEndpoints } from "./config";
-import { PluginManager } from "./manager";
+import { PluginManager, PrismaManifestStore } from "./manager";
 import { startPluginManagerServer } from "./server";
 
 const config = loadPluginManagerConfig();
@@ -12,11 +13,12 @@ const manager = new PluginManager({
   heartbeatIntervalMs: config.PLUGIN_RPC_HEARTBEAT_INTERVAL_MS,
   heartbeatTimeoutMs: config.PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS,
   reconnectMs: config.PLUGIN_MANAGER_RECONNECT_MS,
+  manifestStore: new PrismaManifestStore(prisma),
 });
-manager.start();
+await manager.start();
 const server = startPluginManagerServer({ hostname: config.PLUGIN_MANAGER_INTERNAL_BIND, port: config.PLUGIN_MANAGER_INTERNAL_PORT, serviceToken: config.PLUGIN_MANAGER_SERVICE_TOKEN, manager });
 console.log(`[soulcloud-plugin-manager] listening on ${server.url}`);
 let stopping = false;
-async function shutdown(signal: string) { if (stopping) return; stopping = true; console.log(`[soulcloud-plugin-manager] ${signal}`); server.stop(); await manager.stop(); process.exit(0); }
+async function shutdown(signal: string) { if (stopping) return; stopping = true; console.log(`[soulcloud-plugin-manager] ${signal}`); server.stop(); await manager.stop(); await prisma.$disconnect(); process.exit(0); }
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
