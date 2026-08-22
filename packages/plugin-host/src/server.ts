@@ -134,8 +134,13 @@ export async function startPluginHost(
   const log = options.log ?? ((message, fields) => console.log(message, fields ?? ""));
   let running = 0;
   let activeWebSocketConnections = 0;
+  let reservedWebSocketConnections = 0;
 
-  type HostWebSocketData = { connection?: PluginHostWsConnection; handshaken: boolean };
+  type HostWebSocketData = {
+    connection?: PluginHostWsConnection;
+    handshaken: boolean;
+    counted: boolean;
+  };
   const server = Bun.serve<HostWebSocketData>({
     hostname,
     port: options.port,
@@ -151,7 +156,8 @@ export async function startPluginHost(
       }
       if (url.pathname === "/rpc/ws") {
         if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
-        if (activeWebSocketConnections >= (options.maxWebSocketConnections ?? DEFAULT_MAX_WS_CONNECTIONS)) {
+        const maxWebSocketConnections = options.maxWebSocketConnections ?? DEFAULT_MAX_WS_CONNECTIONS;
+        if (activeWebSocketConnections + reservedWebSocketConnections >= maxWebSocketConnections) {
           return new Response("too many WebSocket connections", { status: 503 });
         }
         if (request.headers.get("x-soulcloud-rpc-protocol") !== PLUGIN_RPC_PROTOCOL_HEADER) {
@@ -160,7 +166,9 @@ export async function startPluginHost(
         if (options.authToken && request.headers.get("authorization") !== `Bearer ${options.authToken}`) {
           return new Response("unauthorized", { status: 401 });
         }
-        if (!server.upgrade(request, { data: { handshaken: false } })) {
+        reservedWebSocketConnections += 1;
+        if (!server.upgrade(request, { data: { handshaken: false, counted: false } })) {
+          reservedWebSocketConnections = Math.max(0, reservedWebSocketConnections - 1);
           return new Response("WebSocket upgrade failed", { status: 400 });
         }
         return undefined as unknown as Response;
@@ -231,7 +239,9 @@ export async function startPluginHost(
       closeOnBackpressureLimit: true,
       idleTimeout: options.websocketIdleTimeoutSeconds ?? DEFAULT_WS_IDLE_TIMEOUT_SECONDS,
       open(ws) {
+        reservedWebSocketConnections = Math.max(0, reservedWebSocketConnections - 1);
         activeWebSocketConnections += 1;
+        ws.data.counted = true;
         ws.data.handshaken = false;
         ws.data.connection = createPluginHostWsConnection(ws, {
           manifest,
@@ -267,7 +277,11 @@ export async function startPluginHost(
         ws.data.connection?.bridge.dispatch("drain", {});
       },
       close(ws) {
-        activeWebSocketConnections = Math.max(0, activeWebSocketConnections - 1);
+        if (ws.data.counted) {
+          activeWebSocketConnections = Math.max(0, activeWebSocketConnections - 1);
+        } else {
+          reservedWebSocketConnections = Math.max(0, reservedWebSocketConnections - 1);
+        }
         void ws.data.connection?.close();
         ws.data.connection = undefined;
       },
