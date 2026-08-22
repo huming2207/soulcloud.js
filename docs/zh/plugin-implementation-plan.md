@@ -1,6 +1,6 @@
 # Soulcloud 插件架构分阶段实施计划
 
-**状态**：待实施；本文件只规划代码工作，不表示已经完成
+**状态**：阶段 0–6 的基础纵切已实现并由 CI 验证；阶段 7–8 仍待实施
 **日期**：2026-08-23
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`
 
@@ -24,18 +24,21 @@ Soulcloud Devices running Soulcloud Client
 
 ## 2. 当前项目基线
 
-插件实验代码已回滚，当前仓库没有 Plugin Manager、plugin runtime、插件 RPC、manifest
-snapshot、Entity、Action、installation 或 `plugin_events` 实现。直接复用的只有平台基础：
+历史插件相关代码已删除；当前插件实现是按本计划从零写出的新代码，不是旧 Dispatcher/Host
+的改名或兼容层。现有基础纵切包括：
 
-- Human API 的认证、project membership、设备管理和审计基础；
-- Device Broker 的 MQTT/WSS 会话认证、topic ACL、消息校验和 PostgreSQL 集成；
-- PostgreSQL migration、事务、租约/outbox 和现有 DeviceCommand queue；
-- Web 的登录、权限导航、国际化和页面基础；
-- Bun 1.4、TypeScript strict、测试和 CI 基础。
+- `packages/plugin-sdk`：manifest、profile、Entity、Action、事件和 UI 契约与校验；
+- `packages/plugin-rpc-contract`：oRPC/WebSocket 双 prefix、handshake、Blob/JSON 预算和
+  canonical manifest hash；
+- `packages/plugin-runtime`：只加载显式 entrypoint 的通用 plugin 进程，不负责容器生命周期；
+- `packages/plugin-manager`：独立 Bun 服务、主动连接、事件 lease、Action、Entity reverse RPC
+  和 `/plugins/*` SSR 路由；
+- core 的 immutable manifest snapshot、durable `/event` queue、Entity revision/state/history、
+  installation/binding 生命周期和 retention migration；
+- Human API 的权限检查与内部 service-auth 路由，以及 Compose/Dockerfile 的独立部署边界。
 
-插件部分必须从本计划定义的契约重新实现。不得恢复或改名历史 Dispatcher/Host 代码，不得
-引入 Station/Agent/Fixture/workflow、编译期 manifest registry、设备侧 plugin runtime 或
-旧 endpoint/env/package compatibility layer。
+这些代码不恢复历史 endpoint、环境变量、package 名或旧 RPC envelope；Device 侧仍只使用现有
+Device Broker MQTT/HTTPS 协议。
 
 ## 3. 实施原则
 
@@ -49,6 +52,10 @@ snapshot、Entity、Action、installation 或 `plugin_events` 实现。直接复
 - plugin code 只在 plugin 自己的进程中执行。
 
 ## 阶段 0：契约冻结与删除清单
+
+**状态：已完成。** 旧插件目录、旧 Dispatcher/Host 命名、旧 endpoint/env 和双 registry 已
+从工作树删除；新 `/event` envelope、manifest hash、UI session 和 RPC contract 已冻结并有
+CI 类型/单元测试覆盖。
 
 ### 工作
 
@@ -76,6 +83,9 @@ snapshot、Entity、Action、installation 或 `plugin_events` 实现。直接复
 
 ## 阶段 1：建立插件 package 与部署边界
 
+**状态：已完成基础纵切。** 新 SDK、RPC contract、Plugin Manager、plugin runtime、Compose
+target、healthcheck 和连接认证已落地；容器生命周期仍由部署系统负责。
+
 ### 工作
 
 - 新建 plugin SDK、RPC contract、独立 `plugin-manager` Bun service 和通用 plugin runtime；
@@ -100,6 +110,9 @@ snapshot、Entity、Action、installation 或 `plugin_events` 实现。直接复
 - handshake、连接认证、heartbeat、断线清理和基础资源限制形成最小纵切。
 
 ## 阶段 2：Manifest handshake 单一真相
+
+**状态：已完成基础纵切。** handshake canonical hash、不可变 snapshot、漂移拒绝和 Manager
+重启后的 DB catalog 恢复已落地。
 
 ### 数据库
 
@@ -144,6 +157,9 @@ installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接�
 
 ## 阶段 3：Plugin Manager internal API 与资源隔离
 
+**状态：已完成基础纵切；生产级配额/观测仍属于阶段 8。** Human API 通过 service-auth
+内部 HTTP 调用 Manager，插件 RPC、事件消费和 SSR 有独立连接/并发/请求上限。
+
 ### 工作
 
 - Plugin Manager 成为独立 Bun API server；
@@ -169,6 +185,9 @@ installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接�
 - Broker 和 Human API 在 Manager 失效时仍能独立提供非插件能力。
 
 ## 阶段 4：Device `/event` 端到端路径
+
+**状态：已完成基础纵切。** Broker 只校验并持久化通用 envelope，Manager 异步 lease；QoS 1
+幂等、固定入队时间、retry/dead-letter、retention 和 Entity completion 已落地。
 
 ### Shared protocol
 
@@ -210,6 +229,10 @@ installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接�
 
 ## 阶段 5：Action、Entity 与安装生命周期切换
 
+**状态：已完成基础纵切。** Action 输入/encoder 输出分类、profile descriptor revision、
+多 profile binding、deprecated 收敛、stale DB 时钟和批量 Entity upsert 已落地；历史查询 API、
+scoped plugin-to-plugin 和更完整的 UI catalog 仍待后续阶段补齐。
+
 ### 工作
 
 - Human API Action 请求经 Manager → plugin `action.encode`；
@@ -236,6 +259,9 @@ installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接�
 - 所有旧进程内 encoder 路径删除。
 
 ## 阶段 6：Plugin SSR MVP
+
+**状态：已完成 MVP。** Human API 签发短期 session，Manager 验签并转发有限 HTML fragment；
+React 代码只在 plugin 进程执行，当前不提供 hydration/RSC/streaming pass-through。
 
 ### Session 与路由
 
@@ -269,6 +295,9 @@ installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接�
 
 ## 阶段 7：公网 egress 与跨 plugin 调用
 
+**状态：待实施。** 当前只保留 RPC contract 和部署文档边界，尚未提供通用 scoped
+plugin-to-plugin/data capability 实现。
+
 ### Public API
 
 - plugin 可以使用自己的 credential 访问 weather/map/geocoding/vendor API；
@@ -291,6 +320,8 @@ installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接�
 - 循环调用、fan-out 和超大响应被有界拒绝。
 
 ## 阶段 8：生产硬化与收尾
+
+**状态：待实施。** 需要根据部署规模补充网络策略、压测、混沌/多副本 soak、观测和运维手册。
 
 - 删除所有迁移期间的临时代码和 feature flag；
 - retention、索引、DB pool、event batch、SSR stream 和外部 API 做压测；

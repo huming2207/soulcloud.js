@@ -442,8 +442,10 @@ Plugin Manager internal API 使用独立 service credential、请求 deadline �
 ## 14. 第一轮实施范围
 
 1. 删除 Station/workflow SDK 类型、校验器、测试和文档引用。
-2. 将 `plugin-dispatcher` 直接重构/重命名为独立 `plugin-manager`，不保留旧入口。
-3. 将 `plugin-host` 直接重构/重命名为 plugin runtime package/entrypoint；用户文档只称 plugin。
+2. 旧 `plugin-dispatcher` 相关代码已经删除；新 `plugin-manager` package 按本架构独立实现，
+   不复用旧入口或 envelope。
+3. 旧 `plugin-host` 相关代码已经删除；新 `plugin-runtime` 只按显式 entrypoint 加载 plugin，
+   不提供旧 package、endpoint 或环境变量兼容层。
 4. manifest 从编译期双 registry 改为 plugin handshake + DB immutable snapshot。
 5. 将 `/event` 接入 Device Broker 和现有 durable `plugin_events`。
 6. 保留已有 event lease、fairness、retry、dead-letter、retention 和 Entity transaction 能力。

@@ -1,6 +1,6 @@
 # Plugin Manager ↔ plugin 双向 RPC 与 SSR 协议
 
-**状态**：目标协议，直接替换旧 Plugin Dispatcher ↔ Plugin Host 命名和入口
+**状态**：当前实现协议；旧插件 RPC 代码和入口已删除
 **日期**：2026-08-23
 
 本文只规定独立 Plugin Manager 与云端 plugin instance 之间的通信。Soulcloud Client 不使用
@@ -390,12 +390,12 @@ PLUGIN_SSR_MAX_CONCURRENCY=...
 - multi-replica：两个 Manager 连接同 plugin、event 只完成一次、reverse 返回正确连接；
 - deployment：plugin 能访问公网 API，但不能访问 Broker/DB/Device/internal Human API。
 
-## 16. 迁移原则
+## 16. 当前落地与后续原则
 
-- 直接将旧 Dispatcher 实现重构为 Plugin Manager，不运行两套服务；
-- 直接将旧 Host entrypoint/package 改为 plugin runtime，不保留旧 endpoint/env alias；
-- 删除编译期 manifest/worker 双 registry，改为 handshake snapshot；
-- 删除 Station/workflow SDK 和所有相关测试；
-- 保留仍符合新架构的 oRPC transport、operation capability、event queue、Entity transaction、
-  retry、retention 和 circuit-breaker 实现；
-- CI 和 Compose 一次性切到新角色名。
+- 历史 Dispatcher/Host 实现、入口、endpoint、环境变量和兼容 alias 已删除；当前
+  `plugin-manager`、`plugin-runtime`、SDK 和 RPC contract 是全新实现；
+- 编译期 manifest/worker 双 registry 已删除，唯一声明来自 handshake + immutable snapshot；
+- Station/workflow/device-side plugin runtime 不属于当前系统；
+- 已落地的 oRPC transport、operation capability、event queue、Entity transaction、retry、
+  retention 和 circuit-breaker 继续遵守本协议；
+- 后续只在本协议和最新实施计划上增量实现阶段 7–8，不恢复旧设计或建立双轨兼容。
