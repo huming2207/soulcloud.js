@@ -246,12 +246,12 @@ export class PluginManager {
       return await connection.request(method, {
         operationId,
         operationToken,
-        requestId,
+        requestId: input.requestId,
         routeId: session.routeId,
         installationId: session.installationId,
         projectId: session.projectId,
         user: { id: session.sub, locale: session.locale, permissions: session.permissions },
-        params,
+        params: input.params,
         ...(method === "ui.handleAction" ? { action: input.action } : {}),
       }, 30_000);
     } finally {
