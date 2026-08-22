@@ -145,7 +145,10 @@ export function canonicalJson(value: unknown): string {
     if (current === null || typeof current === "boolean" || typeof current === "string") return JSON.stringify(current);
     if (typeof current === "number") { if (!Number.isFinite(current)) throw new Error("manifest contains non-finite number"); return JSON.stringify(current); }
     if (Array.isArray(current)) return `[${current.map(visit).join(",")}]`;
-    if (typeof current === "object") { const entries = Object.entries(current as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)); return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${visit(item)}`).join(",")}}`; }
+    if (typeof current === "object") {
+      const entries = Object.entries(current as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+      return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${visit(item)}`).join(",")}}`;
+    }
     throw new Error("manifest contains unsupported value");
   };
   return visit(value);

@@ -125,11 +125,15 @@ export class PluginConnection {
       : data instanceof ArrayBuffer ? data.byteLength : data.byteLength;
     if (bytes > this.options.maxFrameBytes) { socket.close(1009, "RPC frame too large"); return; }
     if (!hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) return;
-    await this.reverseHandler?.message(
-      bridge,
-      data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">,
-      { context: { signal: AbortSignal.timeout(10_000) } },
-    );
+    try {
+      await this.reverseHandler?.message(
+        bridge,
+        data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">,
+        { context: { signal: AbortSignal.timeout(10_000) } },
+      );
+    } catch {
+      socket.close(1002, "invalid reverse RPC frame");
+    }
   }
 
   private async finishHandshake(): Promise<void> {

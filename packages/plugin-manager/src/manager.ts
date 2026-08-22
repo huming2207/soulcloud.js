@@ -390,6 +390,21 @@ export class PluginManager {
     }
     let activeOperationId: string | undefined;
     try {
+      const manifestEntry = this.catalog.get(`${event.plugin_id}@${event.plugin_version}`);
+      if (!manifestEntry) throw new Error("plugin manifest snapshot is unavailable");
+      if (manifestEntry.manifestHash !== event.manifest_hash.trim()) {
+        const error = `plugin manifest hash drift for ${event.plugin_id}@${event.plugin_version}`;
+        this.circuitSuccess(event.plugin_id);
+        await this.releaseEvent(event, true, error);
+        return;
+      }
+      const eventDescriptor = manifestEntry.manifest.events.find((item) => item.kind === event.kind && item.schemaVersion === event.schema);
+      if (!eventDescriptor) {
+        const error = `event ${event.kind}@${event.schema} is not declared by the plugin manifest`;
+        this.circuitSuccess(event.plugin_id);
+        await this.releaseEvent(event, true, error);
+        return;
+      }
       const envelope = decodeDeviceEvent(event.payload);
       const operationId = crypto.randomUUID();
       activeOperationId = operationId;
