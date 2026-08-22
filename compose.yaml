@@ -30,6 +30,8 @@ services:
       # shared with the broker; must be set in .env (>= 32 chars)
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       API_BIND_ADDRESS: 0.0.0.0:8080
+      PLUGIN_MANAGER_INTERNAL_URL: http://plugin-manager:8091
+      PLUGIN_MANAGER_SERVICE_TOKEN: ${PLUGIN_MANAGER_SERVICE_TOKEN:?set PLUGIN_MANAGER_SERVICE_TOKEN in .env}
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped

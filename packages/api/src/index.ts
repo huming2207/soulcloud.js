@@ -42,6 +42,11 @@ const app = createApp(
     argon2Concurrency: config.AUTH_ARGON2_CONCURRENCY,
     loginFailureCapacity: config.AUTH_LOGIN_FAILURE_CAPACITY,
   },
+  {
+    internalUrl: config.PLUGIN_MANAGER_INTERNAL_URL,
+    serviceToken: config.PLUGIN_MANAGER_SERVICE_TOKEN,
+    requestTimeoutMs: config.PLUGIN_MANAGER_REQUEST_TIMEOUT_MS,
+  },
 );
 // WEB-09: Bun buffers request bodies up to maxRequestBodySize before
 // handlers run; the firmware multipart path is streamed and capped at

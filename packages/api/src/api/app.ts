@@ -36,6 +36,7 @@ import { createRolloutRoutes } from "./rollout";
 import { createMeRoutes } from "./me";
 import { createDeviceRoutes } from "./devices";
 import { authenticateRequest, userCanAccessProject } from "./validate";
+import { createPluginManagerRoutes } from "./plugin-manager";
 
 const MAX_BATCH_TARGETS = 1000;
 
@@ -70,6 +71,12 @@ export interface AuthWorkOptions {
   loginFailureCapacity?: number;
 }
 
+export interface PluginManagerOptions {
+  internalUrl: string;
+  serviceToken?: string;
+  requestTimeoutMs?: number;
+}
+
 export function createApp(
   prisma: PrismaClient,
   jwt: JwtConfig,
@@ -77,6 +84,7 @@ export function createApp(
   streamOptions: StreamOptions = {},
   maxJsonBodyBytes = 1024 * 1024,
   authWorkOptions: AuthWorkOptions = {},
+  pluginManagerOptions?: PluginManagerOptions,
 ) {
   // C1 (round-5): never fall back to a hardcoded secret. The caller MUST
   // pass the configured JwtConfig (index.ts wires .env; tests inject
@@ -167,7 +175,8 @@ export function createApp(
     .use(createFirmwareRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createRolloutRoutes(prisma, auth, otaTargetTtlSeconds))
     .use(createMeRoutes(prisma, auth))
-    .use(createDeviceRoutes(prisma, auth));
+    .use(createDeviceRoutes(prisma, auth))
+    .use(createPluginManagerRoutes(prisma, auth, pluginManagerOptions));
 }
 
 function formatZodIssues(

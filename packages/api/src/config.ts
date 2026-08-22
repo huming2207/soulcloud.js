@@ -27,6 +27,9 @@ export const envSchema = z.object({
   AUTH_ARGON2_CONCURRENCY: z.coerce.number().int().positive().default(4),
   /// Hard bound for distinct usernames retained by the local failure cache.
   AUTH_LOGIN_FAILURE_CAPACITY: z.coerce.number().int().positive().default(10_000),
+  PLUGIN_MANAGER_INTERNAL_URL: z.string().url().default("http://127.0.0.1:8091"),
+  PLUGIN_MANAGER_SERVICE_TOKEN: z.string().min(16).optional(),
+  PLUGIN_MANAGER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(5_000),
 });
 
 export type ApiConfig = BaseConfig & z.infer<typeof envSchema>;
