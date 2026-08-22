@@ -257,7 +257,7 @@ export class PluginHostClient {
 /** oRPC v2 client for the one-socket, two-prefix transport. */
 class PluginHostWsClient implements PluginHostClientLike {
   private readonly wsUrl: string;
-  readonly connectionId = crypto.randomUUID();
+  private currentConnectionId: string | undefined;
   private readonly handshakeTimeoutMs: number;
   private readonly authToken?: string;
   private readonly reverseHandlers?: PluginHostReverseHandlers;
@@ -298,6 +298,10 @@ class PluginHostWsClient implements PluginHostClientLike {
     return !this.closed && this.socket?.readyState === WebSocket.OPEN;
   }
 
+  get connectionId(): string | undefined {
+    return this.currentConnectionId;
+  }
+
   private async ensureConnected(): Promise<void> {
     if (this.isOpen) return;
     if (this.closed) throw new PluginHostUnavailableError("plugin host client is closed");
@@ -311,6 +315,8 @@ class PluginHostWsClient implements PluginHostClientLike {
           "x-soulcloud-rpc-protocol": PLUGIN_RPC_PROTOCOL_HEADER,
         },
       });
+      const connectionId = crypto.randomUUID();
+      this.currentConnectionId = connectionId;
       this.socket = socket;
       const fail = (error: Error) => {
         if (this.connecting) {
@@ -343,13 +349,13 @@ class PluginHostWsClient implements PluginHostClientLike {
             entities: {
               get: implemented.context.entities.get.handler(({ input }) => {
                 if (!reverse) throw new Error("reverse entity reads are not configured");
-                return reverseCall((signal) => reverse.entityGet(input, signal, this.connectionId));
+                return reverseCall((signal) => reverse.entityGet(input, signal, connectionId));
               }),
             },
             commands: {
               enqueue: implemented.context.commands.enqueue.handler(({ input }) => {
                 if (!reverse) throw new Error("reverse command enqueue is not configured");
-                return reverseCall((signal) => reverse.commandEnqueue(input, signal, this.connectionId));
+                return reverseCall((signal) => reverse.commandEnqueue(input, signal, connectionId));
               }),
             },
           },
@@ -393,6 +399,7 @@ class PluginHostWsClient implements PluginHostClientLike {
           rejectConnection = null;
         }
         this.socket = null;
+        if (this.currentConnectionId === connectionId) this.currentConnectionId = undefined;
         this.d2hClient = null;
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = null;
