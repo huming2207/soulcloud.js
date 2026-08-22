@@ -1,6 +1,6 @@
 import { validateManifest, type PluginManifest } from "@soulcloud/plugin-sdk";
 import { canonicalJson, sha256Hex, type HandshakeOutput } from "@soulcloud/plugin-rpc-contract";
-import type { PrismaClient } from "@soulcloud/core";
+import { Prisma, type PrismaClient } from "@soulcloud/core";
 import { PluginConnection, type PluginConnectionOptions, type ReverseHandlers } from "./connection";
 
 export interface PluginManagerOptions {
@@ -44,7 +44,7 @@ export class PrismaManifestStore implements ManifestStore {
   }
   async insert(snapshot: { pluginId: string; pluginVersion: string; manifestHash: string; apiVersion: number; manifest: PluginManifest }): Promise<void> {
     try {
-      await this.prisma.pluginManifestSnapshot.create({ data: { pluginId: snapshot.pluginId, pluginVersion: snapshot.pluginVersion, manifestHash: snapshot.manifestHash, canonicalManifest: snapshot.manifest, apiVersion: snapshot.apiVersion } });
+      await this.prisma.pluginManifestSnapshot.create({ data: { pluginId: snapshot.pluginId, pluginVersion: snapshot.pluginVersion, manifestHash: snapshot.manifestHash, canonicalManifest: snapshot.manifest as Prisma.InputJsonValue, apiVersion: snapshot.apiVersion } });
     } catch (error) {
       // A concurrent Manager may have inserted the same version. The caller
       // re-reads it and rejects a hash mismatch; never overwrite a snapshot.
