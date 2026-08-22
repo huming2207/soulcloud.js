@@ -1,13 +1,13 @@
 # 插件、工业 Entity 与工位执行架构规划
 
-**状态**：阶段 1（架构与 SDK 骨架）、阶段 2（插件容器隔离原型）与阶段 3
-（Action 与声明式 Web UI）已实施（见 §17.1–§17.3 的代码位置）；其余阶段仍为设计提案
-**日期**：2026-08-21
+**状态**：阶段 1（架构与 SDK 骨架）、阶段 2（插件容器隔离原型）、阶段 3
+（Action 与声明式 Web UI）以及 Plugin Dispatcher ↔ Plugin Host 的 oRPC/WebSocket
+双向 RPC 已实施（见 §17.1–§17.3 与 `plugin-rpc-protocol.md`）；阶段 4 仍是下一阶段实现目标
+**日期**：2026-08-22
 
-> **后续协议决策（2026-08-22）**：当前 HTTP MessagePack-RPC 仍是已实施基线；下一阶段
-> 将按 [Plugin Dispatcher ↔ Plugin Host 双向 RPC 协议与实施计划](plugin-rpc-protocol.md)
-> 迁移到 oRPC v2 + 单 WebSocket 双 prefix。设备协议、DeviceCommand、日志打包和数据库中的
-> MessagePack 不在迁移范围内。
+> **协议决策（2026-08-22）**：Plugin Dispatcher ↔ Plugin Host 使用 oRPC v2 + 单 WebSocket
+> 双 prefix；插件 RPC 不再依赖 MessagePack。设备协议、DeviceCommand、日志打包和数据库中
+> 已有的 MessagePack payload 保持不变。
 
 本文规划 SoulcloudJS 面向商用设备、生产测试和烧录治具的插件能力。目标类似
 Home Assistant/Mi Home 的设备集成体验，但不照搬面向民用智能家居的 Entity
@@ -26,7 +26,7 @@ Home Assistant/Mi Home 的设备集成体验，但不照搬面向民用智能家
   tunnel 或其他隐蔽通道作为业务协议。
 - 第一版不引入 S3/MinIO；Artifact 由核心服务以 PostgreSQL/分块方式存储，并通过稳定的
   storage backend 接口为未来迁移预留空间。
-- 云端 Dispatcher 与 Plugin Host 通过容器网络 HTTP MessagePack-RPC 通信；Host 由 Docker/
+- 云端 Dispatcher 与 Plugin Host 通过容器网络 oRPC/WebSocket 通信；Host 由 Docker/
   Kubernetes 独立管理，跨节点部署只需把 URL 指向对应 Service。
 
 ## 1. 总体架构
@@ -41,8 +41,8 @@ flowchart LR
     StationGateway[Station Gateway] --> DB
 
     DB --> Dispatcher[Plugin Dispatcher]
-    Dispatcher -->|HTTP MessagePack-RPC| HostA[Plugin Host A 容器]
-    Dispatcher -->|HTTP MessagePack-RPC| HostB[Plugin Host B 容器]
+    Dispatcher -->|oRPC over WebSocket| HostA[Plugin Host A 容器]
+    Dispatcher -->|oRPC over WebSocket| HostB[Plugin Host B 容器]
 
     Web --> PluginUI[隔离的 Plugin UI]
     PluginUI --> API
@@ -117,7 +117,33 @@ definePlugin({
   profiles: [],
   entities: [],
   actions: [],
-  workflows: [],
+  workflows: [
+    {
+      id: "flash-and-verify",
+      version: 1,
+      requiredCapabilities: ["flash", "jtag"],
+      inputSchema: {},
+      steps: [
+        {
+          id: "flash",
+          executor: "esptool.flash",
+          timeoutSeconds: 120,
+          maxAttempts: 2,
+          irreversible: true,
+          recoveryPolicy: "quarantine",
+        },
+        {
+          id: "verify",
+          executor: "esptool.verify",
+          timeoutSeconds: 60,
+          maxAttempts: 1,
+          irreversible: false,
+          recoveryPolicy: "manual",
+        },
+      ],
+      maxDurationSeconds: 240,
+    },
+  ],
   events: [],
   ui: {},
 });
@@ -406,7 +432,7 @@ interface PluginContext {
   devices: ScopedDeviceService;
   commands: ScopedCommandService;
   entities: ScopedEntityService;
-  jobs: ScopedJobService;
+  stationJobs: ScopedStationJobService;
   logger: PluginLogger;
   signal: AbortSignal;
 }
@@ -421,16 +447,16 @@ dead-letter、限流和 circuit breaker 状态。
 
 ### 6.5 Dispatcher 与 Plugin Host RPC
 
-当前实现使用容器网络上的 HTTP MessagePack-RPC。每个 Plugin Host 是独立容器，Dispatcher 只
-通过 `PLUGIN_HOST_URLS` 配置的 URL 请求它；Host 只加入自己的 internal 网络，不能访问
-PostgreSQL、API、Broker 或其他 Plugin Host。Host 使用非 root、只读根文件系统、CPU/RSS/PID
-限制、`no-new-privileges` 和 capability drop。这样不需要共享 Unix socket，也不授予
-Dispatcher 杀远端进程的权限。未来
-如需跨主机，可在相同消息契约上增加 HTTPS/mTLS；不改变插件 SDK。
+当前实现使用容器网络上的 oRPC v2 单 WebSocket 双向 RPC。每个 Plugin Host 是独立容器，
+Dispatcher 只通过 `PLUGIN_HOST_ENDPOINTS` 配置的 `ws(s)://.../rpc/ws` endpoint 连接；Host
+只加入自己的 internal 网络，不能访问 PostgreSQL、API、Broker 或其他 Plugin Host。Host
+使用非 root、只读根文件系统、CPU/RSS/PID 限制、`no-new-privileges` 和 capability drop。
+插件 RPC 不再保留 HTTP MessagePack 回退；设备协议和数据库中的 MessagePack 仍由 core/broker
+各自处理。
 
 必须遵循以下工程规则：
 
-- Host 对外提供 `GET /health` 和 `POST /rpc`；Dispatcher 启动或 URL 变化后重新 handshake。
+- Host 对外提供 `GET /health` 和 `GET /rpc/ws`；Dispatcher 启动或 URL 变化后重新 handshake。
 - Dispatcher 客户端设置请求 deadline、请求/响应大小上限和可选 bearer token；HTTP 超时只
   失效本地 client。Kubernetes 等编排器应通过 liveness probe 重启失活 Host；plain Docker
   Compose 的 healthcheck 本身只会标记 unhealthy，不会重启仍存活的容器，因此 Host
@@ -439,9 +465,10 @@ Dispatcher 杀远端进程的权限。未来
 - Host 重启或网络暂时不可达时，Dispatcher 将事件按租约/退避策略重试；数据库 lease
   负责恢复 Dispatcher 或 Host 中断时未完成的工作。
 - Handshake 协商 RPC version、Plugin SDK API version、plugin ID/version 和能力。
-- 每个 MessagePack 请求/响应具有字节上限、request ID 和 deadline；畸形/超限 HTTP 请求直接
-  返回 4xx 或 RPC 错误，不进入 worker。`Uint8Array` 使用 MessagePack `bin`，64 位整数使用 `bigint`。
-- MessagePack-RPC 不承载 artifact 正文。大对象只传引用；日志或诊断流使用标准 chunk 消息，
+- 每个 WebSocket frame、oRPC request/response 和 deadline 都有硬上限；畸形/超限 frame 直接
+  关闭或返回 RPC 错误，不进入 worker。oRPC JSON serializer 负责普通值，binary 使用有界 Blob，
+  64 位整数使用受约束的 BigInt 表示。
+- Plugin RPC 不承载 artifact 正文。大对象只传引用；日志或诊断流使用标准 chunk 消息，
   不能让插件各自发明无界大响应。
 
 ## 7. 前端插件隔离
@@ -514,6 +541,7 @@ MCU 没有进程级隔离，因此不能承诺“插件不影响 agent 固件”
 
 ```ts
 interface StationCapabilities {
+  protocolVersion: 1;
   agentClass: "full" | "embedded";
   platform: "linux" | "windows" | "mcu";
   transports: Array<"https" | "mqtt-wss">;
@@ -527,6 +555,14 @@ interface StationCapabilities {
 ```
 
 调度器只能把 workflow 分配给能力匹配的 station。
+
+SDK 中的 Station 契约已经先行落地，但 Agent/API 运行时仍属于阶段 4：
+
+- `StationWorkflowDescriptor` 用稳定的 `id + version` 标识工作流；`steps` 是有界、按声明顺序执行的步骤，每一步固定 executor、超时、最大尝试次数、资源锁、是否不可逆和失败恢复策略。
+- `StationJobRequest` 只接受已注册的 `workflowId + workflowVersion`、受限 JSON 输入、幂等 key 和不可伪造的 artifact 引用；插件通过 `PluginContext.stationJobs.create()` 请求，不接收任意 `Record<string, unknown>`。
+- `StationJobSnapshot` 在 lease 时复制 plugin id/version/API version、完整 workflow descriptor、输入、artifact 引用、目标设备身份和带 generation 的 lease；运行中的 job 不读取后来变更的 manifest。
+- `StationStepUpdate` 与 `StationJobCompletion` 是后续 Agent API 的结果契约，必须绑定 job attempt 的 lease/generation，服务端拒绝过期或重复 sequence。
+- `validateStationWorkflow`、`validateStationCapabilities` 和 `validateStationJobRequest` 在 manifest/边界处执行大小、版本、能力和幂等字段校验；`stationJobs` 服务本身暂时显式返回 not-implemented。
 
 ### 8.4 Station 独立身份域
 
@@ -954,8 +990,9 @@ GET    /v1/artifacts/:id                         支持 Range
 
 代码位置：
 
-- `packages/plugin-sdk/`：插件类型（manifest/profile/entity/action）、纯函数校验器
-  （host 预检与 dispatcher 权威复检共用）、HTTP MessagePack-RPC 消息契约。
+- `packages/plugin-sdk/`：插件类型（manifest/profile/entity/action/workflow）、纯函数校验器
+  （host 预检与 dispatcher 权威复检共用）。Plugin RPC 契约位于
+  `packages/plugin-rpc-contract/`，使用 oRPC/WebSocket。
 - `plugins/`：编译期注册表（manifest 与 worker 双 map；核心进程只允许导入
   manifest map）、`soulcloud.generic` 内置 profile、`soulcloud.test.chaos` 混沌测试插件。
 - `packages/core/src/plugins/`：installation 服务（版本精确匹配、设备绑定解析）、
@@ -985,13 +1022,13 @@ GET    /v1/artifacts/:id                         支持 Range
 - `packages/plugin-host/`：不可信侧进程，每进程只加载一个插件；握手校验身份、
   deadline 派生的 AbortSignal、自身输出预检、有界日志通知流、过载拒绝。
   进程内没有数据库连接、用户 JWT 或全局 secret。
-- `packages/plugin-dispatcher/`：可信进程，不加载任何插件代码；HTTP MessagePack-RPC
+- `packages/plugin-dispatcher/`：可信进程，不加载任何插件代码；oRPC/WebSocket
   客户端、host 连接监督（握手/失败熔断；不 spawn 或 kill 远端容器）、per-installation
   round-robin 公平调度与并发限制、事件级退避重试与 dead-letter、双端输出校验、
   完成与 entity 更新同事务提交。
-- 测试：`packages/plugin-dispatcher/tests/dispatcher.test.ts` 通过真实 HTTP Host 验证
+- 测试：`packages/plugin-dispatcher/tests/dispatcher.test.ts` 通过真实 WebSocket Host 验证
   超时/超大响应/未声明事件全部被隔离且命令队列不受影响；crash/死循环/oom 需要在
-  独立容器混沌环境执行。Host 单测与 core 集成测试覆盖 HTTP 契约、history 策略、租约
+  独立容器混沌环境执行。Host 单测与 core 集成测试覆盖 WebSocket 契约、history 策略、租约
   恢复与版本漂移。
 - 部署：`compose.yaml` 新增独立 `plugin-dispatcher` 和 `plugin-host-generic` 服务；
   `Dockerfile.backend` 新增 `plugin-dispatcher`/`plugin-host` targets，Host 的内存和重启
@@ -999,7 +1036,7 @@ GET    /v1/artifacts/:id                         支持 Range
 
 原始清单：
 
-- 实现 Dispatcher 与独立 Plugin Host 的 HTTP MessagePack-RPC。
+- 实现 Dispatcher 与独立 Plugin Host 的 oRPC/WebSocket 双向 RPC。
 - Plugin Host 不持有数据库连接或用户 JWT。
 - 加入 timeout、response size、per-installation fairness/concurrency、retry、dead-letter 和
   circuit breaker。
@@ -1015,8 +1052,8 @@ GET    /v1/artifacts/:id                         支持 Range
   API 校验与 Web 表单渲染。
 - `packages/core/src/plugins/actions.ts`：`validateEncodedAction`（cmd 匹配、
   单键标量参数、复用核心 `DeviceCommandSchema` 权威校验）。encoder 是插件代码，
-  只在 Plugin Host 内执行：API → Dispatcher `POST /encode-action`（token/deadline/
-  frame 上限/熔断）→ Host `action.encode` MessagePack-RPC。
+  只在 Plugin Host 内执行：API → Dispatcher `POST /encode-action`（JSON、token/deadline/
+  frame 上限/熔断）→ Host `action.encode` oRPC/WebSocket。
 - `packages/core/src/audit.ts` + 迁移 `20260821120000_audit_events`：追加式审计，
   与操作同事务提交。
 - `packages/api/src/api/plugins.ts`：§16 控制面（catalog/installations CRUD/

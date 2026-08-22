@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
-import { parsePluginHostUrls } from "../src/config";
+import { parsePluginHostEndpoints } from "../src/config";
 
-test("orpc-ws normalizes an HTTP host endpoint to the WebSocket path", () => {
-  expect(parsePluginHostUrls("example=http://host:8090", "orpc-ws").get("example"))
+test("requires a WebSocket host endpoint and normalizes the path", () => {
+  expect(parsePluginHostEndpoints("example=ws://host:8090").get("example"))
     .toBe("ws://host:8090/rpc/ws");
 });
 
-test("http-msgpack rejects a WebSocket endpoint instead of silently switching transports", () => {
-  expect(() => parsePluginHostUrls("example=ws://host:8090/rpc/ws", "http-msgpack"))
-    .toThrow("must use http(s)");
+test("rejects HTTP and non-RPC WebSocket endpoints", () => {
+  expect(() => parsePluginHostEndpoints("example=http://host:8090"))
+    .toThrow("must use ws(s)");
+  expect(() => parsePluginHostEndpoints("example=ws://host:8090/other"))
+    .toThrow("must end in /rpc/ws");
 });

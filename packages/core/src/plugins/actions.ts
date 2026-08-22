@@ -7,7 +7,7 @@
  *
  * Trust boundary (review fix): the manifest's `wire.encode` is PLUGIN CODE
  * and executes ONLY inside the Plugin Host container, reached through the
- * dispatcher's supervised MessagePack-RPC channel (`action.encode`). This module
+ * dispatcher's supervised oRPC/WebSocket channel (`action.encode`). This module
  * never calls it — it validates the host's ENCODED OUTPUT before anything
  * reaches the command queue:
  *   1. structurally here (single-key scalar maps, bounded count),

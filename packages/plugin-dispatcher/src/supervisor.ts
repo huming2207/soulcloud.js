@@ -1,7 +1,7 @@
 /**
  * Dispatcher-side supervisor for containerised Plugin Hosts.
  *
- * Hosts are independent WebSocket services (with a legacy HTTP fallback). Docker/Kubernetes owns process
+ * Hosts are independent WebSocket services. Docker/Kubernetes owns process
  * lifecycle, memory limits and restart policy; the dispatcher only caches
  * clients and applies a per-plugin failure circuit.
  */
@@ -85,7 +85,7 @@ export class HostSupervisor {
         `plugin ${pluginId} is benched after repeated host failures until ${new Date(host.benchedUntil).toISOString()}`,
       );
     }
-    if ((host.baseUrl.startsWith("ws://") || host.baseUrl.startsWith("wss://")) && host.reconnectAt > Date.now()) {
+    if (host.reconnectAt > Date.now()) {
       throw new PluginHostUnavailableError(
         `plugin ${pluginId} reconnect backoff until ${new Date(host.reconnectAt).toISOString()}`,
       );
@@ -140,15 +140,13 @@ export class HostSupervisor {
 
   private recordFailure(host: HostState, reason: string): void {
     const now = Date.now();
-    if (host.baseUrl.startsWith("ws://") || host.baseUrl.startsWith("wss://")) {
-      host.reconnectAttempt += 1;
-      const base = host.reconnectAttempt <= 1
-        ? this.options.rpcReconnectBaseMs ?? 500
-        : (this.options.rpcReconnectBaseMs ?? 500) * 2 ** (host.reconnectAttempt - 1);
-      const max = this.options.rpcReconnectMaxMs ?? 30_000;
-      const jitter = 0.75 + Math.random() * 0.5;
-      host.reconnectAt = now + Math.min(base, max) * jitter;
-    }
+    host.reconnectAttempt += 1;
+    const base = host.reconnectAttempt <= 1
+      ? this.options.rpcReconnectBaseMs ?? 500
+      : (this.options.rpcReconnectBaseMs ?? 500) * 2 ** (host.reconnectAttempt - 1);
+    const max = this.options.rpcReconnectMaxMs ?? 30_000;
+    const jitter = 0.75 + Math.random() * 0.5;
+    host.reconnectAt = now + Math.min(base, max) * jitter;
     host.failureTimes.push(now);
     host.failureTimes = host.failureTimes.filter(
       (time) => now - time <= this.options.crashWindowMs,
@@ -175,7 +173,7 @@ export class HostSupervisor {
     if (!host) return;
     host.client?.close();
     host.client = null;
-    this.recordFailure(host, "request deadline exceeded; HTTP client invalidated");
+    this.recordFailure(host, "request deadline exceeded; local WebSocket client invalidated");
   }
 
   async stopAll(): Promise<void> {

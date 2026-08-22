@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@soulcloud/core": "workspace:*",
+    "@soulcloud/plugin-rpc-contract": "workspace:*",
     "@soulcloud/plugin-sdk": "workspace:*",
     "@soulcloud/plugins": "workspace:*",
     "elysia": "^1.4.29",

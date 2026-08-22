@@ -91,7 +91,7 @@ beforeAll(async () => {
   });
   const supervisor = new HostSupervisor(
     {
-      hostUrls: new Map([["soulcloud.test.chaos", host.url]]),
+      hostUrls: new Map([["soulcloud.test.chaos", host.wsUrl]]),
       pollIntervalMs: 500,
       leaseDurationMs: 60_000,
       eventTimeoutMs: 5_000,

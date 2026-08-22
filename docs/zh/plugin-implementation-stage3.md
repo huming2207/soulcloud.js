@@ -101,14 +101,14 @@ POST   /v1/devices/:deviceId/actions/:action_id            202 {batch_id, wire_c
 
 | 套件 | 覆盖 |
 | --- | --- |
-| `api/tests/api/plugins.test.ts`（新增，15 用例） | catalog、installation 全生命周期（含 error 盲启拒绝、migrate 幂等冲突）、dry-run diff、绑定/解绑 + 审计行断言、plugin-view 合并、action 输入校验失败/未知 action/成功入队（解码 MessagePack 断言 cmd+args）、generic 设备无 action |
+| `api/tests/api/plugins.test.ts`（新增，18 用例） | catalog、installation 全生命周期（含 error 盲启拒绝、migrate 幂等冲突）、dry-run diff、绑定/解绑 + 审计行断言、plugin-view 合并、action 输入校验失败/未知 action/成功入队（解码设备命令 MessagePack 断言 cmd+args）、generic 设备无 action、encoder 输出错误分类 |
 
 ## 评审修复（2026-08-22，8 项）
 
 **1. Action encoder 移入 Plugin Host（高）**：encoder 是插件代码，不得在 API
 进程执行。链路改为 API → Dispatcher 新增的同步 HTTP 端点
-`POST /encode-action`（bearer token、deadline、frame 上限，复用 supervisor 的
-握手/熔断/bench）→ Host 的 `action.encode` MessagePack-RPC（计入 handler 并发闸门，
+`POST /encode-action`（JSON、bearer token、deadline、body 上限，复用 supervisor 的
+握手/熔断/bench）→ Host 的 `action.encode` oRPC/WebSocket（计入 handler 并发闸门，
 输出结构预检 + 大小上限）。Core 的 `encodePluginAction` 删除，替换为
 `validateEncodedAction`——只校验 host 返回的编码结果（cmd 匹配、单键标量参数、
 `DeviceCommandSchema` 权威复检）。API 侧错误码映射：invalid_action_input→400、

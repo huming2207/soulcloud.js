@@ -10,11 +10,9 @@ import type { PluginHostReverseHandlers } from "./rpc-client";
 
 const envSchema = z.object({
   ...SharedEnv,
-  /// Comma-separated plugin-id=http(s)://host:port mappings. Plugin hosts
-  /// are independent containers; Docker/Kubernetes owns their lifecycle.
-  PLUGIN_HOST_URLS: z.string().default(""),
+  /// Comma-separated plugin-id=ws(s)://host:port/rpc/ws mappings. Plugin
+  /// hosts are independent containers; Docker/Kubernetes owns their lifecycle.
   PLUGIN_HOST_ENDPOINTS: z.string().default(""),
-  PLUGIN_RPC_TRANSPORT: z.enum(["http-msgpack", "orpc-ws"]).default("orpc-ws"),
   PLUGIN_RPC_MAX_OPERATIONS: z.coerce.number().int().positive().default(64),
   PLUGIN_RPC_MAX_REVERSE_IN_FLIGHT: z.coerce.number().int().positive().default(64),
   PLUGIN_RPC_PER_PLUGIN_REVERSE_IN_FLIGHT: z.coerce.number().int().positive().default(16),
@@ -41,7 +39,7 @@ const envSchema = z.object({
   PLUGIN_EVENT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   PLUGIN_EVENT_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
   /// Dispatcher-side deadline for one plugin.handleEvent call. A timeout
-  /// invalidates the HTTP client; the container runtime owns restart policy.
+  /// invalidates the local WebSocket client; the container runtime owns restart policy.
   PLUGIN_EVENT_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   PLUGIN_EVENT_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
   PLUGIN_EVENT_BACKOFF_BASE_MS: z.coerce.number().int().positive().default(1_000),
@@ -51,7 +49,7 @@ const envSchema = z.object({
   /// In-flight events per installation — the fairness floor (§6.4: one
   /// factory's flood must not starve another).
   PLUGIN_PER_INSTALLATION_CONCURRENCY: z.coerce.number().int().positive().default(4),
-  /// Maximum serialized HTTP MessagePack-RPC request/response body shared with hosts.
+  /// Maximum serialized oRPC/WebSocket frame shared with hosts.
   PLUGIN_HOST_MAX_FRAME_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
   PLUGIN_RPC_MAX_FRAME_BYTES: z.coerce.number().int().positive().optional(),
   /// Rapid-crash circuit: after this many host exits inside the window the
@@ -181,14 +179,14 @@ export interface DispatcherCoreOptions {
   encodeTimeoutMs?: number;
 }
 
-export function parsePluginHostUrls(raw: string, transport: "http-msgpack" | "orpc-ws" = "http-msgpack"): ReadonlyMap<string, string> {
+export function parsePluginHostEndpoints(raw: string): ReadonlyMap<string, string> {
   const urls = new Map<string, string>();
   for (const entry of raw.split(",")) {
     const trimmed = entry.trim();
     if (!trimmed) continue;
     const separator = trimmed.indexOf("=");
     if (separator <= 0 || separator === trimmed.length - 1) {
-      throw new Error(`PLUGIN_HOST_URLS entry must be plugin-id=url: ${trimmed}`);
+      throw new Error(`PLUGIN_HOST_ENDPOINTS entry must be plugin-id=url: ${trimmed}`);
     }
     const pluginId = trimmed.slice(0, separator).trim();
     const value = trimmed.slice(separator + 1).trim();
@@ -196,21 +194,19 @@ export function parsePluginHostUrls(raw: string, transport: "http-msgpack" | "or
     try {
       url = new URL(value);
     } catch {
-      throw new Error(`PLUGIN_HOST_URLS has invalid URL for ${pluginId}`);
+      throw new Error(`PLUGIN_HOST_ENDPOINTS has invalid URL for ${pluginId}`);
     }
-    if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) {
-      throw new Error(`PLUGIN_HOST_URLS URL for ${pluginId} must use http(s) or ws(s)`);
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+      throw new Error(`PLUGIN_HOST_ENDPOINTS URL for ${pluginId} must use ws(s)`);
     }
     if (!pluginId || urls.has(pluginId)) {
-      throw new Error(`PLUGIN_HOST_URLS contains duplicate or empty plugin id: ${pluginId}`);
+      throw new Error(`PLUGIN_HOST_ENDPOINTS contains duplicate or empty plugin id: ${pluginId}`);
     }
-    if (transport === "orpc-ws" && (url.protocol === "http:" || url.protocol === "https:")) {
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      if (url.pathname === "/" || url.pathname.length === 0) url.pathname = "/rpc/ws";
-    } else if (transport === "http-msgpack" && (url.protocol === "ws:" || url.protocol === "wss:")) {
-      throw new Error(`PLUGIN_HOST_URLS URL for ${pluginId} must use http(s) with http-msgpack transport`);
-    } else if ((url.protocol === "ws:" || url.protocol === "wss:") && (url.pathname === "/" || url.pathname.length === 0)) {
+    if (url.pathname === "/" || url.pathname.length === 0) {
       url.pathname = "/rpc/ws";
+    }
+    if (url.pathname !== "/rpc/ws") {
+      throw new Error(`PLUGIN_HOST_ENDPOINTS URL for ${pluginId} must end in /rpc/ws`);
     }
     urls.set(pluginId, url.toString().replace(/\/$/, ""));
   }
@@ -221,9 +217,8 @@ export function dispatcherCoreOptionsFromConfig(
   config: DispatcherConfig,
 ): DispatcherCoreOptions {
   return {
-    hostUrls: parsePluginHostUrls(
-      config.PLUGIN_HOST_ENDPOINTS || config.PLUGIN_HOST_URLS,
-      config.PLUGIN_RPC_TRANSPORT,
+    hostUrls: parsePluginHostEndpoints(
+      config.PLUGIN_HOST_ENDPOINTS,
     ),
     hostAuthToken: config.PLUGIN_HOST_AUTH_TOKEN,
     pollIntervalMs: config.PLUGIN_EVENT_POLL_INTERVAL_MS,

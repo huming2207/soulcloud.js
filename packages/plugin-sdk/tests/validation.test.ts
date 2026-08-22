@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   validateEntityValue,
   validatePluginManifest,
-  decodeRpcMessage,
-  encodeRpcMessage,
-  isRpcRequest,
-  RPC_VERSION,
-  RpcCodecError,
+  validateStationCapabilities,
+  validateStationJobCompletion,
+  validateStationJobRequest,
+  validateStationStepUpdate,
+  validateStationWorkflow,
   type EntityDescriptor,
 } from "../src/index";
 
@@ -132,29 +132,138 @@ describe("validateEntityValue", () => {
   });
 });
 
-describe("MessagePack-RPC message contract", () => {
-  test("preserves bigint and binary values", () => {
-    const request = {
-      version: RPC_VERSION,
-      id: 1,
-      method: "m",
-      params: { value: 2n ** 60n, blob: new Uint8Array([1, 2, 3]) },
-      deadlineMs: 10,
-    };
-    const decoded = decodeRpcMessage(encodeRpcMessage(request)) as typeof request;
-    expect(decoded.version).toBe(RPC_VERSION);
-    expect(decoded.params.value).toBe(2n ** 60n);
-    expect(decoded.params.blob).toEqual(new Uint8Array([1, 2, 3]));
-    expect(isRpcRequest(decoded)).toBe(true);
+describe("station workflow contracts", () => {
+  const workflow = {
+    id: "flash.verify",
+    version: 1,
+    requiredCapabilities: ["esp32.flash"],
+    inputSchema: {
+      firmware_id: { type: "string" as const, required: true },
+    },
+    steps: [
+      {
+        id: "detect",
+        executor: "esp32.detect",
+        timeoutSeconds: 10,
+        maxAttempts: 2,
+        irreversible: false,
+        recoveryPolicy: "retry" as const,
+      },
+      {
+        id: "flash",
+        executor: "esp32.flash",
+        timeoutSeconds: 60,
+        maxAttempts: 1,
+        irreversible: true,
+        recoveryPolicy: "quarantine" as const,
+      },
+    ],
+    maxDurationSeconds: 120,
+  };
+
+  test("accepts versioned workflow and rejects duplicate steps", () => {
+    expect(validateStationWorkflow(workflow).ok).toBe(true);
+    expect(
+      validateStationWorkflow({
+        ...workflow,
+        steps: [workflow.steps[0], { ...workflow.steps[0] }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateStationWorkflow({
+        ...workflow,
+        inputSchema: { value: { type: "string", min: 1 } },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateStationWorkflow({
+        ...workflow,
+        steps: [{
+          ...workflow.steps[0],
+          resources: [
+            { type: "jtag", id: "probe-1", exclusive: true },
+            { type: "jtag", id: "probe-1", exclusive: true },
+          ],
+        }, workflow.steps[1]],
+      }).ok,
+    ).toBe(false);
   });
 
-  test("rejects trailing values and oversized frames", () => {
-    const frame = encodeRpcMessage({ version: RPC_VERSION, id: 1 });
-    expect(() => decodeRpcMessage(new Uint8Array([...frame, 0]))).toThrow(
-      RpcCodecError,
-    );
-    expect(() => encodeRpcMessage({ value: "x".repeat(100) }, 16)).toThrow(
-      RpcCodecError,
-    );
+  test("accepts HTTPS full agents and rejects process isolation on embedded stations", () => {
+    expect(
+      validateStationCapabilities({
+        protocolVersion: 1,
+        agentClass: "full",
+        platform: "linux",
+        transports: ["https"],
+        executors: ["esp32.flash"],
+        maxArtifactBytes: 1024,
+        maxEventBytes: 1024,
+        maxConcurrentJobs: 1,
+        supportsHttpRange: true,
+        supportsProcessIsolation: true,
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateStationCapabilities({
+        protocolVersion: 1,
+        agentClass: "embedded",
+        platform: "mcu",
+        transports: ["mqtt-wss"],
+        executors: [],
+        maxArtifactBytes: 1024,
+        maxEventBytes: 1024,
+        maxConcurrentJobs: 1,
+        supportsHttpRange: false,
+        supportsProcessIsolation: true,
+      }).ok,
+    ).toBe(false);
+  });
+
+  test("bounds and types a station job request", () => {
+    expect(
+      validateStationJobRequest({
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+        input: { firmware_id: "artifact-1" },
+        idempotencyKey: "job-key-1",
+        artifacts: [],
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateStationJobRequest({
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+        input: { firmware_id: "artifact-1" },
+        idempotencyKey: "",
+      }).ok,
+    ).toBe(false);
+  });
+
+  test("fences station progress and completion with an attempt generation", () => {
+    const jobId = crypto.randomUUID();
+    const lease = { attemptId: "attempt-1", generation: 3 };
+    expect(validateStationStepUpdate({
+      jobId,
+      lease,
+      sequence: 1,
+      stepId: "flash",
+      state: "succeeded",
+      occurredAt: new Date().toISOString(),
+    }).ok).toBe(true);
+    expect(validateStationJobCompletion({
+      jobId,
+      lease,
+      finalSequence: 1,
+      status: "succeeded",
+    }).ok).toBe(true);
+    expect(validateStationStepUpdate({
+      jobId,
+      lease: { ...lease, generation: -1 },
+      sequence: 2,
+      stepId: "flash",
+      state: "failed",
+      occurredAt: new Date().toISOString(),
+    }).ok).toBe(false);
   });
 });

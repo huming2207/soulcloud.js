@@ -6,6 +6,8 @@ import {
   handleEventInput,
   handleEventOutput,
   assertRpcValueBudget,
+  decodePluginJsonValue,
+  encodePluginJsonValue,
 } from "../src";
 
 test("contract keeps the two WebSocket directions distinct", () => {
@@ -64,4 +66,11 @@ test("RPC value budget rejects deep graphs, cycles and oversized Blobs", () => {
   expect(() => assertRpcValueBudget({ a: "1234", b: "5678" }, budget)).toThrow("string byte");
   expect(() => assertRpcValueBudget(new Blob([new Uint8Array([1, 2, 3, 4])]), budget)).toThrow("Blob size");
   expect(() => assertRpcValueBudget(new Uint8Array([1, 2, 3, 4]), budget)).toThrow("Blob size");
+});
+
+test("JSON control bridge preserves binary and bigint command scalars", () => {
+  const value = [{ raw: new Uint8Array([1, 2, 3]), sequence: 2n ** 60n }];
+  const decoded = decodePluginJsonValue(encodePluginJsonValue(value)) as Array<Record<string, unknown>>;
+  expect(decoded[0]?.raw).toEqual(new Uint8Array([1, 2, 3]));
+  expect(decoded[0]?.sequence).toBe(2n ** 60n);
 });

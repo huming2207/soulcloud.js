@@ -194,6 +194,47 @@ export type EntityGetInput = z.infer<typeof entityGetInput>;
 export type EntityGetOutput = z.infer<typeof entityGetOutput>;
 export type CommandEnqueueInput = z.infer<typeof commandEnqueueInput>;
 
+/** JSON-only bridge used by the local API → dispatcher control endpoint. */
+export function encodePluginJsonValue(value: unknown): unknown {
+  if (typeof value === "bigint") return { $bigint: value.toString(10) };
+  if (value instanceof Uint8Array) {
+    return { $binary: Buffer.from(value).toString("base64") };
+  }
+  if (Array.isArray(value)) return value.map(encodePluginJsonValue);
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      result[key] = encodePluginJsonValue(item);
+    }
+    return result;
+  }
+  return value;
+}
+
+export function decodePluginJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(decodePluginJsonValue);
+  if (value instanceof Uint8Array || value instanceof Blob) return value;
+  if (!value || typeof value !== "object") return value;
+  const entries = Object.entries(value);
+  if (entries.length === 1 && entries[0]?.[0] === "$bigint" && typeof entries[0][1] === "string") {
+    try {
+      return BigInt(entries[0][1]);
+    } catch {
+      throw new Error("invalid JSON bigint wrapper");
+    }
+  }
+  if (entries.length === 1 && entries[0]?.[0] === "$binary" && typeof entries[0][1] === "string") {
+    const encoded = entries[0][1];
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+      throw new Error("invalid JSON binary wrapper");
+    }
+    return new Uint8Array(Buffer.from(encoded, "base64"));
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of entries) result[key] = decodePluginJsonValue(item);
+  return result;
+}
+
 export interface RpcValueBudget {
   maxDepth: number;
   maxNodes: number;

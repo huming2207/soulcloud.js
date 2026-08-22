@@ -45,16 +45,8 @@ import {
   type PrismaClient,
 } from "@soulcloud/core";
 import { pluginManifests } from "@soulcloud/plugins";
-import {
-  ENCODE_ACTION_METHOD,
-  RPC_CONTENT_TYPE,
-  RPC_VERSION,
-  decodeRpcMessage,
-  encodeRpcMessage,
-  isRpcResponse,
-  findProfile,
-  validateActionInputSchema,
-} from "@soulcloud/plugin-sdk";
+import { findProfile, validateActionInputSchema } from "@soulcloud/plugin-sdk";
+import { decodePluginJsonValue } from "@soulcloud/plugin-rpc-contract";
 import {
   authenticateRequest,
   handleApiError,
@@ -132,8 +124,6 @@ function mapPluginError(
  * the encoder is plugin code and runs in the plugin host, never here
  * (review fix). Deadline + bearer token per §6.1 sync-RPC rules.
  */
-let nextDispatcherRequestId = 1;
-
 function codedDispatcherError(code: string, message: string): Error & { code: string } {
   const error = new Error(message) as Error & { code: string };
   error.code = code;
@@ -152,56 +142,41 @@ async function encodeViaDispatcher(
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), dispatch.encodeTimeoutMs);
-  const requestId = nextDispatcherRequestId++;
-  const rpcRequest = {
-    version: RPC_VERSION,
-    id: requestId,
-    method: ENCODE_ACTION_METHOD,
-    params: {
-      pluginId: params.pluginId,
-      actionId: params.actionId,
-      input: params.input,
-    },
-    deadlineMs: dispatch.encodeTimeoutMs,
-  };
   try {
-    const headers: Record<string, string> = { "content-type": RPC_CONTENT_TYPE };
+    const headers: Record<string, string> = { "content-type": "application/json" };
     if (dispatch.dispatcherAuthToken) {
       headers.authorization = `Bearer ${dispatch.dispatcherAuthToken}`;
     }
     const res = await fetch(`${dispatch.dispatcherUrl}/encode-action`, {
       method: "POST",
       headers,
-      body: encodeRpcMessage(rpcRequest),
+      body: JSON.stringify({
+        pluginId: params.pluginId,
+        actionId: params.actionId,
+        input: params.input,
+      }),
       signal: controller.signal,
     });
-    const payload = new Uint8Array(await res.arrayBuffer());
-    const decoded = decodeRpcMessage(payload);
-    if (!isRpcResponse(decoded) || decoded.id !== requestId) {
-      throw codedDispatcherError(
-        "plugin_unavailable",
-        "dispatcher returned an invalid MessagePack-RPC response",
-      );
-    }
-    if (!decoded.ok) {
-      throw codedDispatcherError(decoded.error.code, decoded.error.message);
-    }
-    if (!res.ok) {
-      throw codedDispatcherError(
-        "plugin_unavailable",
-        `dispatcher returned HTTP ${res.status}`,
-      );
-    }
-    const result = decoded.result as {
+    const decoded = await res.json().catch(() => null) as {
+      error?: unknown;
+      message?: unknown;
       cmd?: unknown;
       args?: unknown;
       schemaVersion?: unknown;
-    };
+    } | null;
+    if (!decoded || typeof decoded !== "object") {
+      throw codedDispatcherError("plugin_unavailable", "dispatcher returned invalid JSON");
+    }
+    if (!res.ok) {
+      const code = typeof decoded.error === "string" ? decoded.error : "plugin_unavailable";
+      const message = typeof decoded.message === "string" ? decoded.message : `dispatcher returned HTTP ${res.status}`;
+      throw codedDispatcherError(code, message);
+    }
     return {
-      cmd: typeof result.cmd === "string" ? result.cmd : "",
-      args: result.args,
+      cmd: typeof decoded.cmd === "string" ? decoded.cmd : "",
+      args: decodePluginJsonValue(decoded.args),
       schemaVersion:
-        typeof result.schemaVersion === "number" ? result.schemaVersion : 0,
+        typeof decoded.schemaVersion === "number" ? decoded.schemaVersion : 0,
     };
   } catch (error) {
     if (controller.signal.aborted) {

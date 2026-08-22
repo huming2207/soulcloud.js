@@ -86,10 +86,7 @@ services:
       target: plugin-dispatcher
     environment:
       DATABASE_URL: postgres://soulcloud:${POSTGRES_PASSWORD:-soulcloud}@postgres:5432/soulcloud
-      PLUGIN_RPC_TRANSPORT: ${PLUGIN_RPC_TRANSPORT:-orpc-ws}
       PLUGIN_HOST_ENDPOINTS: ${PLUGIN_HOST_ENDPOINTS:-soulcloud.generic=ws://plugin-host-generic:8090/rpc/ws}
-      # HTTP MessagePack fallback during migration; ignored when endpoints is set.
-      PLUGIN_HOST_URLS: ${PLUGIN_HOST_URLS:-}
       # Override this development default in production/.env.
       PLUGIN_HOST_AUTH_TOKEN: ${PLUGIN_HOST_AUTH_TOKEN:-soulcloud-dev-plugin-token}
       # synchronous action-encoding endpoint used by the API

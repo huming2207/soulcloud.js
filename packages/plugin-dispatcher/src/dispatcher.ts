@@ -143,7 +143,7 @@ export interface DispatcherHandle {
   wake(): void;
   stats(): DispatcherStats;
   stop(): Promise<void>;
-  /** Supervised host clients, reused by the HTTP encode endpoint. */
+  /** Supervised host clients, reused by the JSON encode endpoint. */
   supervisor: HostSupervisor;
 }
 

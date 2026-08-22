@@ -16,6 +16,11 @@ import type {
   EntityDescriptor,
   EntityUpdate,
   PluginManifest,
+  StationCapabilities,
+  StationJobCompletion,
+  StationJobRequest,
+  StationStepUpdate,
+  StationWorkflowDescriptor,
 } from "./types";
 import { validateActionInputSchema } from "./action-schema";
 
@@ -30,6 +35,13 @@ export const MAX_ENTITY_ENUM_VALUES = 256;
 export const MAX_PROFILE_ENTITIES = 512;
 export const MAX_MANIFEST_PROFILES = 64;
 export const MAX_EVENT_KIND_LENGTH = 255;
+export const MAX_WORKFLOWS = 64;
+export const MAX_WORKFLOW_STEPS = 128;
+export const MAX_WORKFLOW_CAPABILITIES = 64;
+export const MAX_WORKFLOW_RESOURCES_PER_STEP = 32;
+export const MAX_STATION_ARTIFACTS_PER_JOB = 32;
+export const MAX_STATION_INPUT_JSON_BYTES = 256 * 1024;
+export const MAX_STATION_STEP_OUTPUT_JSON_BYTES = 256 * 1024;
 /** Per-update serialised value cap (JSON string length). */
 export const MAX_ENTITY_VALUE_JSON_BYTES = 64 * 1024;
 /** Updates a single event may produce. */
@@ -82,6 +94,106 @@ const actionInputFieldSchema = z.object({
   default: z.union([z.string(), z.number(), z.boolean()]).optional(),
 });
 
+const stationJsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.union([
+    z.string().max(65_536),
+    z.number().finite(),
+    z.boolean(),
+    z.null(),
+    z.array(stationJsonValueSchema).max(4096),
+    z.record(z.string().max(255), stationJsonValueSchema).refine(
+      (value) => Object.keys(value).length <= 4096,
+      "too many object fields",
+    ),
+  ]),
+);
+
+const stationResourceSchema = z.object({
+  type: z.string().regex(ENTITY_KEY_PATTERN),
+  id: z.string().min(1).max(255),
+  exclusive: z.boolean(),
+});
+
+const stationWorkflowStepSchema = z.object({
+  id: z.string().regex(ENTITY_KEY_PATTERN),
+  executor: z.string().regex(ENTITY_KEY_PATTERN),
+  timeoutSeconds: z.number().int().positive().max(86_400),
+  maxAttempts: z.number().int().positive().max(10),
+  resources: z.array(stationResourceSchema).max(MAX_WORKFLOW_RESOURCES_PER_STEP).optional(),
+  irreversible: z.boolean(),
+  recoveryPolicy: z.enum(["retry", "quarantine", "scrap", "manual"]),
+});
+
+export const stationWorkflowDescriptorSchema = z.object({
+  id: z.string().regex(ENTITY_KEY_PATTERN),
+  version: z.number().int().positive(),
+  displayName: z.string().max(255).optional(),
+  requiredCapabilities: z.array(z.string().regex(ENTITY_KEY_PATTERN)).max(MAX_WORKFLOW_CAPABILITIES),
+  inputSchema: z.record(z.string().regex(ENTITY_KEY_PATTERN), actionInputFieldSchema).refine(
+    (value) => Object.keys(value).length <= 128,
+    "workflow input schema has too many fields",
+  ),
+  steps: z.array(stationWorkflowStepSchema).min(1).max(MAX_WORKFLOW_STEPS),
+  maxDurationSeconds: z.number().int().positive().max(7 * 86_400),
+});
+
+export const stationCapabilitiesSchema = z.object({
+  protocolVersion: z.literal(1),
+  agentClass: z.enum(["full", "embedded"]),
+  platform: z.enum(["linux", "windows", "mcu"]),
+  transports: z.array(z.enum(["https", "mqtt-wss"])).min(1).max(2),
+  executors: z.array(z.string().regex(ENTITY_KEY_PATTERN)).max(256),
+  maxArtifactBytes: z.number().int().positive(),
+  maxEventBytes: z.number().int().positive(),
+  maxConcurrentJobs: z.number().int().positive().max(64),
+  supportsHttpRange: z.boolean(),
+  supportsProcessIsolation: z.boolean(),
+});
+
+export const stationArtifactReferenceSchema = z.object({
+  artifactId: z.string().uuid(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  size: z.number().int().nonnegative(),
+  kind: z.string().regex(ENTITY_KEY_PATTERN),
+});
+
+export const stationJobRequestSchema = z.object({
+  workflowId: z.string().regex(ENTITY_KEY_PATTERN),
+  workflowVersion: z.number().int().positive(),
+  input: z.record(z.string().regex(ENTITY_KEY_PATTERN), stationJsonValueSchema),
+  idempotencyKey: z.string().min(1).max(255),
+  artifacts: z.array(stationArtifactReferenceSchema).max(MAX_STATION_ARTIFACTS_PER_JOB).optional(),
+});
+
+const stationJobLeaseProofSchema = z.object({
+  attemptId: z.string().min(1).max(128),
+  generation: z.number().int().nonnegative(),
+});
+
+export const stationStepUpdateSchema = z.object({
+  jobId: z.string().uuid(),
+  lease: stationJobLeaseProofSchema,
+  sequence: z.number().int().nonnegative(),
+  stepId: z.string().regex(ENTITY_KEY_PATTERN),
+  state: z.enum(["started", "succeeded", "failed", "skipped", "cancelled"]),
+  occurredAt: z.string().datetime({ offset: true }),
+  durationMs: z.number().int().nonnegative().optional(),
+  output: stationJsonValueSchema.optional(),
+  error: z.object({
+    code: z.string().regex(ENTITY_KEY_PATTERN),
+    message: z.string().min(1).max(4096),
+  }).optional(),
+});
+
+export const stationJobCompletionSchema = z.object({
+  jobId: z.string().uuid(),
+  lease: stationJobLeaseProofSchema,
+  finalSequence: z.number().int().nonnegative(),
+  status: z.enum(["succeeded", "failed", "cancelled", "cancel_forced"]),
+  result: stationJsonValueSchema.optional(),
+  artifacts: z.array(stationArtifactReferenceSchema).max(MAX_STATION_ARTIFACTS_PER_JOB).optional(),
+});
+
 export const pluginManifestSchema = z.object({
   id: z.string().regex(PLUGIN_ID_PATTERN),
   version: z.string().regex(/^\d+\.\d+\.\d+(-[a-z0-9.-]+)?$/).max(64),
@@ -102,7 +214,7 @@ export const pluginManifestSchema = z.object({
     schemaVersion: z.number().int().positive(),
     description: z.string().max(1024).optional(),
   })).max(128),
-  workflows: z.array(z.never()).max(0),
+  workflows: z.array(stationWorkflowDescriptorSchema).max(MAX_WORKFLOWS),
   ui: z.record(z.string(), z.never()),
 });
 
@@ -121,7 +233,7 @@ export function validatePluginManifest(
     };
   }
   // cross-field rules zod cannot express cleanly
-  const m = result.data as PluginManifest;
+  const m = result.data as unknown as PluginManifest;
   const profileIds = new Set<string>();
   const actionIds = new Set<string>();
   const eventIds = new Set<string>();
@@ -168,7 +280,177 @@ export function validatePluginManifest(
     }
     eventIds.add(identity);
   }
+  const workflowIds = new Set<string>();
+  for (const workflow of m.workflows) {
+    const identity = `${workflow.id}@${workflow.version}`;
+    if (workflowIds.has(identity)) {
+      return { ok: false, error: `duplicate workflow "${identity}"` };
+    }
+    workflowIds.add(identity);
+    const workflowSchemaError = validateActionInputSchema({
+      id: `workflow ${identity}`,
+      inputSchema: workflow.inputSchema,
+    });
+    if (workflowSchemaError) return { ok: false, error: workflowSchemaError };
+    const capabilities = new Set<string>();
+    for (const capability of workflow.requiredCapabilities) {
+      if (capabilities.has(capability)) {
+        return { ok: false, error: `duplicate capability "${capability}" in workflow "${identity}"` };
+      }
+      capabilities.add(capability);
+    }
+    const stepIds = new Set<string>();
+    let totalDurationSeconds = 0;
+    for (const step of workflow.steps) {
+      if (stepIds.has(step.id)) {
+        return {
+          ok: false,
+          error: `duplicate step "${step.id}" in workflow "${identity}"`,
+        };
+      }
+      stepIds.add(step.id);
+      const resources = new Set<string>();
+      for (const resource of step.resources ?? []) {
+        const resourceKey = `${resource.type}:${resource.id}`;
+        if (resources.has(resourceKey)) {
+          return {
+            ok: false,
+            error: `duplicate resource "${resourceKey}" in step "${step.id}" of workflow "${identity}"`,
+          };
+        }
+        resources.add(resourceKey);
+      }
+      totalDurationSeconds += step.timeoutSeconds;
+    }
+    if (totalDurationSeconds > workflow.maxDurationSeconds) {
+      return {
+        ok: false,
+        error: `workflow "${identity}" maxDurationSeconds is shorter than its step timeouts`,
+      };
+    }
+  }
   return { ok: true, manifest: m };
+}
+
+/** Validate a station workflow independently of a complete plugin manifest. */
+export function validateStationWorkflow(
+  workflow: unknown,
+): { ok: true; workflow: StationWorkflowDescriptor } | { ok: false; error: string } {
+  const result = stationWorkflowDescriptorSchema.safeParse(workflow);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    return {
+      ok: false,
+      error: `workflow invalid at ${issue?.path.join(".") ?? "<root>"}: ${issue?.message ?? "unknown"}`,
+    };
+  }
+  const schemaError = validateActionInputSchema({
+    id: `workflow ${result.data.id}@${result.data.version}`,
+    inputSchema: result.data.inputSchema,
+  });
+  if (schemaError) return { ok: false, error: schemaError };
+  const capabilities = new Set<string>();
+  for (const capability of result.data.requiredCapabilities) {
+    if (capabilities.has(capability)) return { ok: false, error: `duplicate capability "${capability}"` };
+    capabilities.add(capability);
+  }
+  const stepIds = new Set<string>();
+  let totalDurationSeconds = 0;
+  for (const step of result.data.steps) {
+    if (stepIds.has(step.id)) return { ok: false, error: `duplicate step "${step.id}"` };
+    stepIds.add(step.id);
+    const resources = new Set<string>();
+    for (const resource of step.resources ?? []) {
+      const resourceKey = `${resource.type}:${resource.id}`;
+      if (resources.has(resourceKey)) return { ok: false, error: `duplicate resource "${resourceKey}"` };
+      resources.add(resourceKey);
+    }
+    totalDurationSeconds += step.timeoutSeconds;
+  }
+  if (totalDurationSeconds > result.data.maxDurationSeconds) {
+    return { ok: false, error: "workflow maxDurationSeconds is shorter than its step timeouts" };
+  }
+  return { ok: true, workflow: result.data as StationWorkflowDescriptor };
+}
+
+export function validateStationCapabilities(
+  capabilities: unknown,
+): { ok: true; capabilities: StationCapabilities } | { ok: false; error: string } {
+  const result = stationCapabilitiesSchema.safeParse(capabilities);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    return {
+      ok: false,
+      error: `station capabilities invalid at ${issue?.path.join(".") ?? "<root>"}: ${issue?.message ?? "unknown"}`,
+    };
+  }
+  if (!result.data.transports.includes("https")) {
+    return { ok: false, error: "station capabilities must include HTTPS" };
+  }
+  if (result.data.agentClass === "embedded" && result.data.supportsProcessIsolation) {
+    return { ok: false, error: "embedded stations cannot advertise process isolation" };
+  }
+  return { ok: true, capabilities: result.data as unknown as StationCapabilities };
+}
+
+export function validateStationJobRequest(
+  request: unknown,
+): { ok: true; request: StationJobRequest } | { ok: false; error: string } {
+  const result = stationJobRequestSchema.safeParse(request);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    return {
+      ok: false,
+      error: `station job request invalid at ${issue?.path.join(".") ?? "<root>"}: ${issue?.message ?? "unknown"}`,
+    };
+  }
+  try {
+    if (Buffer.byteLength(JSON.stringify(result.data.input), "utf8") > MAX_STATION_INPUT_JSON_BYTES) {
+      return { ok: false, error: `station job input exceeds ${MAX_STATION_INPUT_JSON_BYTES} bytes` };
+    }
+  } catch {
+    return { ok: false, error: "station job input is not serializable" };
+  }
+  return { ok: true, request: result.data as StationJobRequest };
+}
+
+function validateStationJsonPayload(
+  value: unknown,
+  schema: z.ZodTypeAny,
+  label: string,
+): { ok: true } | { ok: false; error: string } {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    return {
+      ok: false,
+      error: `${label} invalid at ${issue?.path.join(".") ?? "<root>"}: ${issue?.message ?? "unknown"}`,
+    };
+  }
+  try {
+    if (Buffer.byteLength(JSON.stringify(result.data), "utf8") > MAX_STATION_STEP_OUTPUT_JSON_BYTES) {
+      return { ok: false, error: `${label} exceeds ${MAX_STATION_STEP_OUTPUT_JSON_BYTES} bytes` };
+    }
+  } catch {
+    return { ok: false, error: `${label} is not serializable` };
+  }
+  return { ok: true };
+}
+
+export function validateStationStepUpdate(
+  update: unknown,
+): { ok: true; update: StationStepUpdate } | { ok: false; error: string } {
+  const result = validateStationJsonPayload(update, stationStepUpdateSchema, "station step update");
+  if (!result.ok) return result;
+  return { ok: true, update: update as StationStepUpdate };
+}
+
+export function validateStationJobCompletion(
+  completion: unknown,
+): { ok: true; completion: StationJobCompletion } | { ok: false; error: string } {
+  const result = validateStationJsonPayload(completion, stationJobCompletionSchema, "station job completion");
+  if (!result.ok) return result;
+  return { ok: true, completion: completion as StationJobCompletion };
 }
 
 // ---------------------------------------------------------------------------

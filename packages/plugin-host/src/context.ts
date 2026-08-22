@@ -5,8 +5,8 @@
  * stage the context carries installation identity, a logger that is returned
  * as bounded per-request log entries, and the deadline signal.
  * Device UID is a local snapshot. Entity reads and command enqueue are bound
- * to the current operation's reverse RPC capability; jobs remain unavailable
- * until the station workflow layer exists.
+ * to the current operation's reverse RPC capability; station job creation
+ * remains unavailable until the Stage 4 station service is deployed.
  */
 
 import type {
@@ -17,7 +17,7 @@ import type {
   ScopedCommandService,
   ScopedDeviceService,
   ScopedEntityService,
-  ScopedJobService,
+  ScopedStationJobService,
 } from "@soulcloud/plugin-sdk";
 
 export interface PluginContextBindings {
@@ -34,9 +34,11 @@ function notImplemented(service: string, method: string): never {
   );
 }
 
-const jobs: ScopedJobService = {
-  async createJob() {
-    notImplemented("jobs", "createJob");
+const stationJobs: ScopedStationJobService = {
+  async create() {
+    throw new Error(
+      "stationJobs.create is not implemented until the Stage 4 Station workflow service is deployed",
+    );
   },
 };
 
@@ -89,7 +91,7 @@ export function createPluginContext(
     devices,
     commands,
     entities,
-    jobs,
+    stationJobs,
     logger,
     signal,
   };

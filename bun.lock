@@ -18,6 +18,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@soulcloud/core": "workspace:*",
+        "@soulcloud/plugin-rpc-contract": "workspace:*",
         "@soulcloud/plugin-sdk": "workspace:*",
         "@soulcloud/plugins": "workspace:*",
         "elysia": "^1.4.29",
@@ -115,7 +116,6 @@
       "name": "@soulcloud/plugin-sdk",
       "version": "0.1.0",
       "dependencies": {
-        "@msgpack/msgpack": "^3.1.3",
         "zod": "^4.4.3",
       },
       "devDependencies": {
@@ -493,6 +493,8 @@
     "@soulcloud/plugin-dispatcher": ["@soulcloud/plugin-dispatcher@workspace:packages/plugin-dispatcher"],
 
     "@soulcloud/plugin-host": ["@soulcloud/plugin-host@workspace:packages/plugin-host"],
+
+    "@soulcloud/plugin-rpc-contract": ["@soulcloud/plugin-rpc-contract@workspace:packages/plugin-rpc-contract"],
 
     "@soulcloud/plugin-sdk": ["@soulcloud/plugin-sdk@workspace:packages/plugin-sdk"],
 

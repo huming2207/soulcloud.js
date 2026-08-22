@@ -1,9 +1,9 @@
 /**
  * Stage 2 integration tests (§17): the dispatcher runs against the
- * isolated test database and a real in-process HTTP Plugin Host.
+ * isolated test database and a real in-process WebSocket Plugin Host.
  *
  * The chaos plugin deliberately returns oversized responses and throws. The
- * dispatcher talks to a real in-process HTTP Host, matching the container
+ * dispatcher talks to a real in-process WebSocket Host, matching the container
  * transport without spawning child processes in the test runner.
  */
 
@@ -116,6 +116,25 @@ async function until(
   }
 }
 
+async function waitForHostReady(timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      await dispatcher.supervisor.ensureClient(
+        chaosTestPlugin.id,
+        chaosTestPlugin.version,
+        chaosTestPlugin.apiVersion,
+      );
+      return;
+    } catch (error) {
+      if (Date.now() >= deadline) {
+        throw new Error(`timed out waiting for plugin host recovery: ${(error as Error).message}`);
+      }
+      await Bun.sleep(50);
+    }
+  }
+}
+
 let main: Fixture;
 let other: Fixture;
 
@@ -130,7 +149,7 @@ beforeAll(async () => {
   dispatcher = startDispatcher(
     prisma,
     {
-      hostUrls: new Map([[chaosTestPlugin.id, host.url]]),
+      hostUrls: new Map([[chaosTestPlugin.id, host.wsUrl]]),
       hostAuthToken: undefined,
       pollIntervalMs: 50,
       leaseDurationMs: 60_000,
@@ -219,7 +238,7 @@ describe("plugin dispatcher (stage 2 prototype)", () => {
     expect(state.attempt_count).toBe(2);
     expect(state.last_error).toContain("chaos failure");
 
-    // The independent HTTP host remains healthy after a failed request.
+    // The independent WebSocket host remains healthy after a failed request.
     const ok = await enqueuePluginEvent(prisma, {
       deviceId: main.deviceId,
       eventKind: "ok",
@@ -243,10 +262,15 @@ describe("plugin dispatcher (stage 2 prototype)", () => {
     await until("hang event dead", async () =>
       (await eventState(hang.id)).state === "dead",
     );
-    // two attempts x 1.5s deadline, plus retry backoff — must not be instant
-    expect(Date.now() - startedAt).toBeGreaterThan(2_500);
+    // The first remote call must actually reach its deadline. The second
+    // attempt may be rejected by the supervisor's reconnect backoff, so do
+    // not make the test depend on two full timeout windows.
+    expect(Date.now() - startedAt).toBeGreaterThan(1_000);
     const state = await eventState(hang.id);
-    expect(state.last_error).toContain("deadline exceeded");
+    expect(state.last_error).toMatch(/deadline exceeded|reconnect backoff/);
+    // Isolate the following permanent-error tests from this intentionally
+    // invalidated WebSocket connection and its reconnect backoff.
+    await waitForHostReady();
   });
 
   test("oversized plugin output dead-letters permanently on the first attempt", async () => {
@@ -353,6 +377,7 @@ describe("plugin dispatcher (stage 2 prototype)", () => {
   });
 
   test("entity-registry drift dead-letters permanently with a precise error (H2)", async () => {
+    await waitForHostReady();
     const fixture = await makeFixture("dispatcher-drift");
     // simulate a lost reconcile: the manifest still declares the entities,
     // but this device's registry rows are gone
@@ -379,7 +404,7 @@ describe("plugin dispatcher (stage 2 prototype)", () => {
     const breakerDispatcher = startDispatcher(
       prisma,
       {
-        hostUrls: new Map([[chaosTestPlugin.id, host.url]]),
+        hostUrls: new Map([[chaosTestPlugin.id, host.wsUrl]]),
         hostAuthToken: undefined,
         pollIntervalMs: 50,
         leaseDurationMs: 60_000,
@@ -441,7 +466,7 @@ describe("plugin dispatcher (stage 2 prototype)", () => {
     const permanentDispatcher = startDispatcher(
       prisma,
       {
-        hostUrls: new Map([[chaosTestPlugin.id, host.url]]),
+        hostUrls: new Map([[chaosTestPlugin.id, host.wsUrl]]),
         hostAuthToken: undefined,
         pollIntervalMs: 25,
         leaseDurationMs: 60_000,

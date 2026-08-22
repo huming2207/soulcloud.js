@@ -10,8 +10,8 @@
  *                     Used by BOTH the Plugin Host (pre-check plugin output)
  *                     and the Dispatcher (authoritative check) — the host is
  *                     untrusted-side, the dispatcher re-validates everything.
- *   - `rpc.ts`        the Dispatcher <-> Plugin Host HTTP MessagePack-RPC message
- *                     contract (§6.5).
+ *   - station workflow types and validators used by the Stage 4 Agent
+ *                     protocol.
  *
  * The SDK never imports Prisma, the database or anything from the API/broker:
  * a plugin process holding only this package has no credentials to misuse.
@@ -21,4 +21,3 @@ export * from "./types";
 export * from "./validation";
 export * from "./action-schema";
 export * from "./define";
-export * from "./rpc";

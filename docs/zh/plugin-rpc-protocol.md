@@ -1,16 +1,16 @@
 # Plugin Dispatcher ↔ Plugin Host 双向 RPC 协议与实施计划
 
-**状态**：设计已确认；oRPC/WebSocket、共享契约、operation scope、值/Blob 配额、前缀校验、背压、心跳和重连退避已实施，仍保留 HTTP MessagePack 兼容路径
+**状态**：已实施；oRPC/WebSocket、共享契约、operation scope、值/Blob 配额、前缀校验、背压、心跳和重连退避均已落地；插件 RPC 不再提供 MessagePack 路径
 
 **日期**：2026-08-22
 
 **目标运行时**：Bun 1.4
 
-**目标 RPC 框架**：oRPC v2（实施时锁定精确版本）
+**实施 RPC 框架**：oRPC v2（`@orpc/client`、`@orpc/contract`、`@orpc/server` 2.0.0-beta.30）
 
-本文规定 SoulcloudJS 中可信的 Plugin Dispatcher 与隔离的 Plugin Host 之间的下一代
-RPC 协议、信任边界、资源限制、失败语义和迁移步骤。它取代的是当前容器网络上的
-HTTP MessagePack-RPC；在迁移完成以前，现有实现仍是运行基线。
+本文规定 SoulcloudJS 中可信的 Plugin Dispatcher 与隔离的 Plugin Host 之间的
+oRPC/WebSocket RPC 协议、信任边界、资源限制和失败语义。Plugin RPC 使用 JSON serializer
+和有界 Blob，不依赖 MessagePack；设备协议和数据库 payload 的 MessagePack 不在本文范围内。
 
 本文中的“插件可信”只表示插件由己方团队编写，不表示插件不会崩溃、死循环、泄漏资源、
 错误处理输入或被外部数据触发 DoS。所有限制均为协议要求，不能因为代码来自内部团队而省略。
@@ -46,8 +46,8 @@ HTTP MessagePack-RPC；在迁移完成以前，现有实现仍是运行基线。
 断线清理、流式传输、类型契约和错误传播。oRPC 已覆盖这些通用问题，Soulcloud 只保留与自身
 业务和信任边界有关的部分。
 
-默认 JSON 的 wire size 通常大于 MessagePack，但 Plugin RPC 主要运行在本机或内部容器网络，
-典型消息只有数百字节到数 KB。Bun/JavaScriptCore 对 JSON parse/stringify 有成熟优化；实际
+Plugin RPC 主要运行在本机或内部容器网络，典型消息只有数百字节到数 KB。Bun/JavaScriptCore
+对 JSON parse/stringify 有成熟优化；实际
 延迟通常由插件执行、PostgreSQL 和业务校验主导。迁移验收仍必须用 Soulcloud 的真实 payload
 测量吞吐、p50/p99、CPU 和 RSS，不能用裸 JSON benchmark 代替 oRPC 端到端结果。
 
@@ -215,8 +215,10 @@ context.commands.enqueue
 - logger 继续使用有界 per-operation buffer；
 - `AbortSignal` 来自父调用 deadline。
 
-`jobs.createJob()` 在通用 plugin job model、station routing 和幂等语义确定前保持显式
-not-implemented，不用 `Record<string, unknown>` 草率落库。
+`PluginContext.stationJobs.create()` 只接受 SDK 中 versioned 的
+`StationJobRequest`；它会在 Station workflow/job service 落地前显式返回
+not-implemented，不用 `Record<string, unknown>` 草率落库。完整的 workflow、step、能力和
+version snapshot 契约见 `plugin-and-station-architecture.md` §8.3。
 
 ## 6. Bun ServerWebSocket bridge
 
@@ -225,7 +227,7 @@ Dispatcher 使用普通 Bun `WebSocket`，可以直接交给 oRPC v2 `RPCLink`�
 bridge：
 
 ```text
-packages/plugin-host/src/rpc/bun-server-websocket-bridge.ts
+packages/plugin-host/src/ws-server.ts（Bun ServerWebSocket bridge）
 ```
 
 bridge 只负责：
@@ -566,7 +568,6 @@ protocol_violation
 
 ```dotenv
 # Transport
-PLUGIN_RPC_TRANSPORT=orpc-ws
 PLUGIN_HOST_ENDPOINTS=soulcloud.generic=ws://plugin-host-generic:8090/rpc/ws
 PLUGIN_RPC_MAX_FRAME_BYTES=1048576
 PLUGIN_RPC_BACKPRESSURE_BYTES=4194304
@@ -624,8 +625,8 @@ plugin_rpc_staged_effects{kind}
 
 ## 19. 实施步骤
 
-每一步独立 commit，并将对应测试与实现放在同一 commit；迁移期间不删除当前 HTTP
-MessagePack-RPC 回退路径。
+每一步独立 commit，并将对应测试与实现放在同一 commit。当前版本只实现并验证
+oRPC/WebSocket；设备协议和数据库 payload 的 MessagePack 继续由既有模块维护。
 
 ### 步骤 0：隔离 PoC 和决策门
 
@@ -634,7 +635,7 @@ MessagePack-RPC 回退路径。
 3. 同一 socket 挂载 d2h/h2d 两组 prefix。
 4. 在 Host procedure 内反向调用 Dispatcher，再返回正向 result。
 5. 验证并发、AbortSignal、socket close、Blob、BigInt 和 prefix isolation。
-6. 用真实 event/entity/action/command payload 对比当前 HTTP MessagePack-RPC。
+6. 用真实 event/entity/action/command payload 验证 oRPC/WebSocket 的大小、延迟和错误语义。
 7. 若必须依赖 `@standardserver/peer` 私有 API，PoC 判失败；不得据此进入生产实现。
 
 决策门必须输出：吞吐、p50/p99、CPU、RSS、wire bytes、断线清理结果和已知 beta 风险。
@@ -695,18 +696,12 @@ MessagePack-RPC 回退路径。
 6. 完整错误分类，确认永久数据错误不打开 breaker。
 7. 混沌测试 Host crash/hang/OOM、Dispatcher restart 和网络中断。
 
-### 步骤 7：兼容部署
+### 步骤 7：部署收尾
 
-1. Host 同时暴露旧 `/rpc` HTTP 和新 `/rpc/ws`。
-2. Dispatcher 按配置选择 transport，默认使用 oRPC/WebSocket；设置
-   `PLUGIN_RPC_TRANSPORT=http-msgpack` 才回退旧路径。
-3. CI 和测试环境覆盖 oRPC/WebSocket，并保留回退 job。
-4. 单个 canary plugin 使用新 transport。
-5. 观察 reconnect、RSS、backpressure、timeout、dead-letter 和 breaker metric。
-6. 全部 Host 切换后继续保留显式 HTTP 回退开关。
-7. 经一个明确的稳定观察窗口后，单独 commit 删除旧 HTTP Plugin RPC。
-
-删除旧 Plugin RPC 时，不得删除设备协议和数据库使用的 `@msgpack/msgpack`。
+1. Host 只暴露 `/health` 和 `/rpc/ws`；Dispatcher 通过 `PLUGIN_HOST_ENDPOINTS` 连接。
+2. CI 和测试环境覆盖 oRPC/WebSocket 的双向、断线、资源上限和错误分类。
+3. 观察 reconnect、RSS、backpressure、timeout、dead-letter 和 breaker metric。
+4. `@msgpack/msgpack` 仅保留在设备协议、日志打包和数据库 payload 所属的 core/broker 路径。
 
 ### 步骤 8：文档和 CI 收尾
 

@@ -160,6 +160,156 @@ export interface EventDescriptor {
 }
 
 // ---------------------------------------------------------------------------
+// Station workflows (§8–§10, stage 4)
+// ---------------------------------------------------------------------------
+
+/** JSON values accepted by a workflow input or a station result. */
+export type StationJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | StationJsonValue[]
+  | { readonly [key: string]: StationJsonValue };
+
+export type StationWorkflowInput = Readonly<{
+  [key: string]: StationJsonValue;
+}>;
+
+export interface StationResourceRequirement {
+  /** Stable local resource class, e.g. `serial` or `jtag`. */
+  type: string;
+  /** Agent-local stable identifier. */
+  id: string;
+  exclusive: boolean;
+}
+
+export type StationRecoveryPolicy =
+  | "retry"
+  | "quarantine"
+  | "scrap"
+  | "manual";
+
+/** Immutable step descriptor copied into every station-job snapshot. */
+export interface StationWorkflowStepDescriptor {
+  id: string;
+  /** Runner executor identifier, not an arbitrary command line. */
+  executor: string;
+  timeoutSeconds: number;
+  maxAttempts: number;
+  resources?: readonly StationResourceRequirement[];
+  /** True once cancellation may leave a DUT or identity half-written. */
+  irreversible: boolean;
+  recoveryPolicy: StationRecoveryPolicy;
+}
+
+/** Versioned, compile-time registered station workflow. */
+export interface StationWorkflowDescriptor {
+  id: string;
+  version: number;
+  displayName?: string;
+  /** Capabilities an agent must advertise before it can claim this workflow. */
+  requiredCapabilities: readonly string[];
+  /** Reuses the flat declarative field language used by Actions. */
+  inputSchema: ActionInputSchema;
+  steps: readonly StationWorkflowStepDescriptor[];
+  maxDurationSeconds: number;
+}
+
+export interface StationArtifactReference {
+  artifactId: string;
+  sha256: string;
+  size: number;
+  kind: string;
+}
+
+/** Request created by a scoped plugin operation or the station control plane. */
+export interface StationJobRequest {
+  workflowId: string;
+  workflowVersion: number;
+  input: StationWorkflowInput;
+  idempotencyKey: string;
+  artifacts?: readonly StationArtifactReference[];
+}
+
+export interface StationCapabilities {
+  protocolVersion: 1;
+  agentClass: "full" | "embedded";
+  platform: "linux" | "windows" | "mcu";
+  transports: readonly ("https" | "mqtt-wss")[];
+  executors: readonly string[];
+  maxArtifactBytes: number;
+  maxEventBytes: number;
+  maxConcurrentJobs: number;
+  supportsHttpRange: boolean;
+  supportsProcessIsolation: boolean;
+}
+
+export interface StationJobLease {
+  stationId: string;
+  attemptId: string;
+  /** Monotonically increasing fencing token; stale updates are rejected. */
+  generation: number;
+  expiresAt: string;
+}
+
+/** Proof attached to every progress/completion write from an Agent. */
+export interface StationJobLeaseProof {
+  attemptId: string;
+  /** Must match the currently leased attempt; prevents stale-agent writes. */
+  generation: number;
+}
+
+/** Server-issued immutable job snapshot consumed by an Agent. */
+export interface StationJobSnapshot {
+  jobId: string;
+  projectId: string;
+  plugin: {
+    id: string;
+    version: string;
+    apiVersion: PluginApiVersion;
+  };
+  workflow: StationWorkflowDescriptor;
+  input: StationWorkflowInput;
+  artifacts: readonly StationArtifactReference[];
+  target?: {
+    deviceId: string;
+    deviceUid: string;
+    profileId: string;
+    profileVersion: number;
+  };
+  lease: StationJobLease;
+}
+
+export type StationStepState =
+  | "started"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+export interface StationStepUpdate {
+  jobId: string;
+  lease: StationJobLeaseProof;
+  sequence: number;
+  stepId: string;
+  state: StationStepState;
+  occurredAt: string;
+  durationMs?: number;
+  output?: StationJsonValue;
+  error?: { code: string; message: string };
+}
+
+export interface StationJobCompletion {
+  jobId: string;
+  lease: StationJobLeaseProof;
+  finalSequence: number;
+  status: "succeeded" | "failed" | "cancelled" | "cancel_forced";
+  result?: StationJsonValue;
+  artifacts?: readonly StationArtifactReference[];
+}
+
+// ---------------------------------------------------------------------------
 // Plugin manifest (§2)
 // ---------------------------------------------------------------------------
 
@@ -176,11 +326,8 @@ export interface PluginManifest {
   profiles: DeviceProfileDescriptor[];
   actions: ActionDescriptor[];
   events: EventDescriptor[];
-  /**
-   * Stage 4+ (station workflows) and stage 3 (declarative UI) placeholders:
-   * declared now so the manifest shape is stable across stages.
-   */
-  workflows: [];
+  /** Versioned station workflows shipped with this plugin. */
+  workflows: StationWorkflowDescriptor[];
   ui: Record<string, never>;
 }
 
@@ -247,12 +394,9 @@ export interface ScopedCommandService {
   enqueueCommand(command: string, args: CommandArgument[]): Promise<void>;
 }
 
-export interface ScopedJobService {
-  /**
-   * Create a station/plugin job (stage 4+). Declared for forward
-   * compatibility only.
-   */
-  createJob(request: Record<string, unknown>): Promise<{ jobId: string }>;
+export interface ScopedStationJobService {
+  /** Create a station job bound to this operation's project/device scope. */
+  create(request: StationJobRequest): Promise<{ jobId: string }>;
 }
 
 /**
@@ -268,7 +412,7 @@ export interface PluginContext {
   devices: ScopedDeviceService;
   commands: ScopedCommandService;
   entities: ScopedEntityService;
-  jobs: ScopedJobService;
+  stationJobs: ScopedStationJobService;
   logger: PluginLogger;
   /** Fired when the dispatcher deadline expires; well-behaved plugins abort. */
   signal: AbortSignal;

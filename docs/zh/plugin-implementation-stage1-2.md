@@ -13,9 +13,9 @@
 
 ```
 packages/
-  plugin-sdk/          # 共享契约：类型 + 纯校验器 + HTTP MessagePack-RPC 消息（无 DB、无 secret）
-  plugin-host/         # 不可信侧容器：每容器一个插件，HTTP MessagePack-RPC 服务端
-  plugin-dispatcher/   # 可信进程：租约事件、HTTP client、公平调度、权威校验
+  plugin-sdk/          # 共享契约：类型 + 纯校验器（无 DB、无 secret）
+  plugin-host/         # 不可信侧容器：每容器一个插件，oRPC/WebSocket 服务端
+  plugin-dispatcher/   # 可信进程：租约事件、WebSocket client、公平调度、权威校验
   core/src/plugins/    # 共享服务层：installation / entity / 事件队列
 
 plugins/
@@ -38,7 +38,7 @@ plugins/
 设备 /event envelope（阶段 5 接入 broker）
   → plugin_events（durable 行）
   → dispatcher 租约 + 路由（由 device → installation 绑定推导，不信任设备声明）
-  → 容器网络 HTTP MessagePack-RPC → plugin-host → 插件 worker
+  → 容器网络 oRPC/WebSocket → plugin-host → 插件 worker
   → 响应（updates）回到 dispatcher
   → 权威校验 → 与事件完成同一事务内写入 entity_current_state / entity_history
 ```
@@ -78,9 +78,9 @@ CHECK 约束按仓库惯例以原始 SQL 附在迁移内（state 枚举、attemp
 
 | 文件 | 职责 |
 | --- | --- |
-| `types.ts` | manifest / profile / `EntityDescriptor` / `EntityUpdate` / action wire encoder / `PluginContext` / worker 接口 |
-| `validation.ts` | 纯校验器：manifest zod schema（注册期 fail-fast）、entity 值类型/枚举/base64/大小上限、`validateEventUpdates`（updates 数量、未声明 entity、重复 key、ISO 时间戳、序列化字节上限） |
-| `rpc.ts` | HTTP MessagePack-RPC 请求/响应消息类型；握手、`plugin.handleEvent` 和有界日志结果 |
+| `types.ts` | manifest / profile / `EntityDescriptor` / `EntityUpdate` / action wire encoder / `PluginContext` / versioned Station workflow/job/step/capability/snapshot 接口 / worker 接口 |
+| `validation.ts` | 纯校验器：manifest zod schema（注册期 fail-fast）、entity 值类型/枚举/base64/大小上限、`validateEventUpdates`（updates 数量、未声明 entity、重复 key、ISO 时间戳、序列化字节上限）、Station workflow/capability/job/progress/completion 边界校验 |
+| `../plugin-rpc-contract/` | oRPC/WebSocket 双向契约、握手、作用域和有界值规则 |
 | `define.ts` | `definePlugin()`：manifest 在模块加载时校验；manifest 与 worker 刻意分离定义 |
 
 关键设计：校验器在**两侧**运行——host 用它快速拒绝自己的错误输出，dispatcher
@@ -88,7 +88,7 @@ CHECK 约束按仓库惯例以原始 SQL 附在迁移内（state 枚举、attemp
 包也没有凭据可滥用。
 
 分层上限（§15）：每值 64KB JSON / binary 64KB / 每事件 100 条 update /
-事件 payload 256KB / HTTP MessagePack-RPC body 1MB（可配）。
+事件 payload 256KB / WebSocket frame 1MB（可配）。
 
 ## 插件（`plugins/`，workspace 包）
 
@@ -103,7 +103,7 @@ CHECK 约束按仓库惯例以原始 SQL 附在迁移内（state 枚举、attemp
 `chaos-test`：按 event kind 选择故障模式——`ok`（正常）、`updates`（回显任意
 updates，用于校验失败测试）、`fail`（抛错，可重试）、`crash`/`hang`/`oom`（仅手动
 混沌场景，不在容器化 CI 进程内执行）、`huge`（超 descriptor 值上限）、`bulky`（合法但
-巨大的响应，触发 HTTP 响应上限路径）、`slow`（可中断的慢响应）。
+巨大的响应，触发 WebSocket frame 上限路径）、`slow`（可中断的慢响应）。
 
 ## Core 服务层（`packages/core/src/plugins/`）
 
@@ -126,25 +126,25 @@ History 策略：`none` 不记历史；`changes` 值/质量/告警指纹任一�
 通过 `PLUGIN_ID`、`PLUGIN_HOST_PORT`、`PLUGIN_HOST_BIND` 和可选的
 `PLUGIN_HOST_AUTH_TOKEN` 环境变量配置。
 
-- HTTP MessagePack-RPC 服务端，每容器一个插件；`GET /health` 供容器编排器探活，`POST /rpc`
-  承载带 `id/method/params/result/error` 语义的 MessagePack 请求/响应。
+- oRPC/WebSocket 服务端，每容器一个插件；`GET /health` 供容器编排器探活，`GET /rpc/ws`
+  承载双向、双 prefix 的 RPC 请求/响应。
 - `host.handshake`：返回 rpcVersion/pluginId/pluginVersion/apiVersion，供
   dispatcher 校验路由正确性。
 - `plugin.handleEvent`：deadline 派生 `AbortSignal` 传给 worker；handler 并发
   上限，超出拒绝 `overloaded`（可重试瞬时错误）。
-- 输出预检：updates 未通过 `validateEventUpdates` 或 HTTP 响应超过大小上限 →
+- 输出预检：updates 未通过 `validateEventUpdates` 或 WebSocket 响应超过大小上限 →
   `invalid_params` / `response_too_large`（永久错误），不跨线传输。
 - 插件日志以每次响应中的有界 `logs` 数组回传（带 pluginId/installationId/projectId/
   operationId 标签，§6.4），同时镜像到 stdout 供容器日志系统采集。
 - 进程内没有数据库连接、用户 JWT 或全局 secret；`PluginContext` 的 scoped
-  服务（devices/commands/entities/jobs）声明于 SDK 但调用会显式报
+  服务（devices/commands/entities/stationJobs）声明于 SDK 但调用会显式报
   not-implemented——它们依赖阶段 3+ 的反向 RPC 通道。
 
 ## Plugin Dispatcher（`packages/plugin-dispatcher`）
 
 入口进程 + 可嵌入核心（`startDispatcher`，测试直接构造）。
 
-**监督**（`supervisor.ts`）：按需创建 HTTP client、连接并握手；请求失败记录到
+**监督**（`supervisor.ts`）：按需创建 WebSocket client、连接并握手；请求失败记录到
 快速失败熔断器，超时只使本地 client 失效。Dispatcher 不 spawn、SIGKILL 或重启远端
 进程；容器编排器通过资源限制和 restart 策略负责容器生命周期。plain Compose 只会把
 失败的 healthcheck 标为 unhealthy，因此 Host entrypoint 另有一个不持有 Docker 权限的
@@ -176,7 +176,7 @@ liveness supervisor，在 event loop 同步卡死时终止并重启 Host 子进�
 
 - `Dockerfile.backend` 新增 `plugin-dispatcher` 和 `plugin-host` targets（与 api/broker 共享 base）。
 - `compose.yaml` 新增独立的 `plugin-dispatcher` 与 `plugin-host-generic` 服务；Dispatcher
-  通过 `PLUGIN_HOST_URLS` 访问容器网络 URL。每个 Host 只加入自己的 internal 网络，
+  通过 `PLUGIN_HOST_ENDPOINTS` 访问容器网络 WebSocket URL。每个 Host 只加入自己的 internal 网络，
   不加入 API/DB 网络；Host 使用非 root 用户、只读根文件系统、独立的 memory/CPU/PID
   上限和 `no-new-privileges`，并由 liveness supervisor 处理 plain Compose 下的同步挂死。
   全程不需要共享 socket volume 或 Docker socket。
@@ -186,14 +186,14 @@ liveness supervisor，在 event loop 同步卡死时终止并重启 Host 子进�
 
 | 套件 | 文件 | 覆盖 |
 | --- | --- | --- |
-| SDK 单元 | `plugin-sdk/tests/validation.test.ts` | manifest 规则、entity 值校验、MessagePack-RPC 编解码（含 binary/bigint、边界） |
+| SDK 单元 | `plugin-sdk/tests/validation.test.ts` | manifest、workflow、station capability/job、entity 值校验 |
 | Entity 集成 | `core/tests/plugins/entity.test.ts` | revision 幂等/演进、四种 history 策略、keyset 分页、非法值拒绝 |
 | 事件队列集成 | `core/tests/plugins/events-queue.test.ts` | 绑定解析、幂等 key、租约 FIFO、退避/dead-letter、租约恢复、版本漂移 sweep、绑定校验（错误插件/未声明 profile 拒绝、同事务实体注册）、reconcile（漂移热修建新 revision + 弃用移除 key + 旧 revision 存活、版本不匹配拒绝、缺失 profile 只上报） |
 | 熔断器单元 | `plugin-dispatcher/tests/breaker.test.ts` | 阈值开闸、冷却期阻断、**冷却后无 dispatch 的重复求值仍放行（H1 回归，假时钟确定性）**、冷却后继续失败再开闸、success 复位 |
-| Host 单元 | `plugin-host/tests/server.test.ts` | HTTP health/握手、认证、错误分类、输出预检、响应上限 |
-| Dispatcher 集成 | `plugin-dispatcher/tests/dispatcher.test.ts` | HTTP Host：健康事件、handler 错误重试、请求 deadline、超大输出永久 dead、未声明事件路由拒绝、**跨 installation 公平性**、**慢请求时命令队列照常工作**、registry 漂移 1 次尝试死信（H2 回归）、熔断器空转冷却后恢复放行（H1 集成回归） |
+| Host 单元 | `plugin-host/tests/server.test.ts` | WebSocket health、认证、连接上限；业务契约由 oRPC 集成测试覆盖 |
+| Dispatcher 集成 | `plugin-dispatcher/tests/dispatcher.test.ts` | WebSocket Host：健康事件、handler 错误重试、请求 deadline、超大输出永久 dead、未声明事件路由拒绝、**跨 installation 公平性**、**慢请求时命令队列照常工作**、registry 漂移 1 次尝试死信（H2 回归）、熔断器空转冷却后恢复放行（H1 集成回归） |
 
-`crash`/死循环/`oom` 需要在独立容器环境做手动混沌测试；常规 CI 使用 HTTP Host
+`crash`/死循环/`oom` 需要在独立容器环境做手动混沌测试；常规 CI 使用 WebSocket Host
 测试服务验证超大响应、超时和错误隔离，避免测试进程被故意退出或死循环拖住。
 
 ## 评审修复记录（2026-08-21）
@@ -224,7 +224,9 @@ DB 侧抛 `unknown_entity`，被归为可重试后烧完 attempt 才 dead-letter
 
 - Broker `/event` 上行 envelope 接入（阶段 5；事件队列与路由已就绪，只差
   dispatch 挂钩）。
-- Station 协议、Artifact Service、provisioning identity（阶段 4+）。
+- Station Agent 运行时、Station API、Artifact Service、provisioning identity（阶段 4+）。
+- Station workflow/job/step/capability/version-snapshot 的 SDK 契约已定义并校验；
+  `stationJobs.create()` 在阶段 4 服务落地前保持显式 not-implemented。
 - 插件 UI / iframe 隔离（阶段 3）。
 - 跨节点 RPC 传输（v2；协议已与传输解耦）。
 

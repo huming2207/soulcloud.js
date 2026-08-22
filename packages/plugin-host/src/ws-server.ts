@@ -20,7 +20,12 @@ const MAX_LOGS_PER_EVENT = 32;
 const MAX_LOG_MESSAGE_BYTES = 4 * 1024;
 
 function rpcError(code: string, message: string): never {
-  throw new ORPCError(code as never, { message });
+  const standardCode = code === "UNAUTHORIZED"
+    ? "UNAUTHORIZED"
+    : code === "OVERLOADED"
+      ? "TOO_MANY_REQUESTS"
+      : "BAD_REQUEST";
+  throw new ORPCError(standardCode, { message: `${code}: ${message}` });
 }
 
 type Listener = (event: unknown) => void;
@@ -278,14 +283,19 @@ export function createPluginHostWsConnection(
             emitLog,
             bindings,
           );
-          const result = await options.worker.onEvent(ctx, {
-            eventId: input.eventId,
-            eventKind: input.eventKind,
-            schemaVersion: input.schemaVersion,
-            payload: input.payload,
-            device: input.device,
-            receivedAt: input.receivedAt,
-          });
+          let result;
+          try {
+            result = await options.worker.onEvent(ctx, {
+              eventId: input.eventId,
+              eventKind: input.eventKind,
+              schemaVersion: input.schemaVersion,
+              payload: input.payload,
+              device: input.device,
+              receivedAt: input.receivedAt,
+            });
+          } catch (error) {
+            rpcError("HANDLER_ERROR", (error as Error).message || "plugin handler threw");
+          }
           if (activeReverseCalls > 0) {
             rpcError("UNAWAITED_REVERSE_CALL", `plugin operation returned with ${activeReverseCalls} reverse call(s) still active`);
           }
