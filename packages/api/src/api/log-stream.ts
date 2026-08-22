@@ -434,7 +434,7 @@ export function createLogStreamRoutes(
         return { error: "not_found", message: "device does not exist" };
       }
     },
-    open(ws) {
+    async open(ws) {
       // the upgrade was already authenticated in beforeHandle; the device
       // id rides the query string (visible in ws.data.query) and the
       // handshake headers (with the subprotocol token) are visible too
