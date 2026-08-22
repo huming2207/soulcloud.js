@@ -134,7 +134,6 @@ export class HostSupervisor {
     this.logger.info("plugin host ready", {
       pluginId: host.pluginId,
       pluginVersion: host.pluginVersion,
-      baseUrl: host.baseUrl,
     });
     return client;
   }
@@ -156,7 +155,6 @@ export class HostSupervisor {
     );
     this.logger.warn("plugin host request failed", {
       pluginId: host.pluginId,
-      baseUrl: host.baseUrl,
       reason,
     });
     if (host.failureTimes.length >= this.options.crashThreshold) {
