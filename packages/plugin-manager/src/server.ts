@@ -48,6 +48,8 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         const route = manifest?.ui?.routes.find((item) => item.id === session.routeId);
         const routePath = route?.path.startsWith("/") ? route.path : `/${route?.path ?? ""}`;
         if (!route || url.pathname !== `/plugins/${session.installationId}${routePath}`) return json(404, { error: "plugin_ui_route_not_found" });
+        const allowedMethods = route.methods ?? ["GET", "POST"];
+        if (!allowedMethods.includes(request.method as "GET" | "POST")) return json(405, { error: "method_not_allowed" });
         const params = Object.fromEntries(url.searchParams.entries());
         try {
           if (request.method === "GET") {

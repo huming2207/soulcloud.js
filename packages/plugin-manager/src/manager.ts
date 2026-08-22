@@ -231,17 +231,29 @@ export class PluginManager {
       deviceId: input.deviceId,
     });
     try {
-      const encoded = await connection.request("action.encode", {
-        operationId,
-        operationToken,
-        actionId: input.actionId,
-        input: input.actionInput,
-      }, input.timeoutMs ?? 30_000) as { command: string; args: Array<{ name: string; value: unknown }>; schemaVersion: number };
-      if (encoded.command !== action.wire.command || encoded.schemaVersion !== action.wire.schemaVersion) throw new Error("plugin encoder returned a command outside the declared action wire contract");
+      let encoded: { command: string; args: Array<{ name: string; value: unknown }>; schemaVersion: number };
+      try {
+        encoded = await connection.request("action.encode", {
+          operationId,
+          operationToken,
+          actionId: input.actionId,
+          input: input.actionInput,
+        }, input.timeoutMs ?? 30_000) as { command: string; args: Array<{ name: string; value: unknown }>; schemaVersion: number };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/INVALID_PLUGIN_OUTPUT|plugin encoder/i.test(message)) throw new Error(`plugin encoder output invalid: ${message}`);
+        throw error;
+      }
+      if (!encoded || encoded.command !== action.wire.command || encoded.schemaVersion !== action.wire.schemaVersion || !Array.isArray(encoded.args)) {
+        throw new Error("plugin encoder output invalid: command, schemaVersion or args are malformed");
+      }
       const binding = await this.options.prisma.pluginDeviceBinding.findUnique({ where: { deviceId: input.deviceId }, select: { installationId: true } });
       if (!binding || binding.installationId !== installation.id) throw new Error("device is not bound to the plugin installation");
       const args: CommandArgument[] = [];
       for (const argument of encoded.args) {
+        if (!argument || typeof argument !== "object" || typeof argument.name !== "string" || !argument.name || !Object.prototype.hasOwnProperty.call(argument, "value")) {
+          throw new Error("plugin encoder output invalid: each argument must contain a name and value");
+        }
         const value = argument.value instanceof Blob ? new Uint8Array(await argument.value.arrayBuffer()) : argument.value;
         args.push({ [argument.name]: value as CommandArgument[string] });
       }
@@ -436,9 +448,10 @@ export class PluginManager {
         ? String((error as { code: unknown }).code)
         : "";
       const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT" || /INVALID_(EVENT_INPUT|PLUGIN_OUTPUT)/.test(message);
+      const attemptsExhausted = !permanent && event.attempt_count >= (this.options.eventMaxAttempts ?? 5);
       if (permanent) this.circuitSuccess(event.plugin_id);
       else this.circuitFailure(event.plugin_id);
-      await this.releaseEvent(event, permanent, message);
+      await this.releaseEvent(event, permanent || attemptsExhausted, attemptsExhausted ? `${message}; retry limit exhausted` : message);
     } finally {
       // Operation capabilities are valid only while the parent RPC is live.
       if (activeOperationId) this.operations.delete(activeOperationId);
