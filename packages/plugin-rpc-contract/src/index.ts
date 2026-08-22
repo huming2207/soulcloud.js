@@ -111,6 +111,7 @@ export type UiRenderInput = z.infer<typeof uiRenderInput>;
 export type UiRenderOutput = z.infer<typeof uiRenderOutput>;
 export type UiActionOutput = z.infer<typeof uiActionOutput>;
 export type UiDataInput = z.infer<typeof uiDataInput>;
+export type EntityGetOutput = z.infer<typeof entityGetOutput>;
 export type EntityGetInput = z.infer<typeof entityGetInput>;
 export type CommandEnqueueInput = z.infer<typeof commandEnqueueInput>;
 export type PluginCallInput = z.infer<typeof pluginCallInput>;
