@@ -10,10 +10,6 @@ COPY packages/core/package.json packages/core/package.json
 COPY packages/api/package.json packages/api/package.json
 COPY packages/broker/package.json packages/broker/package.json
 COPY packages/web/package.json packages/web/package.json
-COPY packages/plugin-sdk/package.json packages/plugin-sdk/package.json
-COPY packages/plugin-host/package.json packages/plugin-host/package.json
-COPY packages/plugin-dispatcher/package.json packages/plugin-dispatcher/package.json
-COPY plugins/package.json plugins/package.json
 RUN bun install --frozen-lockfile
 
 # source + generated client (root tsconfig is extended by packages)
@@ -21,15 +17,10 @@ COPY tsconfig.json ./
 COPY packages/core packages/core
 COPY packages/api packages/api
 COPY packages/broker packages/broker
-COPY packages/plugin-sdk packages/plugin-sdk
-COPY packages/plugin-host packages/plugin-host
-COPY packages/plugin-dispatcher packages/plugin-dispatcher
-COPY plugins plugins
-# prisma.config.ts needs a datasource url at generate time (no connection made).
-# Keep this as a build-only variable: baking DATABASE_URL into the common image
-# would give every derived image (including Plugin Host) a database endpoint.
+# prisma.config.ts needs a datasource url at generate time (no connection made)
 ARG DATABASE_URL=postgres://soulcloud:soulcloud@postgres:5432/soulcloud
-RUN DATABASE_URL="$DATABASE_URL" bun run --cwd packages/core db:generate
+ENV DATABASE_URL=$DATABASE_URL
+RUN bun run --cwd packages/core db:generate
 
 # --- api ---------------------------------------------------------------------
 FROM base AS api
@@ -44,22 +35,3 @@ FROM base AS broker
 ENV MQTT_BROKER_PORT=1883
 EXPOSE 1883
 CMD ["bun", "run", "packages/broker/src/index.ts"]
-
-# --- plugin-dispatcher --------------------------------------------------------
-# The dispatcher talks to independently deployed Plugin Host containers over
-# oRPC/WebSocket. Container memory/restart policy belongs to the runtime.
-FROM base AS plugin-dispatcher
-CMD ["sh", "-c", "bun run db:deploy && bun run packages/plugin-dispatcher/src/index.ts"]
-
-# --- plugin-host --------------------------------------------------------------
-# One image target is reused for each compile-time plugin. The entrypoint is a
-# container-local liveness supervisor: Docker/Kubernetes still owns the
-# container, while the supervisor can recover a synchronous worker hang under
-# plain Compose (which otherwise only marks a healthcheck as unhealthy).
-FROM base AS plugin-host
-ENV PLUGIN_HOST_BIND=0.0.0.0
-ENV PLUGIN_HOST_PORT=8090
-ENV DATABASE_URL=""
-USER bun
-EXPOSE 8090
-CMD ["sh", "packages/plugin-host/bin/entrypoint.sh"]

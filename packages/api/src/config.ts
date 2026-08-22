@@ -27,13 +27,6 @@ export const envSchema = z.object({
   AUTH_ARGON2_CONCURRENCY: z.coerce.number().int().positive().default(4),
   /// Hard bound for distinct usernames retained by the local failure cache.
   AUTH_LOGIN_FAILURE_CAPACITY: z.coerce.number().int().positive().default(10_000),
-  /// Dispatcher HTTP endpoint used for synchronous action encoding
-  /// (review fix: encoders are plugin code and run in the plugin host, not
-  /// the API). Empty disables plugin action routes' invocation path.
-  PLUGIN_DISPATCHER_URL: z.string().default(""),
-  PLUGIN_DISPATCHER_AUTH_TOKEN: z.string().min(16).optional(),
-  /// Deadline for one encode round trip (API -> dispatcher -> host).
-  PLUGIN_ENCODE_TIMEOUT_MS: z.coerce.number().int().positive().default(6_000),
 });
 
 export type ApiConfig = BaseConfig & z.infer<typeof envSchema>;

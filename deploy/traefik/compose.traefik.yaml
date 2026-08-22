@@ -7,8 +7,9 @@
 # Requirements:
 #   - both stacks share a docker network so traefik can reach the
 #     api/broker/web services by their compose service names
-#   - the main compose project's app network is `soulcloudjs_app` by default;
-#     set SOULCLOUD_APP_NETWORK in .env if the network name is customized
+#   - the main compose project's default network is
+#     <project>_default (e.g. soulcloudjs_default); join it explicitly
+#     below instead of relying on project name guessing
 #   - replace example.com in dynamic.yaml with your real domain and set
 #     the ACME email in traefik.yaml
 #   - ports 80/443 must be free on the host. In production REMOVE the
@@ -39,14 +40,13 @@ services:
     networks:
       - default
       # join the main stack's network to resolve api/broker/web:
-      - app
+      - soulcloudjs_default
 
 networks:
-  # The main compose project creates this network; it must already exist
-  # (run the base `docker compose up -d` first). Keep Traefik off every
-  # per-plugin internal network.
-  app:
-    name: ${SOULCLOUD_APP_NETWORK:-soulcloudjs_app}
+  # the main compose project (soulcloudjs) creates this network; it must
+  # already exist (run the base `docker compose up -d` first). If your
+  # compose project has a different name, adjust here.
+  soulcloudjs_default:
     external: true
 
 volumes:
