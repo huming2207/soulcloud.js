@@ -75,6 +75,7 @@
         "@orpc/contract": "2.0.0-beta.30",
         "@orpc/server": "2.0.0-beta.30",
         "@soulcloud/core": "workspace:*",
+        "@soulcloud/plugin-rpc-contract": "workspace:*",
         "@soulcloud/plugin-sdk": "workspace:*",
         "@soulcloud/plugins": "workspace:*",
         "pg": "^8.22.0",
@@ -93,12 +94,21 @@
         "@orpc/client": "2.0.0-beta.30",
         "@orpc/contract": "2.0.0-beta.30",
         "@orpc/server": "2.0.0-beta.30",
+        "@soulcloud/plugin-rpc-contract": "workspace:*",
         "@soulcloud/plugin-sdk": "workspace:*",
         "@soulcloud/plugins": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "1.4.0",
         "typescript": "^5",
+      },
+    },
+    "packages/plugin-rpc-contract": {
+      "name": "@soulcloud/plugin-rpc-contract",
+      "version": "0.1.0",
+      "dependencies": {
+        "@orpc/contract": "2.0.0-beta.30",
+        "zod": "^4.4.3",
       },
     },
     "packages/plugin-sdk": {

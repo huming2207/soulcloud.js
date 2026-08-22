@@ -4,6 +4,7 @@
     "paths": {
       "@soulcloud/core": ["../core/src/index.ts"],
       "@soulcloud/plugin-sdk": ["../plugin-sdk/src/index.ts"],
+      "@soulcloud/plugin-rpc-contract": ["../plugin-rpc-contract/src/index.ts"],
       "@soulcloud/plugins": ["../../plugins/registry.ts"]
     }
   },

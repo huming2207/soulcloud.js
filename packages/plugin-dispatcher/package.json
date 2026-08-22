@@ -13,6 +13,7 @@
     "@orpc/contract": "2.0.0-beta.30",
     "@orpc/server": "2.0.0-beta.30",
     "@soulcloud/core": "workspace:*",
+    "@soulcloud/plugin-rpc-contract": "workspace:*",
     "@soulcloud/plugin-sdk": "workspace:*",
     "@soulcloud/plugins": "workspace:*",
     "pg": "^8.22.0",

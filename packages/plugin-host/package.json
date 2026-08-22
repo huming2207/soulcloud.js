@@ -12,6 +12,7 @@
     "@orpc/client": "2.0.0-beta.30",
     "@orpc/contract": "2.0.0-beta.30",
     "@orpc/server": "2.0.0-beta.30",
+    "@soulcloud/plugin-rpc-contract": "workspace:*",
     "@soulcloud/plugin-sdk": "workspace:*",
     "@soulcloud/plugins": "workspace:*"
   },
