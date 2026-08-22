@@ -13,6 +13,7 @@ import {
   setPluginInstallationState,
   leasePluginEvents,
   releasePluginEvent,
+  purgePluginData,
   Prisma,
   type LeasedPluginEvent,
   type EntityUpdateInput,
@@ -44,6 +45,9 @@ export interface PluginManagerOptions {
   eventBatchSize?: number;
   eventTimeoutMs?: number;
   eventMaxAttempts?: number;
+  eventRetentionDays?: number;
+  historyRetentionDays?: number;
+  maintenanceIntervalMs?: number;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -52,6 +56,7 @@ export interface PluginEventStore {
   complete(eventId: string, leaseToken: string): Promise<boolean>;
   completeWithUpdates?(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[] }): Promise<boolean>;
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number): Promise<boolean>;
+  purge?(eventRetentionDays: number, historyRetentionDays: number): Promise<{ events: number; history: number }>;
 }
 
 export class PrismaPluginEventStore implements PluginEventStore {
@@ -64,6 +69,7 @@ export class PrismaPluginEventStore implements PluginEventStore {
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number) {
     return releasePluginEvent(this.prisma, eventId, leaseToken, permanent, error, retryMs);
   }
+  purge(eventRetentionDays: number, historyRetentionDays: number) { return purgePluginData(this.prisma, eventRetentionDays, historyRetentionDays); }
 }
 
 export interface CatalogEntry {
@@ -116,13 +122,21 @@ interface ActiveOperation {
   profileVersion?: number;
 }
 
+interface PluginCircuit {
+  failures: number;
+  openedAt: number;
+  probeInProgress: boolean;
+}
+
 export class PluginManager {
   private readonly connections = new Map<string, PluginConnection>();
   private readonly catalog = new Map<string, CatalogEntry>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly operations = new Map<string, ActiveOperation>();
+  private readonly circuits = new Map<string, PluginCircuit>();
   private eventTimer: ReturnType<typeof setInterval> | null = null;
   private eventPollRunning = false;
+  private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   private stopping = false;
   private readonly log: (message: string, fields?: Record<string, unknown>) => void;
 
@@ -140,6 +154,21 @@ export class PluginManager {
       this.eventTimer = setInterval(() => void this.consumeEvents(), interval);
       this.eventTimer.unref?.();
       void this.consumeEvents();
+      if (this.options.eventStore.purge) {
+        const interval = this.options.maintenanceIntervalMs ?? 3_600_000;
+        this.maintenanceTimer = setInterval(() => void this.runMaintenance(), interval);
+        this.maintenanceTimer.unref?.();
+      }
+    }
+  }
+
+  private async runMaintenance(): Promise<void> {
+    if (this.stopping || !this.options.eventStore?.purge) return;
+    try {
+      const result = await this.options.eventStore.purge(this.options.eventRetentionDays ?? 30, this.options.historyRetentionDays ?? 30);
+      this.log("plugin retention sweep completed", result);
+    } catch (error) {
+      this.log("plugin retention sweep failed", { error: (error as Error).message });
     }
   }
 
@@ -330,8 +359,13 @@ export class PluginManager {
 
   private async dispatchEvent(event: LeasedPluginEvent): Promise<void> {
     const store = this.options.eventStore!;
+    if (!this.circuitAllows(event.plugin_id)) {
+      await this.releaseEvent(event, false, "plugin circuit is open");
+      return;
+    }
     const connection = this.connections.get(event.plugin_id);
     if (!connection?.isOpen) {
+      this.circuitFailure(event.plugin_id);
       await this.releaseEvent(event, false, "plugin is unavailable");
       return;
     }
@@ -388,12 +422,15 @@ export class PluginManager {
       } else {
         await store.complete(event.id, event.lease_token);
       }
+      this.circuitSuccess(event.plugin_id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = typeof error === "object" && error !== null && "code" in error
         ? String((error as { code: unknown }).code)
         : "";
-      const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT";
+      const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT" || /INVALID_(EVENT_INPUT|PLUGIN_OUTPUT)/.test(message);
+      if (permanent) this.circuitSuccess(event.plugin_id);
+      else this.circuitFailure(event.plugin_id);
       await this.releaseEvent(event, permanent, message);
     } finally {
       // Operation capabilities are valid only while the parent RPC is live.
@@ -441,15 +478,33 @@ export class PluginManager {
   }
 
   private async releaseEvent(event: LeasedPluginEvent, permanent: boolean, message: string): Promise<void> {
-    const attempts = event.attempt_count;
-    const maxAttempts = this.options.eventMaxAttempts ?? 5;
-    const dead = permanent || attempts >= maxAttempts;
-    const retryMs = Math.min(60_000, 1_000 * 2 ** Math.min(attempts, 6));
+    const retryMs = permanent ? 0 : Math.min(60_000, 1_000 * 2 ** Math.min(event.attempt_count, 6));
     try {
-      await this.options.eventStore!.release(event.id, event.lease_token, dead, message.slice(0, 2_000), retryMs);
+      await this.options.eventStore!.release(event.id, event.lease_token, permanent, message.slice(0, 2_000), retryMs);
     } catch (error) {
       this.log("event lease release failed", { eventId: event.id, error: (error as Error).message });
     }
+  }
+
+  private circuitAllows(pluginId: string): boolean {
+    const circuit = this.circuits.get(pluginId);
+    if (!circuit || circuit.failures < 5) return true;
+    if (Date.now() - circuit.openedAt < 30_000) return false;
+    if (circuit.probeInProgress) return false;
+    circuit.probeInProgress = true;
+    return true;
+  }
+
+  private circuitFailure(pluginId: string): void {
+    const circuit = this.circuits.get(pluginId) ?? { failures: 0, openedAt: 0, probeInProgress: false };
+    circuit.failures += 1;
+    circuit.probeInProgress = false;
+    if (circuit.failures >= 5) circuit.openedAt = Date.now();
+    this.circuits.set(pluginId, circuit);
+  }
+
+  private circuitSuccess(pluginId: string): void {
+    this.circuits.delete(pluginId);
   }
 
   listCatalog(): CatalogEntry[] { return [...this.catalog.values()].map((entry) => ({ ...entry, connected: this.connections.get(entry.pluginId)?.isOpen ?? false })); }
@@ -460,6 +515,8 @@ export class PluginManager {
     this.stopping = true;
     if (this.eventTimer) clearInterval(this.eventTimer);
     this.eventTimer = null;
+    if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
+    this.maintenanceTimer = null;
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     for (const connection of this.connections.values()) connection.close();

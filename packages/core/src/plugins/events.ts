@@ -228,6 +228,38 @@ export async function releasePluginEvent(
   return result === 1;
 }
 
+/** Bounded retention sweep; active/queued events and current Entity state remain untouched. */
+export async function purgePluginData(
+  prisma: PrismaClient,
+  eventRetentionDays: number,
+  historyRetentionDays: number,
+  batchSize = 2_000,
+): Promise<{ events: number; history: number }> {
+  if (!Number.isInteger(eventRetentionDays) || eventRetentionDays <= 0) throw new RangeError("event retention days must be positive");
+  if (!Number.isInteger(historyRetentionDays) || historyRetentionDays <= 0) throw new RangeError("history retention days must be positive");
+  if (!Number.isInteger(batchSize) || batchSize <= 0) throw new RangeError("retention batch size must be positive");
+  const events = await prisma.$executeRaw`
+    WITH old_rows AS (
+      SELECT id FROM plugin_events
+      WHERE state IN ('completed', 'dead')
+        AND finished_at < CURRENT_TIMESTAMP - (${eventRetentionDays} * INTERVAL '1 day')
+      ORDER BY finished_at ASC
+      LIMIT ${batchSize}
+    )
+    DELETE FROM plugin_events e USING old_rows o WHERE e.id = o.id
+  `;
+  const history = await prisma.$executeRaw`
+    WITH old_rows AS (
+      SELECT id FROM plugin_entity_history
+      WHERE ingested_at < CURRENT_TIMESTAMP - (${historyRetentionDays} * INTERVAL '1 day')
+      ORDER BY ingested_at ASC, id ASC
+      LIMIT ${batchSize}
+    )
+    DELETE FROM plugin_entity_history h USING old_rows o WHERE h.id = o.id
+  `;
+  return { events, history };
+}
+
 function bytesToHex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("hex");
 }

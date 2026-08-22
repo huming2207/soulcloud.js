@@ -23,6 +23,9 @@ const manager = new PluginManager({
   eventBatchSize: config.PLUGIN_EVENT_BATCH_SIZE,
   eventTimeoutMs: config.PLUGIN_EVENT_TIMEOUT_MS,
   eventMaxAttempts: config.PLUGIN_EVENT_MAX_ATTEMPTS,
+  eventRetentionDays: config.PLUGIN_EVENT_RETENTION_DAYS,
+  historyRetentionDays: config.PLUGIN_ENTITY_HISTORY_RETENTION_DAYS,
+  maintenanceIntervalMs: config.PLUGIN_MAINTENANCE_INTERVAL_MS,
 });
 await manager.start();
 const server = startPluginManagerServer({ hostname: config.PLUGIN_MANAGER_INTERNAL_BIND, port: config.PLUGIN_MANAGER_INTERNAL_PORT, serviceToken: config.PLUGIN_MANAGER_SERVICE_TOKEN, manager, uiSessionSecret: config.PLUGIN_MANAGER_UI_SESSION_SECRET, uiSessionTtlSeconds: config.PLUGIN_UI_SESSION_TTL_SECONDS });

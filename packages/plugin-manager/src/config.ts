@@ -20,6 +20,9 @@ const envSchema = z.object({
   PLUGIN_EVENT_BATCH_SIZE: z.coerce.number().int().positive().max(256).default(32),
   PLUGIN_EVENT_TIMEOUT_MS: z.coerce.number().int().positive().max(600_000).default(30_000),
   PLUGIN_EVENT_MAX_ATTEMPTS: z.coerce.number().int().positive().max(100).default(5),
+  PLUGIN_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  PLUGIN_ENTITY_HISTORY_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  PLUGIN_MAINTENANCE_INTERVAL_MS: z.coerce.number().int().positive().default(3_600_000),
 });
 
 export type PluginManagerConfig = BaseConfig & z.infer<typeof envSchema>;
