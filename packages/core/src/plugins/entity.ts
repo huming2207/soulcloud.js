@@ -669,6 +669,46 @@ export interface EntityHistoryView {
   descriptorRevision: number;
 }
 
+/** Reads one active entity snapshot for a scoped plugin operation. */
+export async function getDeviceEntityState(
+  prisma: DbExecutor,
+  params: { deviceId: string; pluginId: string; entityKey: string },
+): Promise<import("@soulcloud/plugin-sdk").EntityStateSnapshot | null> {
+  const rows = await prisma.$queryRaw<Array<{
+    entity_key: string;
+    value: unknown;
+    quality: string | null;
+    source_timestamp: Date | null;
+    ingested_at: Date | null;
+    alarm_level: string | null;
+    alarm_code: string | null;
+  }>>`
+    SELECT er.entity_key, cs.value,
+           COALESCE(cs.quality, 'unknown') AS quality,
+           cs.source_timestamp, cs.ingested_at,
+           cs.alarm_level, cs.alarm_code
+    FROM entity_registry er
+    LEFT JOIN entity_current_state cs ON cs.entity_registry_id = er.id
+    WHERE er.device_id = ${params.deviceId}
+      AND er.plugin_id = ${params.pluginId}
+      AND er.entity_key = ${params.entityKey}
+      AND er.deprecated = false
+    LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    entityKey: row.entity_key,
+    value: row.value,
+    quality: (row.quality ?? "unknown") as import("@soulcloud/plugin-sdk").EntityQuality,
+    sourceTimestamp: row.source_timestamp?.toISOString() ?? null,
+    ingestedAt: row.ingested_at?.toISOString() ?? new Date(0).toISOString(),
+    alarm: row.alarm_level && row.alarm_code
+      ? { level: row.alarm_level as "info" | "warning" | "critical", code: row.alarm_code }
+      : null,
+  };
+}
+
 /**
  * Keyset-paged entity history for one device, optionally one entity.
  * Indexes: entity_history(device_id, id) and (entity_registry_id, id).

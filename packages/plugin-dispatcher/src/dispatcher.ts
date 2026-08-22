@@ -29,6 +29,8 @@ import {
   PluginSystemError,
   applyEntityUpdates,
   completePluginEvent,
+  enqueueBatchInTransaction,
+  getDeviceEntityState,
   failPluginEvent,
   leaseNextPluginEvent,
   listInstallationsWithWork,
@@ -45,9 +47,11 @@ import {
   validateEventUpdates,
 } from "@soulcloud/plugin-sdk";
 import type { EntityUpdate, PluginManifest } from "@soulcloud/plugin-sdk";
+import { DeviceCommandSchema } from "@soulcloud/core";
 import { HostSupervisor, type SupervisorLogger } from "./supervisor";
-import { PluginHostClient, PluginHostTimeoutError, PluginHostUnavailableError } from "./rpc-client";
+import { PluginHostTimeoutError, PluginHostUnavailableError, type PluginHostClientLike } from "./rpc-client";
 import type { DispatcherCoreOptions } from "./config";
+import { PluginOperationRegistry, type FinishedPluginOperation, type OperationLimits } from "./operation";
 
 // ---------------------------------------------------------------------------
 // Circuit breaker (per installation)
@@ -158,8 +162,33 @@ export function startDispatcher(
 
   const installations = new Map<string, InstallationRuntime>();
 
+  const operationLimits: OperationLimits = {
+    maxOperations: options.rpcMaxOperations ?? options.maxInFlight,
+    maxReverseInFlight: options.rpcMaxReverseInFlight ?? 64,
+    perPluginReverseInFlight: options.rpcPerPluginReverseInFlight ?? 16,
+    perInstallationReverseInFlight: options.rpcPerInstallationReverseInFlight ?? 8,
+    perOperationReverseInFlight: options.rpcPerOperationReverseInFlight ?? 4,
+    maxReverseCallsPerOperation: options.rpcMaxReverseCallsPerOperation ?? 64,
+    maxStagedCommandsPerOperation: options.rpcMaxStagedCommandsPerOperation ?? 16,
+    maxBlobsPerOperation: options.rpcMaxBlobs ?? 16,
+    maxBlobBytesPerOperation: options.rpcMaxBlobBytes ?? 256 * 1024,
+  };
+  const operations = new PluginOperationRegistry(operationLimits, async (event, entityKey) =>
+    getDeviceEntityState(prisma, {
+      deviceId: event.deviceId,
+      pluginId: event.pluginId,
+      entityKey,
+    }),
+  );
+
   const supervisor = new HostSupervisor(
-    options,
+    {
+      ...options,
+      reverseHandlers: {
+        entityGet: (input, signal) => operations.entityGet(input, signal).then((snapshot) => snapshot),
+        commandEnqueue: (input, signal) => operations.commandEnqueue(input, signal),
+      },
+    },
     logger,
   );
 
@@ -223,6 +252,7 @@ export function startDispatcher(
     event: PluginEventRow,
     updates: EntityUpdate[],
     runtime: InstallationRuntime,
+    operation: FinishedPluginOperation | null,
   ): Promise<void> {
     const ok = await completePluginEvent(prisma, {
       eventId: event.id,
@@ -232,6 +262,16 @@ export function startDispatcher(
           pluginId: event.pluginId,
           updates,
         });
+      },
+      applyCommands: async (tx) => {
+        for (const staged of operation?.stagedCommands ?? []) {
+          const command = DeviceCommandSchema.parse({ cmd: staged.command, args: staged.args });
+          await enqueueBatchInTransaction(tx, [event.deviceId], command, {
+            batchId: crypto.randomUUID(),
+            deviceCount: 1,
+            deliveryExpiresAt: null,
+          });
+        }
       },
     });
     completed += 1;
@@ -281,7 +321,7 @@ export function startDispatcher(
         return;
       }
 
-      let client: PluginHostClient;
+      let client: PluginHostClientLike;
       try {
         client = await supervisor.ensureClient(
           manifest.id,
@@ -298,11 +338,15 @@ export function startDispatcher(
         return;
       }
 
+      const operation = operations.begin(event, options.eventTimeoutMs);
+      let finishedOperation: FinishedPluginOperation | null = null;
       let result: unknown;
       try {
         result = await client.request(
           "plugin.handleEvent",
           {
+            operationId: operation.operationId,
+            operationToken: operation.token,
             eventId: event.id,
             eventKind: event.eventKind,
             schemaVersion: event.schemaVersion,
@@ -325,6 +369,7 @@ export function startDispatcher(
           options.eventTimeoutMs,
         );
       } catch (error) {
+        operations.discard(operation.token);
         if (error instanceof PluginHostTimeoutError) {
           // A remote container cannot be cancelled by the dispatcher. Drop
           // the local client; Docker/Kubernetes health checks own restart.
@@ -380,6 +425,8 @@ export function startDispatcher(
         return;
       }
 
+      finishedOperation = operations.finish(operation.token);
+
       // Authoritative validation of plugin output (§6.3).
       const { updates, logs } = (result ?? { updates: [] }) as {
         updates?: EntityUpdate[];
@@ -411,7 +458,7 @@ export function startDispatcher(
         );
         return;
       }
-      await markCompleted(event, updates ?? [], runtime);
+      await markCompleted(event, updates ?? [], runtime, finishedOperation);
     } catch (error) {
       logger.error("unexpected dispatch error", {
         eventId: event.id,

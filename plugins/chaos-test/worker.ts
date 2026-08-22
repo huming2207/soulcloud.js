@@ -53,6 +53,15 @@ export const chaosTestWorker: PluginWorker = {
             { entityKey: "chaos.last_kind", value: "ok" },
           ],
         };
+      case "reverse": {
+        const snapshot = await ctx.entities.get("chaos.counter");
+        await ctx.commands.enqueueCommand("chaos_reverse", [{
+          value: typeof snapshot?.value === "number" ? snapshot.value : 0,
+        }]);
+        return {
+          updates: [{ entityKey: "chaos.last_kind", value: "reverse" }],
+        };
+      }
       case "updates":
         return {
           updates: (payload.updates ?? []) as PluginEventResult["updates"],

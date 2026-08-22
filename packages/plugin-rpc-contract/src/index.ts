@@ -1,4 +1,4 @@
-import { oc } from "@orpc/contract";
+import { meta, oc } from "@orpc/contract";
 import { z } from "zod";
 
 /** One WebSocket carries both directions; prefixes keep peer frames disjoint. */
@@ -124,17 +124,17 @@ export const pingOutput = z.object({ nonce: z.string().min(1).max(128) });
 
 /** Dispatcher -> host procedures. */
 export const dispatcherToHostContract = {
-  handshake: oc.input(handshakeInput).output(handshakeOutput),
-  handleEvent: oc.input(handleEventInput).output(handleEventOutput),
-  encodeAction: oc.input(encodeActionInput).output(encodeActionOutput),
-  ping: oc.input(pingInput).output(pingOutput),
+  handshake: oc.input(handshakeInput).output(handshakeOutput).meta(meta.path(["handshake"])),
+  handleEvent: oc.input(handleEventInput).output(handleEventOutput).meta(meta.path(["handleEvent"])),
+  encodeAction: oc.input(encodeActionInput).output(encodeActionOutput).meta(meta.path(["encodeAction"])),
+  ping: oc.input(pingInput).output(pingOutput).meta(meta.path(["ping"])),
 };
 
 /** Host -> dispatcher procedures used by a running plugin operation. */
 export const hostToDispatcherContract = {
-  entityGet: oc.input(entityGetInput).output(entityGetOutput),
-  commandEnqueue: oc.input(commandEnqueueInput).output(commandEnqueueOutput),
-  ping: oc.input(pingInput).output(pingOutput),
+  entityGet: oc.input(entityGetInput).output(entityGetOutput).meta(meta.path(["entityGet"])),
+  commandEnqueue: oc.input(commandEnqueueInput).output(commandEnqueueOutput).meta(meta.path(["commandEnqueue"])),
+  ping: oc.input(pingInput).output(pingOutput).meta(meta.path(["ping"])),
 };
 
 export type DispatcherToHostContract = typeof dispatcherToHostContract;

@@ -6,7 +6,7 @@
  * clients and applies a per-plugin failure circuit.
  */
 
-import { PluginHostClient, PluginHostUnavailableError } from "./rpc-client";
+import { PluginHostClient, PluginHostUnavailableError, type PluginHostClientLike } from "./rpc-client";
 import type { DispatcherCoreOptions } from "./config";
 
 export interface SupervisorLogger {
@@ -19,8 +19,8 @@ interface HostState {
   pluginId: string;
   pluginVersion: string;
   baseUrl: string;
-  client: PluginHostClient | null;
-  starting: Promise<PluginHostClient> | null;
+  client: PluginHostClientLike | null;
+  starting: Promise<PluginHostClientLike> | null;
   failureTimes: number[];
   benchedUntil: number;
 }
@@ -48,7 +48,7 @@ export class HostSupervisor {
     pluginId: string,
     pluginVersion: string,
     apiVersion: number,
-  ): Promise<PluginHostClient> {
+  ): Promise<PluginHostClientLike> {
     const baseUrl = this.options.hostUrls.get(pluginId);
     if (!baseUrl) {
       throw new PluginHostUnavailableError(
@@ -92,13 +92,18 @@ export class HostSupervisor {
   private async connectAndHandshake(
     host: HostState,
     apiVersion: number,
-  ): Promise<PluginHostClient> {
-    let client: PluginHostClient;
+  ): Promise<PluginHostClientLike> {
+    let client: PluginHostClientLike;
     try {
       client = await PluginHostClient.connect({
         baseUrl: host.baseUrl,
         maxFrameBytes: this.options.maxFrameBytes,
         authToken: this.options.hostAuthToken,
+        reverseHandlers: this.options.reverseHandlers,
+        backpressureBytes: this.options.rpcBackpressureBytes,
+        maxPendingRequests: this.options.rpcMaxPendingRequests,
+        heartbeatIntervalMs: this.options.rpcHeartbeatIntervalMs,
+        heartbeatTimeoutMs: this.options.rpcHeartbeatTimeoutMs,
       });
       await client.handshake({
         pluginId: host.pluginId,

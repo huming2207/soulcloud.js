@@ -6,12 +6,28 @@
 
 import { SharedEnv, loadEnv, type Config as BaseConfig } from "@soulcloud/core";
 import { z } from "zod";
+import type { PluginHostReverseHandlers } from "./rpc-client";
 
 const envSchema = z.object({
   ...SharedEnv,
   /// Comma-separated plugin-id=http(s)://host:port mappings. Plugin hosts
   /// are independent containers; Docker/Kubernetes owns their lifecycle.
   PLUGIN_HOST_URLS: z.string().default(""),
+  PLUGIN_HOST_ENDPOINTS: z.string().default(""),
+  PLUGIN_RPC_TRANSPORT: z.enum(["http-msgpack", "orpc-ws"]).default("http-msgpack"),
+  PLUGIN_RPC_MAX_OPERATIONS: z.coerce.number().int().positive().default(64),
+  PLUGIN_RPC_MAX_REVERSE_IN_FLIGHT: z.coerce.number().int().positive().default(64),
+  PLUGIN_RPC_PER_PLUGIN_REVERSE_IN_FLIGHT: z.coerce.number().int().positive().default(16),
+  PLUGIN_RPC_PER_INSTALLATION_REVERSE_IN_FLIGHT: z.coerce.number().int().positive().default(8),
+  PLUGIN_RPC_PER_OPERATION_REVERSE_IN_FLIGHT: z.coerce.number().int().positive().default(4),
+  PLUGIN_RPC_MAX_REVERSE_CALLS_PER_OPERATION: z.coerce.number().int().positive().default(64),
+  PLUGIN_RPC_MAX_STAGED_COMMANDS_PER_OPERATION: z.coerce.number().int().positive().default(16),
+  PLUGIN_RPC_MAX_BLOBS: z.coerce.number().int().positive().default(16),
+  PLUGIN_RPC_MAX_BLOB_BYTES: z.coerce.number().int().positive().default(256 * 1024),
+  PLUGIN_RPC_BACKPRESSURE_BYTES: z.coerce.number().int().positive().default(4 * 1024 * 1024),
+  PLUGIN_RPC_MAX_PENDING_REQUESTS: z.coerce.number().int().positive().default(128),
+  PLUGIN_RPC_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
+  PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(3_000),
   /// Optional bearer token shared by the dispatcher and plugin-host
   /// containers. Keep this in the deployment secret store/.env.
   PLUGIN_HOST_AUTH_TOKEN: z.string().min(16).optional(),
@@ -81,6 +97,7 @@ export function loadDispatcherConfig(): DispatcherConfig {
 /** Options for the embeddable dispatcher core (tests construct these directly). */
 export interface DispatcherCoreOptions {
   hostUrls: ReadonlyMap<string, string>;
+  reverseHandlers?: PluginHostReverseHandlers;
   hostAuthToken?: string;
   pollIntervalMs: number;
   leaseDurationMs: number;
@@ -91,6 +108,19 @@ export interface DispatcherCoreOptions {
   maxInFlight: number;
   perInstallationConcurrency: number;
   maxFrameBytes: number;
+  rpcMaxOperations?: number;
+  rpcMaxReverseInFlight?: number;
+  rpcPerPluginReverseInFlight?: number;
+  rpcPerInstallationReverseInFlight?: number;
+  rpcPerOperationReverseInFlight?: number;
+  rpcMaxReverseCallsPerOperation?: number;
+  rpcMaxStagedCommandsPerOperation?: number;
+  rpcMaxBlobs?: number;
+  rpcMaxBlobBytes?: number;
+  rpcBackpressureBytes?: number;
+  rpcMaxPendingRequests?: number;
+  rpcHeartbeatIntervalMs?: number;
+  rpcHeartbeatTimeoutMs?: number;
   crashThreshold: number;
   crashWindowMs: number;
   crashCooldownMs: number;
@@ -106,7 +136,7 @@ export interface DispatcherCoreOptions {
   encodeTimeoutMs?: number;
 }
 
-export function parsePluginHostUrls(raw: string): ReadonlyMap<string, string> {
+export function parsePluginHostUrls(raw: string, transport: "http-msgpack" | "orpc-ws" = "http-msgpack"): ReadonlyMap<string, string> {
   const urls = new Map<string, string>();
   for (const entry of raw.split(",")) {
     const trimmed = entry.trim();
@@ -123,13 +153,19 @@ export function parsePluginHostUrls(raw: string): ReadonlyMap<string, string> {
     } catch {
       throw new Error(`PLUGIN_HOST_URLS has invalid URL for ${pluginId}`);
     }
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error(`PLUGIN_HOST_URLS URL for ${pluginId} must use http or https`);
+    if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) {
+      throw new Error(`PLUGIN_HOST_URLS URL for ${pluginId} must use http(s) or ws(s)`);
     }
     if (!pluginId || urls.has(pluginId)) {
       throw new Error(`PLUGIN_HOST_URLS contains duplicate or empty plugin id: ${pluginId}`);
     }
-    urls.set(pluginId, value.replace(/\/$/, ""));
+    if (transport === "orpc-ws" && (url.protocol === "http:" || url.protocol === "https:")) {
+      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      if (url.pathname === "/" || url.pathname.length === 0) url.pathname = "/rpc/ws";
+    } else if ((url.protocol === "ws:" || url.protocol === "wss:") && (url.pathname === "/" || url.pathname.length === 0)) {
+      url.pathname = "/rpc/ws";
+    }
+    urls.set(pluginId, url.toString().replace(/\/$/, ""));
   }
   return urls;
 }
@@ -138,7 +174,10 @@ export function dispatcherCoreOptionsFromConfig(
   config: DispatcherConfig,
 ): DispatcherCoreOptions {
   return {
-    hostUrls: parsePluginHostUrls(config.PLUGIN_HOST_URLS),
+    hostUrls: parsePluginHostUrls(
+      config.PLUGIN_HOST_ENDPOINTS || config.PLUGIN_HOST_URLS,
+      config.PLUGIN_RPC_TRANSPORT,
+    ),
     hostAuthToken: config.PLUGIN_HOST_AUTH_TOKEN,
     pollIntervalMs: config.PLUGIN_EVENT_POLL_INTERVAL_MS,
     leaseDurationMs: config.PLUGIN_EVENT_LEASE_SECONDS * 1000,
@@ -149,6 +188,19 @@ export function dispatcherCoreOptionsFromConfig(
     maxInFlight: config.PLUGIN_MAX_IN_FLIGHT,
     perInstallationConcurrency: config.PLUGIN_PER_INSTALLATION_CONCURRENCY,
     maxFrameBytes: config.PLUGIN_HOST_MAX_FRAME_BYTES,
+    rpcMaxOperations: config.PLUGIN_RPC_MAX_OPERATIONS,
+    rpcMaxReverseInFlight: config.PLUGIN_RPC_MAX_REVERSE_IN_FLIGHT,
+    rpcPerPluginReverseInFlight: config.PLUGIN_RPC_PER_PLUGIN_REVERSE_IN_FLIGHT,
+    rpcPerInstallationReverseInFlight: config.PLUGIN_RPC_PER_INSTALLATION_REVERSE_IN_FLIGHT,
+    rpcPerOperationReverseInFlight: config.PLUGIN_RPC_PER_OPERATION_REVERSE_IN_FLIGHT,
+    rpcMaxReverseCallsPerOperation: config.PLUGIN_RPC_MAX_REVERSE_CALLS_PER_OPERATION,
+    rpcMaxStagedCommandsPerOperation: config.PLUGIN_RPC_MAX_STAGED_COMMANDS_PER_OPERATION,
+    rpcMaxBlobs: config.PLUGIN_RPC_MAX_BLOBS,
+    rpcMaxBlobBytes: config.PLUGIN_RPC_MAX_BLOB_BYTES,
+    rpcBackpressureBytes: config.PLUGIN_RPC_BACKPRESSURE_BYTES,
+    rpcMaxPendingRequests: config.PLUGIN_RPC_MAX_PENDING_REQUESTS,
+    rpcHeartbeatIntervalMs: config.PLUGIN_RPC_HEARTBEAT_INTERVAL_MS,
+    rpcHeartbeatTimeoutMs: config.PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS,
     crashThreshold: config.PLUGIN_HOST_CRASH_THRESHOLD,
     crashWindowMs: config.PLUGIN_HOST_CRASH_WINDOW_MS,
     crashCooldownMs: config.PLUGIN_HOST_CRASH_COOLDOWN_MS,

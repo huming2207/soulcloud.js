@@ -11,6 +11,8 @@
  */
 
 import type {
+  CommandArgument,
+  EntityStateSnapshot,
   PluginContext,
   PluginLogger,
   ScopedCommandService,
@@ -19,6 +21,12 @@ import type {
   ScopedJobService,
 } from "@soulcloud/plugin-sdk";
 
+export interface PluginContextBindings {
+  getEntity?: (entityKey: string, signal: AbortSignal) => Promise<EntityStateSnapshot | null>;
+  enqueueCommand?: (command: string, args: CommandArgument[], signal: AbortSignal) => Promise<void>;
+  getDeviceUid?: () => Promise<string>;
+}
+
 function notImplemented(service: string, method: string): never {
   throw new Error(
     `${service}.${method} is not implemented in this stage: it requires the ` +
@@ -26,24 +34,6 @@ function notImplemented(service: string, method: string): never {
       `docs/zh/plugin-and-station-architecture.md §6.4)`,
   );
 }
-
-const devices: ScopedDeviceService = {
-  async getDeviceUid() {
-    notImplemented("devices", "getDeviceUid");
-  },
-};
-
-const commands: ScopedCommandService = {
-  async enqueueCommand() {
-    notImplemented("commands", "enqueueCommand");
-  },
-};
-
-const entities: ScopedEntityService = {
-  async get() {
-    notImplemented("entities", "get");
-  },
-};
 
 const jobs: ScopedJobService = {
   async createJob() {
@@ -68,6 +58,7 @@ export function createPluginContext(
     message: string,
     fields?: Record<string, unknown>,
   ) => void,
+  bindings: PluginContextBindings = {},
 ): PluginContext {
   const logger: PluginLogger = {
     debug: (message, fields) => emitLog("debug", message, fields),
@@ -75,7 +66,25 @@ export function createPluginContext(
     warn: (message, fields) => emitLog("warn", message, fields),
     error: (message, fields) => emitLog("error", message, fields),
   };
-  void tags; // tags ride along in emitLog's closure (host prefixes locally too)
+  const devices: ScopedDeviceService = {
+    async getDeviceUid() {
+      if (!bindings.getDeviceUid) notImplemented("devices", "getDeviceUid");
+      return bindings.getDeviceUid();
+    },
+  };
+  const commands: ScopedCommandService = {
+    async enqueueCommand(command, args) {
+      if (!bindings.enqueueCommand) notImplemented("commands", "enqueueCommand");
+      return bindings.enqueueCommand(command, args, signal);
+    },
+  };
+  const entities: ScopedEntityService = {
+    async get(entityKey) {
+      if (!bindings.getEntity) notImplemented("entities", "get");
+      return bindings.getEntity(entityKey, signal);
+    },
+  };
+  void tags;
   return {
     installation,
     devices,

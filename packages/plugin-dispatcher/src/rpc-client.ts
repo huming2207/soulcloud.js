@@ -7,6 +7,21 @@
  * container.
  */
 
+import { RPCLink } from "@orpc/client/websocket";
+import { createContractClientFactory } from "@orpc/contract";
+import { implement } from "@orpc/server";
+import { RPCHandler } from "@orpc/server/websocket";
+import {
+  PLUGIN_RPC_D2H_PREFIX,
+  PLUGIN_RPC_H2D_PREFIX,
+  dispatcherToHostContract,
+  hostToDispatcherContract,
+  type CommandEnqueueInput,
+  type EncodeActionInput,
+  type EntityGetInput,
+  type EntityGetOutput,
+  type HandleEventInput,
+} from "@soulcloud/plugin-rpc-contract";
 import {
   DEFAULT_MAX_FRAME_BYTES,
   HANDSHAKE_METHOD,
@@ -19,11 +34,28 @@ import {
   type RpcResponse,
 } from "@soulcloud/plugin-sdk";
 
+export interface PluginHostReverseHandlers {
+  entityGet(input: EntityGetInput, signal: AbortSignal): Promise<EntityGetOutput>;
+  commandEnqueue(input: CommandEnqueueInput, signal: AbortSignal): Promise<{ ok: true }>;
+}
+
 export interface PluginHostClientOptions {
   baseUrl: string;
   maxFrameBytes?: number;
   handshakeTimeoutMs?: number;
   authToken?: string;
+  reverseHandlers?: PluginHostReverseHandlers;
+  backpressureBytes?: number;
+  maxPendingRequests?: number;
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
+}
+
+export interface PluginHostClientLike {
+  readonly isOpen: boolean;
+  request(method: string, params: unknown, deadlineMs: number): Promise<unknown>;
+  handshake(expected: { pluginId: string; pluginVersion: string; apiVersion: number }): Promise<void>;
+  close(): void;
 }
 
 export class PluginHostUnavailableError extends Error {
@@ -70,7 +102,10 @@ export class PluginHostClient {
 
   static async connect(
     options: PluginHostClientOptions,
-  ): Promise<PluginHostClient> {
+  ): Promise<PluginHostClientLike> {
+    if (options.baseUrl.startsWith("ws://") || options.baseUrl.startsWith("wss://")) {
+      return PluginHostWsClient.connect(options);
+    }
     const client = new PluginHostClient(options);
     // Connecting is deliberately lazy; handshake performs the first health
     // request and is supervised by the caller's retry/circuit policy.
@@ -213,5 +248,209 @@ export class PluginHostClient {
 
   close(): void {
     this.closed = true;
+  }
+}
+
+/** oRPC v2 client for the one-socket, two-prefix transport. */
+class PluginHostWsClient implements PluginHostClientLike {
+  private readonly wsUrl: string;
+  private readonly handshakeTimeoutMs: number;
+  private readonly authToken?: string;
+  private readonly reverseHandlers?: PluginHostReverseHandlers;
+  private readonly backpressureBytes: number;
+  private readonly maxPendingRequests: number;
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
+  private socket: WebSocket | null = null;
+  private d2hClient: any = null;
+  private h2dHandler: RPCHandler<any> | null = null;
+  private connecting: Promise<void> | null = null;
+  private closed = false;
+  private pendingRequests = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  private constructor(options: PluginHostClientOptions) {
+    this.wsUrl = options.baseUrl.replace(/\/$/, "");
+    this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000;
+    this.authToken = options.authToken;
+    this.reverseHandlers = options.reverseHandlers;
+    this.backpressureBytes = options.backpressureBytes ?? 4 * 1024 * 1024;
+    this.maxPendingRequests = options.maxPendingRequests ?? 128;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 3_000;
+    try {
+      const url = new URL(this.wsUrl);
+      if (url.protocol !== "ws:" && url.protocol !== "wss:") throw new Error(`unsupported protocol ${url.protocol}`);
+    } catch (error) {
+      throw new PluginHostUnavailableError(`invalid plugin host WebSocket URL: ${(error as Error).message}`);
+    }
+  }
+
+  static async connect(options: PluginHostClientOptions): Promise<PluginHostWsClient> {
+    return new PluginHostWsClient(options);
+  }
+
+  get isOpen(): boolean {
+    return !this.closed && this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  private async ensureConnected(): Promise<void> {
+    if (this.isOpen) return;
+    if (this.closed) throw new PluginHostUnavailableError("plugin host client is closed");
+    if (this.connecting) return this.connecting;
+    this.connecting = new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(this.wsUrl, {
+        headers: this.authToken ? { authorization: `Bearer ${this.authToken}` } : undefined,
+      });
+      this.socket = socket;
+      const fail = (error: Error) => {
+        if (this.connecting) {
+          this.connecting = null;
+          reject(new PluginHostUnavailableError(error.message));
+        }
+      };
+      socket.addEventListener("open", () => {
+        const bridge = socket;
+        const reverse = this.reverseHandlers;
+        const implemented = implement(hostToDispatcherContract).$context<object>();
+        const router = {
+          entityGet: implemented.entityGet.handler(({ input }) => {
+            if (!reverse) throw new Error("reverse entity reads are not configured");
+            return reverse.entityGet(input, AbortSignal.timeout(10_000));
+          }),
+          commandEnqueue: implemented.commandEnqueue.handler(({ input }) => {
+            if (!reverse) throw new Error("reverse command enqueue is not configured");
+            return reverse.commandEnqueue(input, AbortSignal.timeout(10_000));
+          }),
+          ping: implemented.ping.handler(({ input }) => input),
+        };
+        this.h2dHandler = new RPCHandler(router, {
+          encodePeerMessage: { prefix: PLUGIN_RPC_H2D_PREFIX },
+          decodePeerMessage: { prefix: PLUGIN_RPC_H2D_PREFIX },
+        });
+        socket.addEventListener("message", (event) => {
+          void this.h2dHandler?.message(bridge, event.data, { context: {} });
+        });
+        const link = new RPCLink({
+          connect: () => socket,
+          encodePeerMessage: { prefix: PLUGIN_RPC_D2H_PREFIX },
+          decodePeerMessage: { prefix: PLUGIN_RPC_D2H_PREFIX },
+        });
+        this.d2hClient = createContractClientFactory(link)(dispatcherToHostContract);
+        this.heartbeatTimer = setInterval(() => {
+          const activeSocket = this.socket;
+          if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN || !this.d2hClient) return;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), this.heartbeatTimeoutMs);
+          void this.d2hClient.ping({ nonce: crypto.randomUUID() }, { signal: controller.signal })
+            .catch(() => activeSocket.close(1011, "heartbeat timeout"))
+            .finally(() => clearTimeout(timer));
+        }, this.heartbeatIntervalMs);
+        this.heartbeatTimer.unref?.();
+        this.connecting = null;
+        resolve();
+      });
+      socket.addEventListener("error", () => fail(new Error("plugin host WebSocket connection failed")));
+      socket.addEventListener("close", () => {
+        this.socket = null;
+        this.d2hClient = null;
+        if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+        this.heartbeatTimer = null;
+        void this.h2dHandler?.close(socket);
+        this.h2dHandler = null;
+      });
+    });
+    return this.connecting;
+  }
+
+  async request(method: string, params: unknown, deadlineMs: number): Promise<unknown> {
+    await this.ensureConnected();
+    const client = this.d2hClient;
+    if (!client) throw new PluginHostUnavailableError("plugin host WebSocket is not ready");
+    if (this.socket && this.socket.bufferedAmount > this.backpressureBytes) {
+      const error = new PluginHostUnavailableError("plugin host WebSocket send queue is full") as Error & { code?: string };
+      error.code = "overloaded";
+      throw error;
+    }
+    if (this.pendingRequests >= this.maxPendingRequests) {
+      const error = new PluginHostUnavailableError("plugin host WebSocket request limit reached") as Error & { code?: string };
+      error.code = "overloaded";
+      throw error;
+    }
+    this.pendingRequests += 1;
+    const input = (params && typeof params === "object" ? params : {}) as Record<string, unknown>;
+    const operation = {
+      operationId: typeof input.operationId === "string" ? input.operationId : crypto.randomUUID(),
+      operationToken: typeof input.operationToken === "string" ? input.operationToken : crypto.randomUUID().replaceAll("-", ""),
+      deadlineMs,
+    };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), deadlineMs);
+    try {
+      if (method === "host.handshake") {
+        return await client.handshake(input, { signal: controller.signal });
+      }
+      if (method === "plugin.handleEvent") {
+        return await client.handleEvent({ ...input, ...operation }, { signal: controller.signal });
+      }
+      if (method === "action.encode") {
+        const result = await client.encodeAction({ ...input, ...operation }, { signal: controller.signal }) as {
+          cmd: string;
+          args: Array<{ name: string; value: unknown }>;
+          schemaVersion: number;
+        };
+        const args = [] as Array<{ name: string; value: unknown }>;
+        for (const arg of result.args) {
+          args.push({
+            name: arg.name,
+            value: arg.value instanceof Blob
+              ? new Uint8Array(await arg.value.arrayBuffer())
+              : arg.value,
+          });
+        }
+        return { ...result, args };
+      }
+      if (method === "system.ping") {
+        return await client.ping(input, { signal: controller.signal });
+      }
+      throw new PluginHostUnavailableError(`unknown oRPC method ${method}`);
+    } catch (error) {
+      if (controller.signal.aborted) throw new PluginHostTimeoutError(method, deadlineMs);
+      const message = (error as Error).message;
+      const coded = error as Error & { code?: string };
+      const prefix = message.match(/^([a-z_]+):\s*(.*)$/i);
+      if (prefix) coded.code = prefix[1];
+      if (coded.code) throw coded;
+      throw new PluginHostUnavailableError(message);
+    } finally {
+      clearTimeout(timer);
+      this.pendingRequests -= 1;
+    }
+  }
+
+  async handshake(expected: { pluginId: string; pluginVersion: string; apiVersion: number }): Promise<void> {
+    const result = await this.request("host.handshake", {
+      rpcVersion: RPC_VERSION,
+      pluginId: expected.pluginId,
+      pluginVersion: expected.pluginVersion,
+      apiVersion: expected.apiVersion,
+    }, this.handshakeTimeoutMs) as {
+      rpcVersion: number;
+      pluginId: string;
+      pluginVersion: string;
+      apiVersion: number;
+    };
+    if (result.rpcVersion !== RPC_VERSION || result.pluginId !== expected.pluginId || result.pluginVersion !== expected.pluginVersion || result.apiVersion !== expected.apiVersion) {
+      throw new PluginHostUnavailableError(`handshake mismatch: got ${result.pluginId}@${result.pluginVersion} (rpc ${result.rpcVersion}, api ${result.apiVersion})`);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+    this.socket?.close(1000, "client closed");
+    this.socket = null;
+    this.d2hClient = null;
   }
 }

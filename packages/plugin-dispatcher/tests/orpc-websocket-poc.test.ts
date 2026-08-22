@@ -63,13 +63,13 @@ test("oRPC v2 supports reverse calls on one prefixed WebSocket", async () => {
   });
 
   let hostBridge: ReturnType<typeof makeServerWebSocketBridge> | undefined;
-  let dispatcherClient: ReturnType<typeof createORPCClient<typeof dispatcherRouter>> | undefined;
+  let dispatcherClient: any;
   let server: Bun.Server<unknown> | undefined;
 
   server = Bun.serve({
     port: 0,
     fetch(req, currentServer) {
-      if (currentServer.upgrade(req)) return;
+      if (currentServer.upgrade(req, { data: {} })) return undefined as unknown as Response;
       return new Response("upgrade required", { status: 426 });
     },
     websocket: {
@@ -103,7 +103,7 @@ test("oRPC v2 supports reverse calls on one prefixed WebSocket", async () => {
       encodePeerMessage: { prefix: D2H_PREFIX },
       decodePeerMessage: { prefix: D2H_PREFIX },
     });
-    const hostClient = createORPCClient(dispatcherLink);
+    const hostClient: any = createORPCClient(dispatcherLink);
     clientSocket.addEventListener("message", (event) => {
       void dispatcherHandler.message(clientSocket as any, event.data, {
         context: { reverse: async (value: string) => value },

@@ -46,6 +46,14 @@ const maxFrameBytes = args.maxFrameBytes ?? Number.parseInt(
   process.env.PLUGIN_HOST_MAX_FRAME_BYTES ?? String(1024 * 1024),
   10,
 );
+const websocketBackpressureLimit = Number.parseInt(
+  process.env.PLUGIN_HOST_WS_BACKPRESSURE_BYTES ?? String(4 * 1024 * 1024),
+  10,
+);
+const websocketIdleTimeoutSeconds = Number.parseInt(
+  process.env.PLUGIN_HOST_WS_IDLE_TIMEOUT_SECONDS ?? "60",
+  10,
+);
 
 if (!pluginId || !Number.isSafeInteger(port) || port < 0 || port > 65_535) {
   console.error(
@@ -60,6 +68,8 @@ const handle = await startPluginHost({
   port,
   authToken,
   maxFrameBytes,
+  websocketBackpressureLimit,
+  websocketIdleTimeoutSeconds,
 });
 
 console.log(

@@ -15,7 +15,7 @@
  * never carries a plugin id.
  */
 
-import type { DbExecutor, PrismaClient } from "../db";
+import type { DbExecutor, PrismaClient, TransactionClient } from "../db";
 import { PluginSystemError } from "./errors";
 import { PLUGIN_EVENTS_CHANNEL } from "../queue/notify";
 
@@ -316,7 +316,8 @@ export async function completePluginEvent(
   prisma: PrismaClient,
   params: {
     eventId: string;
-    applyUpdates: (tx: DbExecutor) => Promise<void>;
+    applyUpdates: (tx: TransactionClient) => Promise<void>;
+    applyCommands?: (tx: TransactionClient) => Promise<void>;
   },
 ): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
@@ -328,6 +329,7 @@ export async function completePluginEvent(
     `;
     if (!rows[0]) return false;
     await params.applyUpdates(tx);
+    await params.applyCommands?.(tx);
     return true;
   });
 }

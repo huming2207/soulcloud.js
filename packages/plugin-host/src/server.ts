@@ -30,6 +30,7 @@ import {
 } from "@soulcloud/plugin-sdk";
 import type { PluginManifest, PluginWorker } from "@soulcloud/plugin-sdk";
 import { createPluginContext } from "./context";
+import { createPluginHostWsConnection, type PluginHostWsConnection } from "./ws-server";
 
 export interface PluginHostOptions {
   pluginId: string;
@@ -38,6 +39,8 @@ export interface PluginHostOptions {
   authToken?: string;
   maxFrameBytes?: number;
   maxConcurrentHandlers?: number;
+  websocketBackpressureLimit?: number;
+  websocketIdleTimeoutSeconds?: number;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -46,10 +49,13 @@ export interface PluginHostHandle {
   hostname: string;
   port: number;
   url: string;
+  wsUrl: string;
   close(): Promise<void>;
 }
 
 const DEFAULT_MAX_CONCURRENT_HANDLERS = 8;
+const DEFAULT_WS_BACKPRESSURE_LIMIT = 4 * 1024 * 1024;
+const DEFAULT_WS_IDLE_TIMEOUT_SECONDS = 60;
 const MAX_LOGS_PER_EVENT = 32;
 const MAX_LOG_MESSAGE_BYTES = 4 * 1024;
 const MAX_LOG_FIELDS_BYTES = 16 * 1024;
@@ -106,7 +112,8 @@ export async function startPluginHost(
   const log = options.log ?? ((message, fields) => console.log(message, fields ?? ""));
   let running = 0;
 
-  const server = Bun.serve({
+  type HostWebSocketData = { connection?: PluginHostWsConnection };
+  const server = Bun.serve<HostWebSocketData>({
     hostname,
     port: options.port,
     maxRequestBodySize: maxFrameBytes,
@@ -118,6 +125,16 @@ export async function startPluginHost(
           pluginId: manifest.id,
           pluginVersion: manifest.version,
         });
+      }
+      if (url.pathname === "/rpc/ws") {
+        if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
+        if (options.authToken && request.headers.get("authorization") !== `Bearer ${options.authToken}`) {
+          return new Response("unauthorized", { status: 401 });
+        }
+        if (!server.upgrade(request, { data: {} })) {
+          return new Response("WebSocket upgrade failed", { status: 400 });
+        }
+        return undefined as unknown as Response;
       }
       if (url.pathname !== "/rpc") return new Response("not found", { status: 404 });
       if (request.method !== "POST") {
@@ -178,6 +195,38 @@ export async function startPluginHost(
         log,
       });
     },
+    websocket: {
+      maxPayloadLength: maxFrameBytes,
+      backpressureLimit: options.websocketBackpressureLimit ?? DEFAULT_WS_BACKPRESSURE_LIMIT,
+      closeOnBackpressureLimit: true,
+      idleTimeout: options.websocketIdleTimeoutSeconds ?? DEFAULT_WS_IDLE_TIMEOUT_SECONDS,
+      open(ws) {
+        ws.data.connection = createPluginHostWsConnection(ws, {
+          manifest,
+          worker,
+          maxConcurrentHandlers: maxConcurrent,
+          log,
+        });
+      },
+      message(ws, message) {
+        const connection = ws.data.connection;
+        if (!connection) {
+          ws.close(1011, "connection not initialized");
+          return;
+        }
+        // Both oRPC peers observe every frame and filter by their direction
+        // prefix. Dispatch to the reverse client before the request handler
+        // so response frames are available in the same event turn.
+        connection.bridge.dispatch("message", { data: message });
+        void connection.handler.message(ws, message, {
+          context: { reverse: connection.reverseClient },
+        });
+      },
+      close(ws) {
+        void ws.data.connection?.close();
+        ws.data.connection = undefined;
+      },
+    },
   });
 
   log("plugin-host listening", {
@@ -191,6 +240,7 @@ export async function startPluginHost(
     hostname,
     port: actualPort,
     url: server.url.toString().replace(/\/$/, ""),
+    wsUrl: server.url.toString().replace(/^http/, "ws").replace(/\/$/, "") + "/rpc/ws",
     async close() {
       server.stop(true);
     },
