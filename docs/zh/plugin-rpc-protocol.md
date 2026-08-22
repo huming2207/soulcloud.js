@@ -267,17 +267,16 @@ interface ActivePluginOperation {
 ```
 
 token 随正向输入发送给 Host，但不得暴露给 plugin worker。Host 创建 `PluginContext` 时，将它
-封装在 scoped client closure 中。插件调用：
+封装在 scoped client closure 中。由于 WebSocket 业务 frame 没有 HTTP 的逐调用 header，
+当前实现把 operationId/token 放在受 schema 约束的内部 reverse envelope 中；该 envelope
+只由 Host adapter 生成，不会暴露给 plugin worker。插件调用：
 
 ```ts
 await ctx.entities.get("temperature");
 ```
 
-Host 的 h2d RPCLink interceptor 自动附加：
-
-```http
-X-Soulcloud-Operation: <opaque-token>
-```
+Host 的 h2d RPCLink adapter 自动附加上述内部 envelope。未来若 transport 支持逐调用 header，
+可等价映射为 `X-Soulcloud-Operation`，不改变 Dispatcher 校验逻辑。
 
 Dispatcher reverse middleware 按以下顺序检查：
 
@@ -301,11 +300,14 @@ registry 删除。
 
 ### 8.1 `context.entities.get`
 
-输入仅包含：
+对 plugin worker 暴露的 service 输入仅包含：
 
 ```ts
 { entityKey: string }
 ```
+
+Host adapter 在 wire envelope 中加入 operation capability；plugin worker 不可自行填写
+或修改该字段。
 
 Dispatcher 权威检查：
 
