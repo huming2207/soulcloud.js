@@ -1,4 +1,4 @@
-import type { PrismaClient } from "../db";
+import { Prisma, type PrismaClient } from "../db";
 import { PLUGIN_EVENTS_CHANNEL } from "../queue/notify";
 import type { DeviceEventEnvelope } from "../protocol/event";
 
@@ -95,7 +95,11 @@ export async function ingestDeviceEvent(
         manifestHash: binding?.installation.manifestHash,
         profileId: binding?.profileId,
         profileVersion: binding?.profileVersion,
-        installationConfig: binding?.installation.config,
+        installationConfig: binding
+          ? binding.installation.config === null
+            ? Prisma.JsonNull
+            : (binding.installation.config as Prisma.InputJsonValue)
+          : undefined,
         state: routeIsValid ? "queued" : "dead",
         lastError: routeIsValid
           ? undefined
