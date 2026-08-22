@@ -118,6 +118,12 @@ interface InstallationRuntime {
   breaker: InstallationCircuitBreaker;
 }
 
+function pluginOutputLimitError(error: unknown): Error & { code: "invalid_plugin_output" } {
+  const result = new Error((error as Error).message);
+  result.name = "PluginOutputLimitError";
+  return Object.assign(result, { code: "invalid_plugin_output" as const });
+}
+
 export interface DispatcherDeps {
   /** Consecutive-failure threshold before an installation's circuit opens. */
   breakerThreshold?: number;
@@ -196,8 +202,22 @@ export function startDispatcher(
     {
       ...options,
       reverseHandlers: {
-        entityGet: (input, signal, connectionId) => operations.entityGet(input, signal, connectionId),
-        commandEnqueue: (input, signal, connectionId) => operations.commandEnqueue(input, signal, connectionId),
+        entityGet: async (input, signal, connectionId) => {
+          try {
+            assertRpcValueBudget(input, valueBudget);
+          } catch (error) {
+            throw pluginOutputLimitError(error);
+          }
+          return operations.entityGet(input, signal, connectionId);
+        },
+        commandEnqueue: async (input, signal, connectionId) => {
+          try {
+            assertRpcValueBudget(input, valueBudget);
+          } catch (error) {
+            throw pluginOutputLimitError(error);
+          }
+          return operations.commandEnqueue(input, signal, connectionId);
+        },
       },
     },
     logger,

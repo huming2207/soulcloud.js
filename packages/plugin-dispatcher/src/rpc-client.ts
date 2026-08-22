@@ -340,6 +340,9 @@ class PluginHostWsClient implements PluginHostClientLike {
             if (code === "overloaded") {
               throw new ORPCError("CALLBACK_OVERLOADED" as never, { message: (error as Error).message });
             }
+            if (code === "invalid_plugin_output") {
+              throw new ORPCError("INVALID_PLUGIN_OUTPUT" as never, { message: (error as Error).message });
+            }
             throw error;
           }
         };

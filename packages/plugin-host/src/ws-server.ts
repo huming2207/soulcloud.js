@@ -213,16 +213,22 @@ export function createPluginHostWsConnection(
             entityKey,
           }, { signal })),
           enqueueCommand: async (command, args, signal) => {
+            const wireArgs = args.map((arg) => {
+              const name = Object.keys(arg)[0]!;
+              const value = arg[name];
+              if (value === undefined) rpcError("INVALID_ACTION_OUTPUT", "command argument contains undefined");
+              return { name, value: value instanceof Uint8Array ? new Blob([value]) : value };
+            });
+            try {
+              assertRpcValueBudget({ command, args: wireArgs }, options.valueBudget);
+            } catch (error) {
+              rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+            }
             await context.reverse.context.commands.enqueue({
               operationId: input.operationId,
               operationToken: input.operationToken,
               command,
-              args: args.map((arg) => {
-                const name = Object.keys(arg)[0]!;
-                const value = arg[name];
-                if (value === undefined) rpcError("INVALID_ACTION_OUTPUT", "command argument contains undefined");
-                return { name, value: value instanceof Uint8Array ? new Blob([value]) : value };
-              }),
+              args: wireArgs,
             }, { signal });
           },
         };
