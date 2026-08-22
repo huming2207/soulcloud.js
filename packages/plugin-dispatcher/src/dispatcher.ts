@@ -453,6 +453,16 @@ export function startDispatcher(
           await markFailed(event, `plugin host overloaded`, false, runtime);
           return;
         }
+        if (coded.code === "callback_overloaded") {
+          await markFailed(
+            event,
+            `plugin reverse callback overloaded: ${coded.message}`,
+            false,
+            runtime,
+            false,
+          );
+          return;
+        }
         // handler_error and anything unknown: retryable — plugin bugs may
         // be data-dependent, attempts bound the damage.
         await markFailed(

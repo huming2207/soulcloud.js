@@ -330,7 +330,7 @@ class PluginHostWsClient implements PluginHostClientLike {
           } catch (error) {
             const code = (error as Error & { code?: string }).code;
             if (code === "overloaded") {
-              throw new ORPCError("OVERLOADED" as never, { message: (error as Error).message });
+              throw new ORPCError("CALLBACK_OVERLOADED" as never, { message: (error as Error).message });
             }
             throw error;
           }
@@ -466,6 +466,7 @@ class PluginHostWsClient implements PluginHostClientLike {
           INVALID_ACTION_OUTPUT: "invalid_action_output",
           INVALID_PLUGIN_OUTPUT: "invalid_params",
           INVALID_EVENT_INPUT: "invalid_params",
+          CALLBACK_OVERLOADED: "callback_overloaded",
           OVERLOADED: "overloaded",
           HANDLER_ERROR: "handler_error",
           INTERNAL_SERVER_ERROR: "handler_error",
