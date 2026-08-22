@@ -207,6 +207,8 @@ export function parsePluginHostUrls(raw: string, transport: "http-msgpack" | "or
     if (transport === "orpc-ws" && (url.protocol === "http:" || url.protocol === "https:")) {
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       if (url.pathname === "/" || url.pathname.length === 0) url.pathname = "/rpc/ws";
+    } else if (transport === "http-msgpack" && (url.protocol === "ws:" || url.protocol === "wss:")) {
+      throw new Error(`PLUGIN_HOST_URLS URL for ${pluginId} must use http(s) with http-msgpack transport`);
     } else if ((url.protocol === "ws:" || url.protocol === "wss:") && (url.pathname === "/" || url.pathname.length === 0)) {
       url.pathname = "/rpc/ws";
     }
