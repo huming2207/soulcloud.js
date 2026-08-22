@@ -21,7 +21,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
   const server = Bun.serve({
     hostname: options.hostname,
     port: options.port,
-    fetch(request) {
+    async fetch(request) {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health/live") return json(200, { status: "ok" });
       if (request.method === "GET" && url.pathname === "/health/ready") return json(200, { status: "ready" });
