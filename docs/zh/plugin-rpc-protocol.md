@@ -696,11 +696,12 @@ MessagePack-RPC 回退路径。
 ### 步骤 7：兼容部署
 
 1. Host 同时暴露旧 `/rpc` HTTP 和新 `/rpc/ws`。
-2. Dispatcher 按配置选择 transport，默认仍使用旧路径。
-3. CI 和测试环境切到 oRPC/WebSocket，保留回退 job。
+2. Dispatcher 按配置选择 transport，默认使用 oRPC/WebSocket；设置
+   `PLUGIN_RPC_TRANSPORT=http-msgpack` 才回退旧路径。
+3. CI 和测试环境覆盖 oRPC/WebSocket，并保留回退 job。
 4. 单个 canary plugin 使用新 transport。
 5. 观察 reconnect、RSS、backpressure、timeout、dead-letter 和 breaker metric。
-6. 全部 Host 切换后，把 `orpc-ws` 设为默认。
+6. 全部 Host 切换后继续保留显式 HTTP 回退开关。
 7. 经一个明确的稳定观察窗口后，单独 commit 删除旧 HTTP Plugin RPC。
 
 删除旧 Plugin RPC 时，不得删除设备协议和数据库使用的 `@msgpack/msgpack`。

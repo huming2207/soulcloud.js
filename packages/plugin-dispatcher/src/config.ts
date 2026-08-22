@@ -14,7 +14,7 @@ const envSchema = z.object({
   /// are independent containers; Docker/Kubernetes owns their lifecycle.
   PLUGIN_HOST_URLS: z.string().default(""),
   PLUGIN_HOST_ENDPOINTS: z.string().default(""),
-  PLUGIN_RPC_TRANSPORT: z.enum(["http-msgpack", "orpc-ws"]).default("http-msgpack"),
+  PLUGIN_RPC_TRANSPORT: z.enum(["http-msgpack", "orpc-ws"]).default("orpc-ws"),
   PLUGIN_RPC_MAX_OPERATIONS: z.coerce.number().int().positive().default(64),
   PLUGIN_RPC_MAX_REVERSE_IN_FLIGHT: z.coerce.number().int().positive().default(64),
   PLUGIN_RPC_PER_PLUGIN_REVERSE_IN_FLIGHT: z.coerce.number().int().positive().default(16),

@@ -101,7 +101,8 @@ export function createPluginHostWsConnection(
   };
   const implemented = implement(dispatcherToHostContract).$context<HostContext>();
   const router = {
-    handshake: implemented.handshake.handler(({ input, context }) => {
+    system: {
+      handshake: implemented.system.handshake.handler(({ input, context }) => {
       if (input.rpcVersion !== 2 || input.pluginId !== options.manifest.id || input.pluginVersion !== options.manifest.version || input.apiVersion !== options.manifest.apiVersion) {
         rpcError("UNAUTHORIZED", "plugin handshake identity mismatch");
       }
@@ -112,12 +113,14 @@ export function createPluginHostWsConnection(
       pluginVersion: options.manifest.version,
       apiVersion: options.manifest.apiVersion,
       };
-    }),
-    ping: implemented.ping.handler(({ input, context }) => {
+      }),
+      ping: implemented.system.ping.handler(({ input, context }) => {
       if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "plugin handshake required");
       return input;
-    }),
-    encodeAction: implemented.encodeAction.handler(async ({ input, context }) => {
+      }),
+    },
+    action: {
+      encode: implemented.action.encode.handler(async ({ input, context }) => {
       if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "plugin handshake required");
       if (running >= options.maxConcurrentHandlers) rpcError("OVERLOADED", "too many concurrent executions");
       running += 1;
@@ -151,8 +154,10 @@ export function createPluginHostWsConnection(
       } finally {
         running -= 1;
       }
-    }),
-    handleEvent: implemented.handleEvent.handler(async ({ input, context }) => {
+      }),
+    },
+    plugin: {
+      handleEvent: implemented.plugin.handleEvent.handler(async ({ input, context }) => {
       if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "plugin handshake required");
       if (running >= options.maxConcurrentHandlers) rpcError("OVERLOADED", "too many concurrent executions");
       running += 1;
@@ -175,13 +180,13 @@ export function createPluginHostWsConnection(
         };
         const bindings: PluginContextBindings = {
           getDeviceUid: async () => input.device.deviceUid,
-          getEntity: async (entityKey, signal) => snapshotToWire(await context.reverse.entityGet({
+          getEntity: async (entityKey, signal) => snapshotToWire(await context.reverse.context.entities.get({
             operationId: input.operationId,
             operationToken: input.operationToken,
             entityKey,
           }, { signal })),
           enqueueCommand: async (command, args, signal) => {
-            await context.reverse.commandEnqueue({
+            await context.reverse.context.commands.enqueue({
               operationId: input.operationId,
               operationToken: input.operationToken,
               command,
@@ -228,7 +233,8 @@ export function createPluginHostWsConnection(
         if (operationController) activeSignals.delete(operationController);
         running -= 1;
       }
-    }),
+      }),
+    },
   };
   const handler = new RPCHandler(router, {
     encodePeerMessage: { prefix: PLUGIN_RPC_D2H_PREFIX },

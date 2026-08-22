@@ -318,15 +318,23 @@ class PluginHostWsClient implements PluginHostClientLike {
         const reverse = this.reverseHandlers;
         const implemented = implement(hostToDispatcherContract).$context<object>();
         const router = {
-          entityGet: implemented.entityGet.handler(({ input }) => {
-            if (!reverse) throw new Error("reverse entity reads are not configured");
-            return reverse.entityGet(input, AbortSignal.timeout(10_000));
-          }),
-          commandEnqueue: implemented.commandEnqueue.handler(({ input }) => {
-            if (!reverse) throw new Error("reverse command enqueue is not configured");
-            return reverse.commandEnqueue(input, AbortSignal.timeout(10_000));
-          }),
-          ping: implemented.ping.handler(({ input }) => input),
+          system: {
+            ping: implemented.system.ping.handler(({ input }) => input),
+          },
+          context: {
+            entities: {
+              get: implemented.context.entities.get.handler(({ input }) => {
+                if (!reverse) throw new Error("reverse entity reads are not configured");
+                return reverse.entityGet(input, AbortSignal.timeout(10_000));
+              }),
+            },
+            commands: {
+              enqueue: implemented.context.commands.enqueue.handler(({ input }) => {
+                if (!reverse) throw new Error("reverse command enqueue is not configured");
+                return reverse.commandEnqueue(input, AbortSignal.timeout(10_000));
+              }),
+            },
+          },
         };
         this.h2dHandler = new RPCHandler(router, {
           encodePeerMessage: { prefix: PLUGIN_RPC_H2D_PREFIX },
@@ -346,7 +354,7 @@ class PluginHostWsClient implements PluginHostClientLike {
           if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN || !this.d2hClient) return;
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), this.heartbeatTimeoutMs);
-          void this.d2hClient.ping({ nonce: crypto.randomUUID() }, { signal: controller.signal })
+          void this.d2hClient.system.ping({ nonce: crypto.randomUUID() }, { signal: controller.signal })
             .catch(() => activeSocket.close(1011, "heartbeat timeout"))
             .finally(() => clearTimeout(timer));
         }, this.heartbeatIntervalMs);
@@ -392,13 +400,13 @@ class PluginHostWsClient implements PluginHostClientLike {
     const timer = setTimeout(() => controller.abort(), deadlineMs);
     try {
       if (method === "host.handshake") {
-        return await client.handshake(input, { signal: controller.signal });
+        return await client.system.handshake(input, { signal: controller.signal });
       }
       if (method === "plugin.handleEvent") {
-        return await client.handleEvent({ ...input, ...operation }, { signal: controller.signal });
+        return await client.plugin.handleEvent({ ...input, ...operation }, { signal: controller.signal });
       }
       if (method === "action.encode") {
-        const result = await client.encodeAction({ ...input, ...operation }, { signal: controller.signal }) as {
+        const result = await client.action.encode({ ...input, ...operation }, { signal: controller.signal }) as {
           cmd: string;
           args: Array<{ name: string; value: unknown }>;
           schemaVersion: number;
@@ -415,7 +423,7 @@ class PluginHostWsClient implements PluginHostClientLike {
         return { ...result, args };
       }
       if (method === "system.ping") {
-        return await client.ping(input, { signal: controller.signal });
+        return await client.system.ping(input, { signal: controller.signal });
       }
       throw new PluginHostUnavailableError(`unknown oRPC method ${method}`);
     } catch (error) {

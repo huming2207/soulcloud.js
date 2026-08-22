@@ -123,19 +123,39 @@ export const commandEnqueueOutput = z.object({ ok: z.literal(true) });
 export const pingInput = z.object({ nonce: z.string().min(1).max(128) });
 export const pingOutput = z.object({ nonce: z.string().min(1).max(128) });
 
+const procedure = <TInput extends z.ZodTypeAny, TOutput extends z.ZodTypeAny>(
+  input: TInput,
+  output: TOutput,
+  path: string[],
+) => oc.input(input).output(output).meta(meta.path(path));
+
 /** Dispatcher -> host procedures. */
 export const dispatcherToHostContract = {
-  handshake: oc.input(handshakeInput).output(handshakeOutput).meta(meta.path(["handshake"])),
-  handleEvent: oc.input(handleEventInput).output(handleEventOutput).meta(meta.path(["handleEvent"])),
-  encodeAction: oc.input(encodeActionInput).output(encodeActionOutput).meta(meta.path(["encodeAction"])),
-  ping: oc.input(pingInput).output(pingOutput).meta(meta.path(["ping"])),
+  system: {
+    handshake: procedure(handshakeInput, handshakeOutput, ["system", "handshake"]),
+    ping: procedure(pingInput, pingOutput, ["system", "ping"]),
+  },
+  plugin: {
+    handleEvent: procedure(handleEventInput, handleEventOutput, ["plugin", "handleEvent"]),
+  },
+  action: {
+    encode: procedure(encodeActionInput, encodeActionOutput, ["action", "encode"]),
+  },
 };
 
 /** Host -> dispatcher procedures used by a running plugin operation. */
 export const hostToDispatcherContract = {
-  entityGet: oc.input(entityGetInput).output(entityGetOutput).meta(meta.path(["entityGet"])),
-  commandEnqueue: oc.input(commandEnqueueInput).output(commandEnqueueOutput).meta(meta.path(["commandEnqueue"])),
-  ping: oc.input(pingInput).output(pingOutput).meta(meta.path(["ping"])),
+  system: {
+    ping: procedure(pingInput, pingOutput, ["system", "ping"]),
+  },
+  context: {
+    entities: {
+      get: procedure(entityGetInput, entityGetOutput, ["context", "entities", "get"]),
+    },
+    commands: {
+      enqueue: procedure(commandEnqueueInput, commandEnqueueOutput, ["context", "commands", "enqueue"]),
+    },
+  },
 };
 
 export type DispatcherToHostContract = typeof dispatcherToHostContract;
