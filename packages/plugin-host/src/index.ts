@@ -54,6 +54,10 @@ const websocketIdleTimeoutSeconds = Number.parseInt(
   process.env.PLUGIN_HOST_WS_IDLE_TIMEOUT_SECONDS ?? "60",
   10,
 );
+const maxWebSocketConnections = Number.parseInt(
+  process.env.PLUGIN_HOST_MAX_WS_CONNECTIONS ?? "16",
+  10,
+);
 
 if (!pluginId || !Number.isSafeInteger(port) || port < 0 || port > 65_535) {
   console.error(
@@ -70,6 +74,7 @@ const handle = await startPluginHost({
   maxFrameBytes,
   websocketBackpressureLimit,
   websocketIdleTimeoutSeconds,
+  maxWebSocketConnections,
 });
 
 console.log(

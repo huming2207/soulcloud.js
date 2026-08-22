@@ -1,7 +1,7 @@
 /**
  * Dispatcher-side supervisor for containerised Plugin Hosts.
  *
- * Hosts are independent HTTP services. Docker/Kubernetes owns process
+ * Hosts are independent WebSocket services (with a legacy HTTP fallback). Docker/Kubernetes owns process
  * lifecycle, memory limits and restart policy; the dispatcher only caches
  * clients and applies a per-plugin failure circuit.
  */

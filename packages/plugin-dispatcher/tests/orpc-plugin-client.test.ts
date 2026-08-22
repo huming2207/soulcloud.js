@@ -107,6 +107,11 @@ test("oRPC WebSocket client performs handshake, event and action calls", async (
 test("oRPC application errors keep input failures distinct from transport failures", async () => {
   const client = await PluginHostClient.connect({ baseUrl: host.wsUrl });
   try {
+    await client.handshake({
+      pluginId: CHAOS_PLUGIN_ID,
+      pluginVersion: chaosTestPlugin.version,
+      apiVersion: chaosTestPlugin.apiVersion,
+    });
     await expect(client.request("action.encode", {
       actionId: "does-not-exist",
       input: {},

@@ -14,6 +14,7 @@ import { RPCHandler } from "@orpc/server/websocket";
 import {
   PLUGIN_RPC_D2H_PREFIX,
   PLUGIN_RPC_H2D_PREFIX,
+  PLUGIN_RPC_PROTOCOL_HEADER,
   dispatcherToHostContract,
   hostToDispatcherContract,
   type CommandEnqueueInput,
@@ -300,7 +301,10 @@ class PluginHostWsClient implements PluginHostClientLike {
     if (this.connecting) return this.connecting;
     this.connecting = new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(this.wsUrl, {
-        headers: this.authToken ? { authorization: `Bearer ${this.authToken}` } : undefined,
+        headers: {
+          ...(this.authToken ? { authorization: `Bearer ${this.authToken}` } : {}),
+          "x-soulcloud-rpc-protocol": PLUGIN_RPC_PROTOCOL_HEADER,
+        },
       });
       this.socket = socket;
       const fail = (error: Error) => {

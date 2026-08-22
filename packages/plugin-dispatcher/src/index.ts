@@ -2,12 +2,13 @@
  * Plugin Dispatcher process entry point (§6.3).
  *
  * Trusted core process: leases plugin events from PostgreSQL, routes them
- * to isolated containerised Plugin Hosts over HTTP MessagePack-RPC, validates every
+ * to isolated containerised Plugin Hosts over bidirectional oRPC WebSocket (with
+ * the legacy HTTP MessagePack fallback), validates every
  * response and commits entity updates. It loads NO plugin code — only
  * manifest metadata. Docker/Kubernetes supervises host processes.
  *
  * Deployment note (§6.5): hosts are separate services addressed by
- * PLUGIN_HOST_URLS; no shared socket volume or child-process privilege is
+ * PLUGIN_HOST_ENDPOINTS (or legacy PLUGIN_HOST_URLS); no shared socket volume or child-process privilege is
  * required.
  */
 

@@ -5,6 +5,7 @@ import { z } from "zod";
 export const PLUGIN_RPC_D2H_PREFIX = "soulcloud:d2h:v1:";
 export const PLUGIN_RPC_H2D_PREFIX = "soulcloud:h2d:v1:";
 export const PLUGIN_RPC_PATH = "/rpc/ws";
+export const PLUGIN_RPC_PROTOCOL_HEADER = "1";
 export const PLUGIN_RPC_API_VERSION = 1;
 
 const scalar = z.union([

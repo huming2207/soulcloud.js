@@ -27,7 +27,7 @@ SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平
 | [web.md](web.md) | Web 控制台：技术栈、认证流程、页面、i18n、测试 |
 | [plugin-and-station-architecture.md](plugin-and-station-architecture.md) | 商用设备插件、工业 Entity、插件隔离、烧录工位和弱网通信规划（仅中文提案） |
 | [plugin-implementation-stage1-2.md](plugin-implementation-stage1-2.md) | 插件系统阶段 1+2 实施记录：SDK、编译期注册表、entity 模型、事件队列、dispatcher/host 容器隔离（仅中文） |
-| [plugin-rpc-protocol.md](plugin-rpc-protocol.md) | Dispatcher ↔ Plugin Host 的 oRPC v2/WebSocket 双向 RPC 协议、资源治理和兼容迁移计划（仅中文，待实施） |
+| [plugin-rpc-protocol.md](plugin-rpc-protocol.md) | Dispatcher ↔ Plugin Host 的 oRPC v2/WebSocket 双向 RPC 协议、资源治理和兼容迁移计划（已实施基础 transport，保留 HTTP 兼容） |
 
 ## 快速事实
 
@@ -39,7 +39,8 @@ SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平
   `@soulcloud/web`（SPA, Vite :5173 开发模式）和 PostgreSQL。
 - **进程间通信**: 核心进程之间仅 PostgreSQL（持久化出站队列（outbox）+ 租约轮询；
   LISTEN/NOTIFY 作为有损唤醒）；dispatcher 与 plugin-host 之间为容器网络上的
-  HTTP MessagePack-RPC（`PLUGIN_HOST_URLS`，§6.5）。
+  oRPC v2 双向 WebSocket（`PLUGIN_HOST_ENDPOINTS`）；HTTP MessagePack-RPC
+  （`PLUGIN_HOST_URLS`）作为迁移兼容路径（§6.5）。
 - **协议**: MQTT 3.1.1 over WebSocket；命令使用 MessagePack payload；
   日志使用原始 on9log 包（单包或 MsgPack 打包——见
   [protocol-log-packaging.md](protocol-log-packaging.md)）。

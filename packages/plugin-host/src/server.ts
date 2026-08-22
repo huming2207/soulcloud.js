@@ -1,5 +1,6 @@
 /**
- * Containerised Plugin Host HTTP MessagePack-RPC server.
+ * Containerised Plugin Host server. It exposes the legacy HTTP MessagePack-RPC
+ * endpoint and the preferred bidirectional oRPC WebSocket endpoint.
  *
  * One container serves one compile-time plugin. The host has no database or
  * application credentials. Docker/Kubernetes is responsible for process
@@ -31,6 +32,7 @@ import {
 import type { PluginManifest, PluginWorker } from "@soulcloud/plugin-sdk";
 import { createPluginContext } from "./context";
 import { createPluginHostWsConnection, type PluginHostWsConnection } from "./ws-server";
+import { PLUGIN_RPC_PROTOCOL_HEADER } from "@soulcloud/plugin-rpc-contract";
 
 export interface PluginHostOptions {
   pluginId: string;
@@ -41,6 +43,7 @@ export interface PluginHostOptions {
   maxConcurrentHandlers?: number;
   websocketBackpressureLimit?: number;
   websocketIdleTimeoutSeconds?: number;
+  maxWebSocketConnections?: number;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -56,6 +59,7 @@ export interface PluginHostHandle {
 const DEFAULT_MAX_CONCURRENT_HANDLERS = 8;
 const DEFAULT_WS_BACKPRESSURE_LIMIT = 4 * 1024 * 1024;
 const DEFAULT_WS_IDLE_TIMEOUT_SECONDS = 60;
+const DEFAULT_MAX_WS_CONNECTIONS = 16;
 const MAX_LOGS_PER_EVENT = 32;
 const MAX_LOG_MESSAGE_BYTES = 4 * 1024;
 const MAX_LOG_FIELDS_BYTES = 16 * 1024;
@@ -111,8 +115,9 @@ export async function startPluginHost(
   const hostname = options.hostname ?? "127.0.0.1";
   const log = options.log ?? ((message, fields) => console.log(message, fields ?? ""));
   let running = 0;
+  let activeWebSocketConnections = 0;
 
-  type HostWebSocketData = { connection?: PluginHostWsConnection };
+  type HostWebSocketData = { connection?: PluginHostWsConnection; handshaken: boolean };
   const server = Bun.serve<HostWebSocketData>({
     hostname,
     port: options.port,
@@ -128,10 +133,16 @@ export async function startPluginHost(
       }
       if (url.pathname === "/rpc/ws") {
         if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
+        if (activeWebSocketConnections >= (options.maxWebSocketConnections ?? DEFAULT_MAX_WS_CONNECTIONS)) {
+          return new Response("too many WebSocket connections", { status: 503 });
+        }
+        if (request.headers.get("x-soulcloud-rpc-protocol") !== PLUGIN_RPC_PROTOCOL_HEADER) {
+          return new Response("unsupported RPC protocol", { status: 400 });
+        }
         if (options.authToken && request.headers.get("authorization") !== `Bearer ${options.authToken}`) {
           return new Response("unauthorized", { status: 401 });
         }
-        if (!server.upgrade(request, { data: {} })) {
+        if (!server.upgrade(request, { data: { handshaken: false } })) {
           return new Response("WebSocket upgrade failed", { status: 400 });
         }
         return undefined as unknown as Response;
@@ -201,6 +212,8 @@ export async function startPluginHost(
       closeOnBackpressureLimit: true,
       idleTimeout: options.websocketIdleTimeoutSeconds ?? DEFAULT_WS_IDLE_TIMEOUT_SECONDS,
       open(ws) {
+        activeWebSocketConnections += 1;
+        ws.data.handshaken = false;
         ws.data.connection = createPluginHostWsConnection(ws, {
           manifest,
           worker,
@@ -219,10 +232,15 @@ export async function startPluginHost(
         // so response frames are available in the same event turn.
         connection.bridge.dispatch("message", { data: message });
         void connection.handler.message(ws, message, {
-          context: { reverse: connection.reverseClient },
+          context: {
+            reverse: connection.reverseClient,
+            isHandshaken: () => ws.data.handshaken,
+            markHandshaken: () => { ws.data.handshaken = true; },
+          },
         });
       },
       close(ws) {
+        activeWebSocketConnections = Math.max(0, activeWebSocketConnections - 1);
         void ws.data.connection?.close();
         ws.data.connection = undefined;
       },

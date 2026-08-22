@@ -1,6 +1,6 @@
 # Plugin Dispatcher ↔ Plugin Host 双向 RPC 协议与实施计划
 
-**状态**：设计已确认，尚未实施
+**状态**：设计已确认；oRPC/WebSocket、共享契约、operation scope 和基础治理已实施，仍保留 HTTP MessagePack 兼容路径
 
 **日期**：2026-08-22
 
@@ -148,7 +148,7 @@ WebSocket compression 第一版默认关闭。控制消息通常很小，压缩�
 
 ## 5. 双向 oRPC 组合
 
-共享契约包建议为：
+共享契约包当前实现为 `packages/plugin-rpc-contract/src/index.ts`；后续可按职责拆分为：
 
 ```text
 packages/plugin-rpc-contract/

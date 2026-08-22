@@ -94,17 +94,31 @@ export function createPluginHostWsConnection(
   let running = 0;
   const activeSignals = new Set<AbortController>();
 
-  type HostContext = { reverse: typeof reverseClient };
+  type HostContext = {
+    reverse: typeof reverseClient;
+    isHandshaken: () => boolean;
+    markHandshaken: () => void;
+  };
   const implemented = implement(dispatcherToHostContract).$context<HostContext>();
   const router = {
-    handshake: implemented.handshake.handler(() => ({
+    handshake: implemented.handshake.handler(({ input, context }) => {
+      if (input.rpcVersion !== 2 || input.pluginId !== options.manifest.id || input.pluginVersion !== options.manifest.version || input.apiVersion !== options.manifest.apiVersion) {
+        rpcError("UNAUTHORIZED", "plugin handshake identity mismatch");
+      }
+      context.markHandshaken();
+      return {
       rpcVersion: 2 as const,
       pluginId: options.manifest.id,
       pluginVersion: options.manifest.version,
       apiVersion: options.manifest.apiVersion,
-    })),
-    ping: implemented.ping.handler(({ input }) => input),
-    encodeAction: implemented.encodeAction.handler(async ({ input }) => {
+      };
+    }),
+    ping: implemented.ping.handler(({ input, context }) => {
+      if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "plugin handshake required");
+      return input;
+    }),
+    encodeAction: implemented.encodeAction.handler(async ({ input, context }) => {
+      if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "plugin handshake required");
       if (running >= options.maxConcurrentHandlers) rpcError("OVERLOADED", "too many concurrent executions");
       running += 1;
       try {
@@ -139,6 +153,7 @@ export function createPluginHostWsConnection(
       }
     }),
     handleEvent: implemented.handleEvent.handler(async ({ input, context }) => {
+      if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "plugin handshake required");
       if (running >= options.maxConcurrentHandlers) rpcError("OVERLOADED", "too many concurrent executions");
       running += 1;
       let operationController: AbortController | undefined;
