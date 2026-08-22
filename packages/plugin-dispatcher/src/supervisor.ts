@@ -104,7 +104,7 @@ export class HostSupervisor {
     host: HostState,
     apiVersion: number,
   ): Promise<PluginHostClientLike> {
-    let client: PluginHostClientLike;
+    let client: PluginHostClientLike | undefined;
     try {
       client = await PluginHostClient.connect({
         baseUrl: host.baseUrl,
@@ -122,6 +122,7 @@ export class HostSupervisor {
         apiVersion,
       });
     } catch (error) {
+      client?.close();
       this.recordFailure(host, (error as Error).message);
       throw error instanceof PluginHostUnavailableError
         ? error

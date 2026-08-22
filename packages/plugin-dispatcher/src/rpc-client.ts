@@ -302,7 +302,9 @@ class PluginHostWsClient implements PluginHostClientLike {
     if (this.isOpen) return;
     if (this.closed) throw new PluginHostUnavailableError("plugin host client is closed");
     if (this.connecting) return this.connecting;
+    let rejectConnection: ((reason?: unknown) => void) | null = null;
     this.connecting = new Promise<void>((resolve, reject) => {
+      rejectConnection = reject;
       const socket = new WebSocket(this.wsUrl, {
         headers: {
           ...(this.authToken ? { authorization: `Bearer ${this.authToken}` } : {}),
@@ -385,6 +387,11 @@ class PluginHostWsClient implements PluginHostClientLike {
       });
       socket.addEventListener("error", () => fail(new Error("plugin host WebSocket connection failed")));
       socket.addEventListener("close", () => {
+        if (this.connecting && rejectConnection) {
+          this.connecting = null;
+          rejectConnection(new PluginHostUnavailableError("plugin host WebSocket closed during connect"));
+          rejectConnection = null;
+        }
         this.socket = null;
         this.d2hClient = null;
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
