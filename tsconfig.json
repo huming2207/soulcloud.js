@@ -19,13 +19,19 @@
     "paths": {
       "@soulcloud/core": [
         "./packages/core/src/index.ts"
-      ]
+      ],
+      "@soulcloud/plugin-sdk": ["./packages/plugin-sdk/src/index.ts"],
+      "@soulcloud/plugin-rpc-contract": ["./packages/plugin-rpc-contract/src/index.ts"]
     }
   },
   "include": [
     "packages/core",
     "packages/api",
     "packages/broker",
+    "packages/plugin-sdk",
+    "packages/plugin-rpc-contract",
+    "packages/plugin-manager",
+    "packages/plugin-runtime",
     "scripts",
     "tests"
   ]

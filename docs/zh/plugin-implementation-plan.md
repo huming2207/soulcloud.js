@@ -22,28 +22,20 @@ Soulcloud Devices running Soulcloud Client
 设备协议。Plugin Manager 和 plugin 的进程生命周期由 Docker Compose/systemd/Kubernetes
 管理，应用代码不 spawn/kill/restart 容器。
 
-## 2. 可复用的现有基础
+## 2. 当前项目基线
 
-现有实现中下列能力符合新架构，应迁移和改名而不是重写：
+插件实验代码已回滚，当前仓库没有 Plugin Manager、plugin runtime、插件 RPC、manifest
+snapshot、Entity、Action、installation 或 `plugin_events` 实现。直接复用的只有平台基础：
 
-- oRPC v2 单 WebSocket 双向 RPC、Bun WebSocket bridge；
-- operation token、reverse-call scope、seal/cleanup 和 staged effects；
-- frame/Blob/value budget、并发、deadline、heartbeat、backpressure；
-- `plugin_events` durable queue、lease recovery、retry/dead-letter、fairness 和 retention；
-- installation/device binding/profile reconcile；
-- Entity descriptor revision/current state/history；
-- Action input validation、plugin encoder output validation 和 DeviceCommand queue；
-- plugin 独立部署、无 DB/JWT、容器资源限制；
-- Human API 的 project membership、审计和声明式 Entity/Action UI。
+- Human API 的认证、project membership、设备管理和审计基础；
+- Device Broker 的 MQTT/WSS 会话认证、topic ACL、消息校验和 PostgreSQL 集成；
+- PostgreSQL migration、事务、租约/outbox 和现有 DeviceCommand queue；
+- Web 的登录、权限导航、国际化和页面基础；
+- Bun 1.4、TypeScript strict、测试和 CI 基础。
 
-下列现有设计直接删除：
-
-- `StationWorkflow*`、Station capability/job/step/snapshot 类型、validator 和测试；
-- `stationJobs` scoped service；
-- 编译期 manifest + worker 双 registry；
-- `plugin-dispatcher`、`plugin-host` 对外名称、package/entrypoint/env alias；
-- 任何 Station/Agent/Fixture/本地 runner 文档或计划；
-- iframe/plugin client JavaScript 的近期计划。
+插件部分必须从本计划定义的契约重新实现。不得恢复或改名历史 Dispatcher/Host 代码，不得
+引入 Station/Agent/Fixture/workflow、编译期 manifest registry、设备侧 plugin runtime 或
+旧 endpoint/env/package compatibility layer。
 
 ## 3. 实施原则
 
@@ -67,7 +59,7 @@ Soulcloud Devices running Soulcloud Client
   trailing-byte 规则；
 - 定义 manifest canonical serialization/hash；
 - 定义 Human API → Manager internal auth 和 UI session signing/key rotation；
-- 建立旧符号、路由、env、package、Compose service 和测试的删除清单。
+- 建立新 package、路由、env、数据库 migration、Compose service 和测试清单。
 
 ### 尚需单独确认但不阻塞文档
 
@@ -82,38 +74,36 @@ Soulcloud Devices running Soulcloud Client
 - 删除清单通过 `rg` 和 package graph 复核；
 - 不开始数据库或 runtime 双轨兼容设计。
 
-## 阶段 1：清除旧 Station 契约和统一角色名
+## 阶段 1：建立插件 package 与部署边界
 
 ### 工作
 
-- 删除 SDK 中所有 Station/workflow/job/step/capability/snapshot 类型及 validator；
-- 删除 `PluginContext.stationJobs` 和相关 not-implemented adapter；
-- 将 `plugin-dispatcher` package/service/entrypoint 直接改为 `plugin-manager`；
-- 将旧 `plugin-host` runtime 改为中性的 plugin runtime package/entrypoint；对外只称 plugin；
+- 新建 plugin SDK、RPC contract、独立 `plugin-manager` Bun service 和通用 plugin runtime；
+- Plugin Manager 主动连接 `.env` 中配置的 plugin oRPC/WebSocket endpoint；
+- plugin runtime 只加载自己的显式 entrypoint，Manager 不加载 plugin code；
 - 更新 workspace scripts、imports、Dockerfile targets、Compose service、healthcheck、日志标签、
   metrics、`.env.example` 和 CI；
-- 删除 `PLUGIN_HOST_*`/`PLUGIN_DISPATCHER_*` alias，统一 `PLUGIN_ENDPOINTS` 和
-  `PLUGIN_MANAGER_*`；
-- RPC prefix 从旧角色名一次性改为 manager/plugin prefix。
+- 从第一版只使用 `PLUGIN_ENDPOINTS`、`PLUGIN_MANAGER_*` 和 manager/plugin RPC prefix；
+- Docker Compose/systemd/Kubernetes 管理进程生命周期，应用代码不 spawn/kill/restart。
 
 ### 测试
 
 - 全仓 typecheck/unit/integration/build；
 - Compose config 和 healthcheck；
-- `rg` 确认 runtime/API/docs 不再出现废弃 Station 和旧服务名称；
+- `rg` 确认 runtime/API/docs 没有引入 Station、Agent、Dispatcher 或 Host 角色名；
 - plugin crash/hang 测试确认 Manager 及其他 plugin 不受影响。
 
 ### 退出条件
 
 - 只有 Plugin Manager 和 plugin runtime 两个插件侧部署角色；
 - 没有兼容 endpoint/env/package alias；
-- 行为暂时与现有 event/action/entity 路径等价。
+- handshake、连接认证、heartbeat、断线清理和基础资源限制形成最小纵切。
 
 ## 阶段 2：Manifest handshake 单一真相
 
 ### 数据库
 
-新增或调整不可变 snapshot：
+新增不可变 snapshot：
 
 ```text
 plugin_manifest_snapshots
@@ -127,8 +117,8 @@ plugin_manifest_snapshots
 plugin_endpoints / deployment status（如确有持久化需要）
 ```
 
-installation 固定 `plugin_id + plugin_version + manifest_hash`。已存在 deployment 数据用一次性
-migration 转为 snapshot，不保留编译期 registry fallback。
+installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接使用 snapshot，不
+建立编译期 registry fallback。
 
 ### Manager/plugin
 

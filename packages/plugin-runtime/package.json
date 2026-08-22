@@ -1,0 +1,17 @@
+{
+  "name": "@soulcloud/plugin-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "dev": "bun run --watch src/index.ts", "start": "bun run src/index.ts" },
+  "dependencies": {
+    "@orpc/client": "2.0.0-beta.30",
+    "@orpc/contract": "2.0.0-beta.30",
+    "@orpc/server": "2.0.0-beta.30",
+    "@soulcloud/plugin-rpc-contract": "workspace:*",
+    "@soulcloud/plugin-sdk": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": { "@types/bun": "1.4.0", "typescript": "^5" }
+}

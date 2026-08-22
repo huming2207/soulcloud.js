@@ -10,6 +10,10 @@ COPY packages/core/package.json packages/core/package.json
 COPY packages/api/package.json packages/api/package.json
 COPY packages/broker/package.json packages/broker/package.json
 COPY packages/web/package.json packages/web/package.json
+COPY packages/plugin-sdk/package.json packages/plugin-sdk/package.json
+COPY packages/plugin-rpc-contract/package.json packages/plugin-rpc-contract/package.json
+COPY packages/plugin-manager/package.json packages/plugin-manager/package.json
+COPY packages/plugin-runtime/package.json packages/plugin-runtime/package.json
 RUN bun install --frozen-lockfile
 
 # source + generated client (root tsconfig is extended by packages)
@@ -17,6 +21,10 @@ COPY tsconfig.json ./
 COPY packages/core packages/core
 COPY packages/api packages/api
 COPY packages/broker packages/broker
+COPY packages/plugin-sdk packages/plugin-sdk
+COPY packages/plugin-rpc-contract packages/plugin-rpc-contract
+COPY packages/plugin-manager packages/plugin-manager
+COPY packages/plugin-runtime packages/plugin-runtime
 # prisma.config.ts needs a datasource url at generate time (no connection made)
 ARG DATABASE_URL=postgres://soulcloud:soulcloud@postgres:5432/soulcloud
 ENV DATABASE_URL=$DATABASE_URL
@@ -35,3 +43,19 @@ FROM base AS broker
 ENV MQTT_BROKER_PORT=1883
 EXPOSE 1883
 CMD ["bun", "run", "packages/broker/src/index.ts"]
+
+# --- plugin-manager ----------------------------------------------------------
+FROM base AS plugin-manager
+EXPOSE 8091
+CMD ["bun", "run", "packages/plugin-manager/src/index.ts"]
+
+# --- plugin ------------------------------------------------------------------
+# The deployment supplies PLUGIN_ENTRYPOINT in a plugin-specific image. This
+# image contains only the generic runtime; it never loads plugin code in the
+# manager or API process.
+FROM base AS plugin
+ENV PLUGIN_BIND=0.0.0.0
+ENV PLUGIN_PORT=8090
+USER bun
+EXPOSE 8090
+CMD ["bun", "run", "packages/plugin-runtime/src/index.ts"]

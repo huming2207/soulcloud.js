@@ -69,6 +69,30 @@ services:
       retries: 20
       start_period: 5s
 
+  plugin-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: plugin-manager
+    environment:
+      DATABASE_URL: postgres://soulcloud:${POSTGRES_PASSWORD:-soulcloud}@postgres:5432/soulcloud
+      PLUGIN_ENDPOINTS: ${PLUGIN_ENDPOINTS:-}
+      PLUGIN_MANAGER_INTERNAL_BIND: 0.0.0.0
+      PLUGIN_MANAGER_INTERNAL_PORT: 8091
+      PLUGIN_MANAGER_SERVICE_TOKEN: ${PLUGIN_MANAGER_SERVICE_TOKEN:?set PLUGIN_MANAGER_SERVICE_TOKEN in .env}
+      PLUGIN_RPC_AUTH_TOKEN: ${PLUGIN_RPC_AUTH_TOKEN:?set PLUGIN_RPC_AUTH_TOKEN in .env}
+    ports:
+      - "127.0.0.1:8091:8091"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8091/health/ready | grep -q ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   web:
     build:
       context: .
