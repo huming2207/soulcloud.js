@@ -163,6 +163,8 @@ export async function applyEntityUpdates(
   options: ApplyEntityUpdatesOptions,
 ): Promise<void> {
   if (options.updates.length > 4096) throw new Error("too many entity updates");
+  const keys = options.updates.map((update) => update.entityKey);
+  if (new Set(keys).size !== keys.length) throw new Error("duplicate entity updates are not allowed");
   const descriptors = await tx.pluginEntityDescriptor.findMany({
     where: {
       installationId: options.installationId,
@@ -172,7 +174,6 @@ export async function applyEntityUpdates(
     },
   });
   const byKey = new Map(descriptors.map((descriptor) => [descriptor.entityKey, descriptor]));
-  const keys = [...new Set(options.updates.map((update) => update.entityKey))];
   const current = await tx.pluginEntityState.findMany({
     where: {
       installationId: options.installationId,

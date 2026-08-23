@@ -92,7 +92,10 @@ function valueMatches(descriptor: EntityDescriptor, value: unknown): boolean {
 export function validateEntityUpdates(descriptors: EntityDescriptor[], updates: EntityUpdate[]): void {
   const byKey = new Map(descriptors.map((descriptor) => [descriptor.key, descriptor]));
   if (!Array.isArray(updates) || updates.length > 4096) throw new Error("invalid entity update list");
+  const seen = new Set<string>();
   for (const update of updates) {
+    if (seen.has(update.entityKey)) throw new Error(`duplicate entity update ${update.entityKey}`);
+    seen.add(update.entityKey);
     const descriptor = byKey.get(update.entityKey);
     if (!descriptor) throw new Error(`unknown entity ${update.entityKey}`);
     if (!valueMatches(descriptor, update.value)) throw new Error(`invalid value for entity ${update.entityKey}`);
