@@ -304,15 +304,15 @@ export class PluginManager {
     }
   }
 
-  async renderPluginUi(session: PluginUiSession, requestId: string, params: Record<string, string>): Promise<unknown> {
+  async renderPluginUi(session: PluginUiSession, requestId: string, params: Record<string, string | number | boolean>): Promise<unknown> {
     return this.callUi(session, "ui.render", { requestId, params });
   }
 
-  async handlePluginUiAction(session: PluginUiSession, requestId: string, params: Record<string, string>, action: unknown): Promise<unknown> {
+  async handlePluginUiAction(session: PluginUiSession, requestId: string, params: Record<string, string | number | boolean>, action: unknown): Promise<unknown> {
     return this.callUi(session, "ui.handleAction", { requestId, params, action });
   }
 
-  private async callUi(session: PluginUiSession, method: "ui.render" | "ui.handleAction", input: { requestId: string; params: Record<string, string>; action?: unknown }): Promise<unknown> {
+  private async callUi(session: PluginUiSession, method: "ui.render" | "ui.handleAction", input: { requestId: string; params: Record<string, string | number | boolean>; action?: unknown }): Promise<unknown> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     const installation = await this.options.prisma.pluginInstallation.findUnique({ where: { id: session.installationId }, select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true } });
     if (!installation || installation.state !== "enabled" || installation.projectId !== session.projectId || installation.pluginId !== session.pluginId || installation.pluginVersion !== session.pluginVersion || installation.manifestHash.trim() !== session.manifestHash) throw new Error("plugin UI session is no longer valid");

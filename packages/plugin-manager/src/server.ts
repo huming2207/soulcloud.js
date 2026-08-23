@@ -1,9 +1,66 @@
 import { PluginManager } from "./manager";
-import { verifyPluginUiSession } from "@soulcloud/core";
+import { pluginUiSessionCookieName, verifyPluginUiSession } from "@soulcloud/core";
+import { coerceStringActionInput, validateActionInput, type ActionInputSchema, type PluginUiRoute } from "@soulcloud/plugin-sdk";
 
 export interface PluginManagerServerOptions { hostname: string; port: number; serviceToken: string; manager: PluginManager; uiSessionSecret?: string; uiSessionTtlSeconds?: number; }
 function json(status: number, value: unknown): Response { return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } }); }
 function authorized(request: Request, token: string): boolean { return request.headers.get("authorization") === `Bearer ${token}`; }
+
+function cookie(request: Request, name: string): string | undefined {
+  for (const part of request.headers.get("cookie")?.split(";") ?? []) {
+    const split = part.indexOf("=");
+    if (split > 0 && part.slice(0, split).trim() === name) return part.slice(split + 1).trim();
+  }
+  return undefined;
+}
+
+function invalidRequest(message: string): Error {
+  return Object.assign(new Error(message), { status: 400 });
+}
+
+function validateUiInput(schema: ActionInputSchema, value: unknown): void {
+  const result = validateActionInput(schema, value);
+  if (!result.ok) throw invalidRequest(result.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; "));
+}
+
+function parseUiQuery(url: URL, route: PluginUiRoute): Record<string, string | number | boolean> {
+  const raw: Record<string, string> = {};
+  for (const [key, value] of url.searchParams) {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) throw invalidRequest(`duplicate query parameter: ${key}`);
+    raw[key] = value;
+  }
+  if (!route.querySchema) {
+    if (Object.keys(raw).length > 0) throw invalidRequest("this plugin UI route does not accept query parameters");
+    return {};
+  }
+  const parsed = coerceStringActionInput(route.querySchema, raw);
+  validateUiInput(route.querySchema, parsed);
+  return parsed as Record<string, string | number | boolean>;
+}
+
+async function parseUiAction(request: Request, schema: ActionInputSchema): Promise<unknown> {
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType === "application/json") {
+    const body = await requestJson(request);
+    const action = body && typeof body === "object" && !Array.isArray(body) && "action" in body
+      ? (body as { action: unknown }).action
+      : body;
+    validateUiInput(schema, action);
+    return action;
+  }
+  if (contentType !== "application/x-www-form-urlencoded" && contentType !== "multipart/form-data") {
+    throw invalidRequest("plugin UI action must use JSON or form data");
+  }
+  const raw: Record<string, string> = {};
+  for (const [key, value] of await request.formData()) {
+    if (typeof value !== "string") throw invalidRequest("file fields are not declared by this plugin UI action");
+    if (Object.prototype.hasOwnProperty.call(raw, key)) throw invalidRequest(`duplicate form field: ${key}`);
+    raw[key] = value;
+  }
+  const action = coerceStringActionInput(schema, raw);
+  validateUiInput(schema, action);
+  return action;
+}
 
 async function requestJson(request: Request): Promise<unknown> {
   const body = await request.text();
@@ -18,9 +75,9 @@ function failure(error: unknown): Response {
   return json(mapped, { error: mapped === 400 ? "invalid_request" : mapped === 502 ? "plugin_action_failed" : "plugin_manager_error", message });
 }
 
-function renderDocument(html: string, title?: string): Response {
+function renderDocument(html: string, title?: string, status = 200): Response {
   const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title ?? "Soulcloud")}</title></head><body>${html}</body></html>`;
-  return new Response(page, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" } });
+  return new Response(page, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store", "content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" } });
 }
 
 function escapeHtml(value: string): string {
@@ -38,7 +95,8 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
       if (request.method === "GET" && url.pathname === "/health/ready") return json(200, { status: "ready" });
       if (url.pathname.startsWith("/plugins/")) {
         if (!options.uiSessionSecret) return json(503, { error: "plugin_ui_unavailable" });
-        const token = request.headers.get("x-soulcloud-plugin-session");
+        const installationId = url.pathname.split("/")[2] ?? "";
+        const token = cookie(request, pluginUiSessionCookieName(installationId));
         if (!token) return json(401, { error: "plugin_ui_session_required" });
         let session;
         try {
@@ -49,28 +107,25 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         const route = manifest?.ui?.routes.find((item) => item.id === session.routeId);
         const routePath = route?.path.startsWith("/") ? route.path : `/${route?.path ?? ""}`;
         if (!route || url.pathname !== `/plugins/${session.installationId}${routePath}`) return json(404, { error: "plugin_ui_route_not_found" });
-        const allowedMethods = route.methods ?? ["GET", "POST"];
+        const allowedMethods = route.methods ?? ["GET"];
         if (!allowedMethods.includes(request.method as "GET" | "POST")) return json(405, { error: "method_not_allowed" });
-        const params = Object.fromEntries(url.searchParams.entries());
         try {
+          const params = parseUiQuery(url, route);
           if (request.method === "GET") {
             const output = await options.manager.renderPluginUi(session, crypto.randomUUID(), params) as { html?: unknown; title?: string; status?: number };
             if (typeof output.html !== "string") return json(502, { error: "plugin_ui_invalid_output" });
-            const response = renderDocument(output.html, output.title);
-            if (output.status && output.status !== 200) return new Response(response.body, { status: output.status, headers: response.headers });
-            return response;
+            return renderDocument(output.html, output.title, output.status);
           }
           if (request.method !== "POST") return json(405, { error: "method_not_allowed" });
-          const body = await requestJson(request) as { action?: unknown };
-          const actionResult = await options.manager.handlePluginUiAction(session, crypto.randomUUID(), params, body.action);
+          const actionResult = await options.manager.handlePluginUiAction(session, crypto.randomUUID(), params, await parseUiAction(request, route.actionSchema!));
           if (actionResult && typeof actionResult === "object" && "redirect" in actionResult && typeof (actionResult as { redirect?: unknown }).redirect === "string") {
             const redirect = (actionResult as { redirect: string }).redirect;
-            if (!redirect.startsWith("/") || redirect.startsWith("//")) return json(502, { error: "plugin_ui_invalid_redirect" });
+            if (!redirect.startsWith(`/plugins/${session.installationId}/`)) return json(502, { error: "plugin_ui_invalid_redirect" });
             return new Response(null, { status: 303, headers: { location: redirect } });
           }
-          const output = await options.manager.renderPluginUi(session, crypto.randomUUID(), params) as { html?: unknown; title?: string };
+          const output = await options.manager.renderPluginUi(session, crypto.randomUUID(), params) as { html?: unknown; title?: string; status?: number };
           if (typeof output.html !== "string") return json(502, { error: "plugin_ui_invalid_output" });
-          return renderDocument(output.html, output.title);
+          return renderDocument(output.html, output.title, output.status);
         } catch (error) { return failure(error); }
       }
       if (!url.pathname.startsWith("/internal/plugins/")) return json(404, { error: "not_found" });

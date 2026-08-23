@@ -260,7 +260,7 @@ scoped plugin-to-plugin 和更完整的 UI catalog 仍待后续阶段补齐。
 
 ## 阶段 6：Plugin SSR MVP
 
-**状态：已完成 MVP。** Human API 签发短期 session，Manager 验签并转发有限 HTML fragment；
+**状态：已完成 MVP。** Human API 签发短期 path-scoped HttpOnly session cookie，Manager 验签并转发有限 HTML fragment；
 React 代码只在 plugin 进程执行，当前不提供 hydration/RSC/streaming pass-through。
 
 ### Session 与路由

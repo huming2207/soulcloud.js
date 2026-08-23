@@ -15,6 +15,7 @@ export interface PluginUiSession {
   routeId: string;
   permissions: string[];
   locale: string;
+  nonce: string;
 }
 
 const AUDIENCE = "soulcloud-plugin-ui";
@@ -23,7 +24,7 @@ type Verifier = (token: string) => unknown;
 const signers = new Map<string, Signer>();
 const verifiers = new Map<string, Verifier>();
 
-export function signPluginUiSession(config: PluginUiSessionConfig, session: PluginUiSession): string {
+export function signPluginUiSession(config: PluginUiSessionConfig, session: Omit<PluginUiSession, "nonce">): string {
   const key = `${config.secret}:${config.ttlSeconds}`;
   let signer = signers.get(key);
   if (!signer) {
@@ -40,6 +41,7 @@ export function signPluginUiSession(config: PluginUiSessionConfig, session: Plug
     routeId: session.routeId,
     permissions: session.permissions,
     locale: session.locale,
+    nonce: crypto.randomUUID(),
   });
 }
 
@@ -55,7 +57,7 @@ export function verifyPluginUiSession(config: PluginUiSessionConfig, token: stri
     typeof value.sub !== "string" || typeof value.projectId !== "string" ||
     typeof value.installationId !== "string" || typeof value.pluginId !== "string" ||
     typeof value.pluginVersion !== "string" || typeof value.manifestHash !== "string" ||
-    typeof value.routeId !== "string" || typeof value.locale !== "string" ||
+    typeof value.routeId !== "string" || typeof value.locale !== "string" || typeof value.nonce !== "string" ||
     !Array.isArray(value.permissions) || value.permissions.some((permission) => typeof permission !== "string")
   ) throw new Error("invalid plugin UI session");
   return {
@@ -68,5 +70,10 @@ export function verifyPluginUiSession(config: PluginUiSessionConfig, token: stri
     routeId: value.routeId,
     permissions: value.permissions as string[],
     locale: value.locale,
+    nonce: value.nonce,
   };
+}
+
+export function pluginUiSessionCookieName(installationId: string): string {
+  return `soulcloud_plugin_ui_${installationId.replaceAll("-", "")}`;
 }

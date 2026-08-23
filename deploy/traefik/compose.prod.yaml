@@ -19,5 +19,7 @@ services:
     ports: !reset []
   broker:
     ports: !reset []
+  plugin-manager:
+    ports: !reset []
   web:
     ports: !reset []

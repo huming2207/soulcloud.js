@@ -45,7 +45,16 @@ export const manifestSchema = z.object({
     wire: z.object({ command: z.string().min(1).max(256), schemaVersion: z.number().int().positive() }).strict(),
   }).strict()).max(256),
   events: z.array(z.object({ kind: z.string().min(1).max(256), schemaVersion: z.number().int().positive(), description: z.string().max(2048).optional() }).strict()).max(256),
-  ui: z.object({ routes: z.array(z.object({ id: z.string().min(1).max(128), path: z.string().min(1).max(256), methods: z.array(z.enum(["GET", "POST"])).max(2).optional(), actionId: z.string().max(128).optional() }).strict()).max(128) }).strict().optional(),
+  ui: z.object({ routes: z.array(z.object({
+    id: z.string().min(1).max(128),
+    path: z.string().regex(/^\/(?:[A-Za-z0-9._~-]+\/?)*$/).max(256)
+      .refine((path) => path.split("/").every((segment) => segment !== "." && segment !== ".."), "path traversal is not allowed"),
+    methods: z.array(z.enum(["GET", "POST"])).min(1).max(2).optional(),
+    querySchema: actionInputSchema.optional(),
+    actionSchema: actionInputSchema.optional(),
+  }).strict().refine((route) => !(route.methods ?? ["GET"]).includes("POST") || route.actionSchema !== undefined, {
+    message: "POST routes require actionSchema",
+  })).max(128) }).strict().optional(),
 }).strict();
 
 export function validateManifest(value: unknown): PluginManifest {
@@ -58,11 +67,31 @@ export function validateManifest(value: unknown): PluginManifest {
   unique(manifest.profiles.map((item) => `${item.id}@${item.version}`), "profile");
   unique(manifest.actions.map((item) => item.id), "action");
   unique(manifest.events.map((item) => `${item.kind}@${item.schemaVersion}`), "event");
+  unique(manifest.ui?.routes.map((item) => item.id) ?? [], "UI route ID");
+  unique(manifest.ui?.routes.map((item) => item.path) ?? [], "UI route path");
+  for (const route of manifest.ui?.routes ?? []) unique(route.methods ?? ["GET"], `method in UI route ${route.id}`);
   for (const profile of manifest.profiles) unique(profile.entities.map((item) => item.key), `entity in ${profile.id}`);
   return manifest;
 }
 
 export interface ValidationFailure { field: string; error: string }
+
+/** Coerces URL/form scalar strings according to a manifest schema. */
+export function coerceStringActionInput(schema: ActionInputSchema, input: Record<string, string>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    const rule = schema[key];
+    if (!rule || rule.type === "string") {
+      result[key] = value;
+    } else if (rule.type === "boolean") {
+      result[key] = value === "true" ? true : value === "false" ? false : value;
+    } else {
+      result[key] = value.trim() === "" ? value : Number(value);
+    }
+  }
+  return result;
+}
+
 export function validateActionInput(schema: ActionInputSchema, input: unknown): { ok: true } | { ok: false; failures: ValidationFailure[] } {
   const failures: ValidationFailure[] = [];
   if (!input || typeof input !== "object" || Array.isArray(input)) return { ok: false, failures: [{ field: "(root)", error: "input must be an object" }] };

@@ -54,7 +54,8 @@ export interface PluginUiRoute {
   id: string;
   path: string;
   methods?: ("GET" | "POST")[];
-  actionId?: string;
+  querySchema?: ActionInputSchema;
+  actionSchema?: ActionInputSchema;
 }
 
 export interface PluginManifest {
@@ -119,7 +120,7 @@ export interface UiRenderInput {
   projectId: string;
   user: { id: string; locale: string; permissions: string[] };
   routeId: string;
-  params: Record<string, string>;
+  params: Record<string, string | number | boolean>;
 }
 export interface UiRenderOutput {
   html: string;

@@ -59,8 +59,8 @@ export const eventOutput = z.object({
 export const actionInput = operation.extend({ actionId: z.string().min(1).max(128), input: z.unknown() }).strict();
 export const actionOutput = z.object({ command: z.string().min(1).max(256), args: z.array(commandArgument).max(256), schemaVersion: z.number().int().positive() }).strict();
 
-export const uiRenderInput = operation.extend({ requestId: z.string().min(1).max(128), routeId: z.string().min(1).max(128), installationId: z.string().uuid(), projectId: z.string().uuid(), user: uiUser, params: z.record(z.string().max(128), z.string().max(1024)).refine((value) => Object.keys(value).length <= 32) }).strict();
-export const uiRenderOutput = z.object({ html: z.string().max(2 * 1024 * 1024), title: z.string().max(256).optional(), status: z.number().int().min(200).max(599).optional(), cache: z.literal("no-store").or(z.object({ maxAgeSeconds: z.number().int().nonnegative().max(86_400) })).optional() }).strict();
+export const uiRenderInput = operation.extend({ requestId: z.string().min(1).max(128), routeId: z.string().min(1).max(128), installationId: z.string().uuid(), projectId: z.string().uuid(), user: uiUser, params: z.record(z.string().max(128), z.union([z.string().max(1024), z.number().finite(), z.boolean()])).refine((value) => Object.keys(value).length <= 32) }).strict();
+export const uiRenderOutput = z.object({ html: z.string().max(2 * 1024 * 1024), title: z.string().max(256).optional(), status: z.number().int().min(200).max(599).refine((status) => status < 300 || status >= 400, "redirect status is not allowed").refine((status) => status !== 204 && status !== 205, "bodyless status is not allowed").optional(), cache: z.literal("no-store").or(z.object({ maxAgeSeconds: z.number().int().nonnegative().max(86_400) })).optional() }).strict();
 export const uiActionInput = uiRenderInput.extend({ action: z.unknown() }).strict();
 export const uiActionOutput = z.object({ redirect: z.string().max(2048).optional(), errors: z.array(z.object({ field: z.string().max(128), message: z.string().max(2048) }).strict()).max(64).optional() }).strict();
 

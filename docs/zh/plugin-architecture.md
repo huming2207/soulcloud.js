@@ -380,10 +380,12 @@ Components。交互使用普通 form/link，并由 Plugin Manager 调用 `ui.han
 
 1. Browser 向 Human API 请求某 installation/route 的短期 plugin UI session；
 2. Human API 校验用户、project membership 和 permission；
-3. session 绑定 user、project、installation、plugin/version、route/audience 和 expiry；
-4. Browser 用 session 请求 `/plugins/*`；
-5. Manager 验签并创建最小 `PluginUiContext`；
-6. plugin 只收到完成渲染所需的 user ID、locale、permission snapshot 和 scoped data capability。
+3. session 绑定 user、project、installation、plugin/version、route/audience、nonce 和 expiry；
+4. Human API 将 session 写入 HttpOnly、Secure、SameSite=Strict、限定 installation 路径的短期
+   cookie，并返回稳定的 `/plugins/*` URL；
+5. Browser 导航到该 URL，后续普通 link/form 由浏览器自动携带 session cookie；
+6. Manager 验签并创建最小 `PluginUiContext`；
+7. plugin 只收到完成渲染所需的 user ID、locale、permission snapshot 和 scoped data capability。
 
 Manager 和 plugin 都不接收长期用户 JWT。不得把 email、全局角色或其他个人信息默认传给
 plugin；确实需要时由 route 权限和 schema 显式声明。

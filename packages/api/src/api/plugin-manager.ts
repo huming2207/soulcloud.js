@@ -1,4 +1,4 @@
-import { signPluginUiSession, type JwtConfig, type PrismaClient } from "@soulcloud/core";
+import { pluginUiSessionCookieName, signPluginUiSession, type JwtConfig, type PrismaClient } from "@soulcloud/core";
 import { Elysia } from "elysia";
 import type { PluginManagerOptions } from "./app";
 import { authenticateRequest, userCanAccessProject } from "./validate";
@@ -112,9 +112,13 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
       if (installation.state !== "enabled" || !(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "plugin installation access denied" }; }
       const snapshot = await prisma.pluginManifestSnapshot.findUnique({ where: { pluginId_pluginVersion: { pluginId: installation.pluginId, pluginVersion: installation.pluginVersion } }, select: { canonicalManifest: true, manifestHash: true } });
-      const manifest = snapshot?.canonicalManifest as { ui?: { routes?: Array<{ id: string }> } } | undefined;
-      if (!snapshot || snapshot.manifestHash.trim() !== installation.manifestHash.trim() || !manifest?.ui?.routes?.some((route) => route.id === params.routeId)) { set.status = 404; return { error: "not_found", message: "plugin UI route not found" }; }
+      const manifest = snapshot?.canonicalManifest as { ui?: { routes?: Array<{ id: string; path: string }> } } | undefined;
+      const route = manifest?.ui?.routes?.find((item) => item.id === params.routeId);
+      if (!snapshot || snapshot.manifestHash.trim() !== installation.manifestHash.trim() || !route) { set.status = 404; return { error: "not_found", message: "plugin UI route not found" }; }
       const locale = typeof query?.locale === "string" && query.locale.length <= 32 ? query.locale : "en";
-      return { session: signPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds: options.uiSessionTtlSeconds ?? 300 }, { sub: user.user.id, projectId: installation.projectId, installationId: params.id, pluginId: installation.pluginId, pluginVersion: installation.pluginVersion, manifestHash: installation.manifestHash.trim(), routeId: params.routeId, permissions: [], locale }) };
+      const ttlSeconds = options.uiSessionTtlSeconds ?? 300;
+      const session = signPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds }, { sub: user.user.id, projectId: installation.projectId, installationId: params.id, pluginId: installation.pluginId, pluginVersion: installation.pluginVersion, manifestHash: installation.manifestHash.trim(), routeId: params.routeId, permissions: [], locale });
+      set.headers["set-cookie"] = `${pluginUiSessionCookieName(params.id)}=${session}; Path=/plugins/${params.id}/; Max-Age=${ttlSeconds}; HttpOnly; Secure; SameSite=Strict`;
+      return { url: `/plugins/${params.id}${route.path}` };
     });
 }

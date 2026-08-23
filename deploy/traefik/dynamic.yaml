@@ -50,9 +50,24 @@ http:
       buffering:
         maxRequestBodyBytes: 83886080  # 80 MiB, matches MAX_BODY_BYTES
 
+    body-limit-plugin-ui:
+      buffering:
+        maxRequestBodyBytes: 1048576
+
 # --- routers + services ---------------------------------------------------
 
   routers:
+
+    # Plugin SSR is authenticated with a short-lived, path-scoped session
+    # issued by the Human API. Internal Manager routes do not match here.
+    plugin-ui:
+      rule: "Host(`example.com`) && PathPrefix(`/plugins/`)"
+      priority: 100
+      entryPoints: [websecure]
+      service: plugin-manager
+      middlewares: [ratelimit-web, compress, security-headers, body-limit-plugin-ui]
+      tls:
+        certResolver: letsencrypt
 
     # Web console (SPA): host root, everything not matched below.
     web:
@@ -105,3 +120,8 @@ http:
         # listener only) and traefik's pass-through forwards the Upgrade
         # regardless. A down broker shows as a connection error to the
         # device, which is the intended failure mode.
+
+    plugin-manager:
+      loadBalancer:
+        servers:
+          - url: "http://plugin-manager:8091"

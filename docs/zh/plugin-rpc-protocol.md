@@ -178,7 +178,7 @@ interface PluginUiContext {
     permissions: string[];
   };
   routeId: string;
-  params: Record<string, string>;
+  params: Record<string, string | number | boolean>;
 }
 ```
 
@@ -271,14 +271,18 @@ Human API 是用户权限权威：
 
 ```text
 Browser → Human API: request plugin UI session
-Human API → Browser: short-lived signed session
-Browser → Plugin Manager /plugins/*
+Human API → Browser: path-scoped HttpOnly cookie + /plugins/* URL
+Browser → Plugin Manager /plugins/* (cookie is sent automatically)
 Manager → plugin ui.render
 ```
 
 session 至少绑定 audience、user、project、installation、plugin/version/manifest hash、route、
 permission snapshot、locale、issued/expiry 和 nonce。Manager 不接收长期用户 JWT；session 不可
 跨 route/installation 重放，权限变化、plugin 升级或 installation disable 后必须失效。
+
+session 不放在 URL query、fragment、plugin HTML 或长期浏览器存储中。cookie 只覆盖对应
+`/plugins/{installation}/` 路径，因此普通导航与无 JavaScript form 可以工作，而 plugin 仍看不到
+token。
 
 传给 plugin 的用户上下文遵循最小化原则，不默认包含 email、全局角色或其他个人信息。
 
