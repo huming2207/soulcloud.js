@@ -25,6 +25,7 @@ const manifest: PluginManifest = {
 };
 let renderedParams: unknown;
 let submittedAction: unknown;
+let actionTimeout: number | undefined;
 const manager = {
   ready: async () => true,
   getManifest: () => manifest,
@@ -35,6 +36,10 @@ const manager = {
   handlePluginUiAction: async (_session: unknown, _requestId: string, _params: unknown, action: unknown) => {
     submittedAction = action;
     return {};
+  },
+  encodeAction: async (input: { timeoutMs?: number }) => {
+    actionTimeout = input.timeoutMs;
+    return { batchId: randomUUID(), deviceCount: 1 };
   },
 } as unknown as PluginManager;
 const server = startPluginManagerServer({ hostname: "127.0.0.1", port: 0, serviceToken: "internal-service-token", manager, uiSessionSecret: secret });
@@ -107,5 +112,21 @@ describe("plugin SSR route", () => {
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: "invalid_request" });
+  });
+
+  test("passes the internal Action deadline to the plugin operation", async () => {
+    const response = await fetch(`${server.url}internal/plugins/actions/encode`, {
+      method: "POST",
+      headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+      body: JSON.stringify({
+        installationId,
+        deviceId: randomUUID(),
+        actionId: "run",
+        input: {},
+        timeoutMs: 4_000,
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(actionTimeout).toBe(4_000);
   });
 });

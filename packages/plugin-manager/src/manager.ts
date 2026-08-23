@@ -255,6 +255,7 @@ export class PluginManager {
 
   async createInstallation(input: CreateInstallationInput): Promise<{ id: string }> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    this.assertConfigurationBudget(input.config);
     this.requireConnectedManifest(input.pluginId, input.pluginVersion, input.manifestHash);
     return createPluginInstallation(this.options.prisma, input);
   }
@@ -271,6 +272,7 @@ export class PluginManager {
 
   async migrateInstallation(installationId: string, pluginVersion: string, manifestHash: string, config: unknown): Promise<void> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    this.assertConfigurationBudget(config);
     const installation = await this.options.prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { pluginId: true } });
     if (!installation) throw Object.assign(new Error("plugin installation not found"), { status: 404 });
     this.requireConnectedManifest(installation.pluginId, pluginVersion, manifestHash);
@@ -477,6 +479,14 @@ export class PluginManager {
     connection = new PluginConnection(config);
     this.connections.set(pluginId, connection);
     return connection;
+  }
+
+  private assertConfigurationBudget(config: unknown): void {
+    try {
+      assertRpcValueBudget(config, this.valueBudget);
+    } catch (error) {
+      throw publicError(`plugin configuration is too large: ${(error as Error).message}`, 400, "invalid_request");
+    }
   }
 
   private async connect(pluginId: string): Promise<void> {

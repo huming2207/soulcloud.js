@@ -41,6 +41,10 @@ async function callManager(options: PluginManagerOptions, path: string, body: un
   } finally { clearTimeout(timer); }
 }
 
+export function pluginManagerOperationTimeoutMs(requestTimeoutMs = 5_000): number {
+  return Math.min(30_000, Math.max(100, requestTimeoutMs - 1_000));
+}
+
 const installationBody = z.object({ project_id: z.string().uuid(), plugin_id: z.string().min(1).max(128), plugin_version: z.string().min(1).max(128), manifest_hash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown().optional() }).strict();
 const bindingBody = z.object({ device_id: z.string().uuid(), profile_id: z.string().min(1).max(128), profile_version: z.number().int().positive() }).strict();
 const actionBody = z.object({ device_id: z.string().uuid(), input: z.unknown() }).strict();
@@ -101,6 +105,7 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       try {
         const result = await callManager(options, "/internal/plugins/actions/encode", {
           installationId: params.id, deviceId: parsed.data.device_id, actionId: params.actionId, input: parsed.data.input,
+          timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
         });
         set.status = result.status;
         return result.value;

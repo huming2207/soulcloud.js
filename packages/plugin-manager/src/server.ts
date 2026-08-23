@@ -65,7 +65,7 @@ async function parseUiAction(request: Request, schema: ActionInputSchema): Promi
 
 async function requestJson(request: Request): Promise<unknown> {
   const body = await request.text();
-  if (new TextEncoder().encode(body).byteLength > 1_048_576) throw Object.assign(new Error("request body too large"), { status: 413 });
+  if (Buffer.byteLength(body) > 1_048_576) throw Object.assign(new Error("request body too large"), { status: 413 });
   try { return JSON.parse(body); } catch { throw Object.assign(new Error("invalid JSON body"), { status: 400 }); }
 }
 
@@ -83,7 +83,7 @@ function failure(error: unknown): Response {
           : message.includes("disabled") || message.includes("changed concurrently") || message.includes("changed while") ? 409
             : 500;
   const publicMessage = mapped >= 500 && mapped !== 502 ? "plugin manager operation failed" : message;
-  const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "plugin_ui_invalid_output", "plugin_manager_overloaded"].includes(explicitCode)
+  const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "plugin_ui_invalid_input", "plugin_ui_invalid_output", "plugin_manager_overloaded"].includes(explicitCode)
     ? explicitCode
     : mapped === 400 ? "invalid_request" : mapped === 404 ? "not_found" : mapped === 409 ? "conflict" : mapped === 502 ? "plugin_output_invalid" : mapped === 503 ? "plugin_unavailable" : "plugin_manager_error";
   return json(mapped, { error: code, message: publicMessage });
@@ -93,7 +93,7 @@ const createInstallationSchema = z.object({ projectId: z.string().uuid(), plugin
 const bindingSchema = z.object({ deviceId: z.string().uuid(), profileId: z.string().min(1).max(128), profileVersion: z.number().int().positive() }).strict();
 const stateSchema = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
 const migrateSchema = z.object({ pluginVersion: z.string().min(1).max(128), manifestHash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown() }).strict();
-const encodeActionSchema = z.object({ installationId: z.string().uuid(), deviceId: z.string().uuid(), actionId: z.string().min(1).max(128), input: z.unknown() }).strict();
+const encodeActionSchema = z.object({ installationId: z.string().uuid(), deviceId: z.string().uuid(), actionId: z.string().min(1).max(128), input: z.unknown(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 
 function parseBody<T>(schema: ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -198,7 +198,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         }
         if (url.pathname === "/internal/plugins/actions/encode") {
           const input = parseBody(encodeActionSchema, body);
-          return json(200, await options.manager.encodeAction({ installationId: input.installationId, deviceId: input.deviceId, actionId: input.actionId, actionInput: input.input }));
+          return json(200, await options.manager.encodeAction({ installationId: input.installationId, deviceId: input.deviceId, actionId: input.actionId, actionInput: input.input, timeoutMs: input.timeoutMs }));
         }
       } catch (error) { return failure(error); }
       return json(404, { error: "not_found" });
