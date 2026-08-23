@@ -50,7 +50,6 @@ export class PluginConnection {
   private connecting: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pending = 0;
-  private incomingTail: Promise<void> = Promise.resolve();
   private closed = false;
   private handshaken = false;
   private connectionId = crypto.randomUUID();
@@ -82,7 +81,7 @@ export class PluginConnection {
       const socket = new WebSocket(this.options.endpoint, { headers: { "x-soulcloud-rpc-protocol": RPC_PROTOCOL_HEADER, authorization: `Bearer ${this.options.authToken}` } });
       this.connectionId = crypto.randomUUID();
       this.socket = socket;
-      this.incomingTail = Promise.resolve();
+      socket.binaryType = "arraybuffer";
       const fail = (error: Error) => {
         if (settled) return;
         settled = true;
@@ -107,9 +106,8 @@ export class PluginConnection {
         this.reverseHandler = new RPCHandler(handler, { encodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX }, decodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX } });
         this.forward = createContractClientFactory(new RPCLink({ connect: () => bridge, encodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX }, decodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX } }))(managerToPluginContract);
         socket.addEventListener("message", (event) => {
-          this.incomingTail = this.incomingTail
-            .then(() => this.handleSocketMessage(socket, bridge, event))
-            .catch(() => socket.close(1002, "invalid reverse RPC frame"));
+          void this.handleSocketMessage(socket, bridge, event)
+            .catch(() => socket.close(1002, "invalid RPC frame"));
         });
         socket.addEventListener("error", (event) => bridge.dispatch("error", event));
         socket.addEventListener("close", () => this.onClose(socket));

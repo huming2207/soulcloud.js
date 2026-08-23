@@ -166,7 +166,6 @@ interface RuntimeConnection {
 function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeConnection; handshaken: boolean }>, definition: PluginDefinition, manifestHash: string, budget: RpcValueBudget, maxConcurrent: number, log: (message: string, fields?: Record<string, unknown>) => void): RuntimeConnection {
   const bridge = createBridge(ws);
   const reverse = createContractClientFactory(new RPCLink({ connect: () => bridge, encodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX }, decodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX } }))(pluginToManagerContract);
-  let receiveTail = Promise.resolve();
   let running = 0;
   const implemented = implement(managerToPluginContract).$context<{ isHandshaken: () => boolean; markHandshaken: () => void }>();
   const router = {
@@ -272,9 +271,11 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
         bridge.dispatch("message", { data });
         return;
       }
-      receiveTail = receiveTail.then(async () => {
-        await handler.message(bridge, data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">, { context });
-      }).catch(() => ws.close(1011, "RPC handler error"));
+      void handler.message(
+        bridge,
+        data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">,
+        { context },
+      ).catch(() => ws.close(1011, "RPC handler error"));
     },
     async close() { bridge.close(); await handler.close(bridge); log("plugin connection closed"); },
   };
