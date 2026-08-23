@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Aedes } from "aedes";
 import { createHash, randomUUID } from "node:crypto";
-import { encodeDeviceStat, prisma } from "@soulcloud/core";
+import { encodeDeviceEvent, encodeDeviceStat, prisma } from "@soulcloud/core";
 import { msgpackLogBundle, validLogPacket } from "../helpers/mqtt-client";
 import { attachDispatch, type DispatchLog, UplinkWorkQueue } from "../../src/mqtt/dispatch";
 import { buildNoloadElf } from "../../../core/tests/helpers/elf-builder";
@@ -92,6 +92,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await prisma.pluginEvent.deleteMany({ where: { deviceId } });
   await prisma.deviceFirmwareState.deleteMany({ where: { deviceId } });
   await prisma.device.delete({ where: { id: deviceId } });
   await prisma.project.delete({ where: { id: projectId } });
@@ -99,6 +100,24 @@ afterAll(async () => {
 });
 
 describe("attachDispatch guards", () => {
+  test("does not authorize a valid QoS 1 event until it is durable", async () => {
+    const log = makeLog();
+    const aedes = new Aedes();
+    attachDispatch(aedes, prisma, log);
+    const id = crypto.getRandomValues(new Uint8Array(16));
+    const payload = Buffer.from(encodeDeviceEvent({ id, seq: 1n, kind: "test", schema: 1, data: { value: 1 } }));
+    const packet = { topic: `soulcloud/v1/devices/${deviceUid}/event`, payload, qos: 1, messageId: 1 };
+
+    await new Promise<void>((resolve, reject) => {
+      aedes.authorizePublish({ id: deviceUid } as never, packet as never, (error) => {
+        if (error) { reject(error); return; }
+        void prisma.pluginEvent.findFirst({ where: { deviceId, eventId: Buffer.from(id).toString("hex") } })
+          .then((row) => row ? resolve() : reject(new Error("event was acknowledged before persistence")), reject);
+      });
+    });
+    await prisma.pluginEvent.deleteMany({ where: { deviceId } });
+  });
+
   test("global work queue is bounded and serializes each device", async () => {
     const queue = new UplinkWorkQueue(2, 3, 1024);
     const order: string[] = [];

@@ -176,9 +176,54 @@ export function attachDispatch(
     guards?.workCapacity ?? DEFAULT_WORK_CAPACITY,
     guards?.workMaxBytes ?? DEFAULT_WORK_MAX_BYTES,
   );
+  const preHandledEvents = new WeakSet<object>();
+  const authorizePublish = aedes.authorizePublish.bind(aedes);
+
+  // Aedes writes a QoS 1 PUBACK before emitting its `publish` event. Gate the
+  // generic /event path here so a valid event is durable before ACK. Invalid
+  // device data is deliberately acknowledged and dropped; a database failure
+  // is returned to Aedes so the device retransmits instead of losing data.
+  aedes.authorizePublish = (client, packet, callback) => {
+    authorizePublish(client, packet, (authorizationError) => {
+      if (authorizationError || !client || !isOwnEventTopic(client.id, packet.topic)) {
+        callback(authorizationError);
+        return;
+      }
+      const payload = typeof packet.payload === "string"
+        ? Buffer.from(packet.payload)
+        : (packet.payload ?? Buffer.alloc(0));
+      if (guards && payload.length > guards.maxPacketBytes) {
+        log.warn("dropped oversized uplink packet", { deviceUid: client.id, payloadBytes: payload.length, maxBytes: guards.maxPacketBytes });
+        preHandledEvents.add(packet);
+        callback(null);
+        return;
+      }
+      if (limiter && !limiter.tryConsume(client.id, 1)) {
+        log.warn("dropped uplink packet over rate limit", { deviceUid: client.id });
+        preHandledEvents.add(packet);
+        callback(null);
+        return;
+      }
+      const accepted = workQueue.enqueue({
+        deviceUid: client.id,
+        byteSize: payload.length,
+        run: async () => {
+          try {
+            await persistDeviceEvent(prisma, client.id, payload, log);
+            preHandledEvents.add(packet);
+            callback(null);
+          } catch (error) {
+            callback(error instanceof Error ? error : new Error(String(error)));
+          }
+        },
+      });
+      if (!accepted) callback(new Error("broker uplink work limit reached"));
+    });
+  };
 
   aedes.on("publish", (packet, client) => {
     if (!client) return; // server-side or internal publishes
+    if (preHandledEvents.delete(packet)) return;
     // defensive: mqtt-packet always produces a payload for PUBLISH, but a
     // missing one must never crash the broker via the sync event listener
     const payload =
@@ -294,6 +339,20 @@ async function handleEvent(
   payload: Uint8Array,
   log: DispatchLog,
 ): Promise<void> {
+  try {
+    await persistDeviceEvent(prisma, deviceUid, payload, log);
+  } catch {
+    // This fallback path runs after ACK (for direct/event-emitter callers).
+    // The real MQTT path is gated in authorizePublish and propagates failure.
+  }
+}
+
+async function persistDeviceEvent(
+  prisma: PrismaClient,
+  deviceUid: string,
+  payload: Uint8Array,
+  log: DispatchLog,
+): Promise<void> {
   let event;
   try {
     event = decodeDeviceEvent(payload);
@@ -324,6 +383,16 @@ async function handleEvent(
       eventId: bytesToUuid(event.id),
       error: (error as Error).message,
     });
+    throw error;
+  }
+}
+
+function isOwnEventTopic(deviceUid: string, topic: string): boolean {
+  try {
+    const parsed = parseDeviceTopic(topic);
+    return parsed.deviceUid === deviceUid && parsed.kind === "event";
+  } catch {
+    return false;
   }
 }
 
