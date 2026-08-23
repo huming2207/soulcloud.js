@@ -1,4 +1,6 @@
 import { Prisma, type PrismaClient } from "../db";
+import { enqueueBatchInTransaction } from "../queue/enqueue";
+import type { DeviceCommand } from "../protocol/command";
 import { PLUGIN_EVENTS_CHANNEL } from "../queue/notify";
 import type { DeviceEventEnvelope } from "../protocol/event";
 import { applyEntityUpdates, type EntityUpdateInput } from "./entities";
@@ -180,6 +182,7 @@ export async function completePluginEventWithUpdates(
     profileId: string;
     profileVersion: number;
     updates: readonly EntityUpdateInput[];
+    commands?: readonly { deviceId: string; command: DeviceCommand }[];
   },
 ): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
@@ -190,6 +193,9 @@ export async function completePluginEventWithUpdates(
     `;
     if (locked.length === 0) return false;
     await applyEntityUpdates(tx, entityContext);
+    for (const intent of entityContext.commands ?? []) {
+      await enqueueBatchInTransaction(tx, [intent.deviceId], intent.command);
+    }
     const updated = await tx.$executeRaw`
       UPDATE plugin_events
       SET state = 'completed', lease_expires_at = NULL, lease_token = NULL,

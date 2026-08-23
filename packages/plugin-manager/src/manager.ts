@@ -18,6 +18,7 @@ import {
   type LeasedPluginEvent,
   type EntityUpdateInput,
   type CommandArgument,
+  type DeviceCommand,
   type PluginUiSession,
   type BindDeviceInput,
   type CreateInstallationInput,
@@ -54,7 +55,7 @@ export interface PluginManagerOptions {
 export interface PluginEventStore {
   lease(limit: number, leaseMs: number): Promise<LeasedPluginEvent[]>;
   complete(eventId: string, leaseToken: string): Promise<boolean>;
-  completeWithUpdates?(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[] }): Promise<boolean>;
+  completeWithUpdates?(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[]; commands?: readonly { deviceId: string; command: DeviceCommand }[] }): Promise<boolean>;
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number): Promise<boolean>;
   purge?(eventRetentionDays: number, historyRetentionDays: number): Promise<{ events: number; history: number }>;
 }
@@ -63,7 +64,7 @@ export class PrismaPluginEventStore implements PluginEventStore {
   constructor(private readonly prisma: PrismaClient) {}
   lease(limit: number, leaseMs: number) { return leasePluginEvents(this.prisma, limit, leaseMs); }
   complete(eventId: string, leaseToken: string) { return completePluginEvent(this.prisma, eventId, leaseToken); }
-  completeWithUpdates(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[] }) {
+  completeWithUpdates(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[]; commands?: readonly { deviceId: string; command: DeviceCommand }[] }) {
     return completePluginEventWithUpdates(this.prisma, eventId, leaseToken, context);
   }
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number) {
@@ -120,6 +121,7 @@ interface ActiveOperation {
   deviceId?: string;
   profileId?: string;
   profileVersion?: number;
+  stagedCommands?: Array<{ deviceId: string; command: DeviceCommand }>;
 }
 
 interface PluginCircuit {
@@ -446,14 +448,18 @@ export class PluginManager {
       }, this.options.eventTimeoutMs ?? 30_000);
       const output = result as { updates?: readonly EntityUpdateInput[] };
       if (store.completeWithUpdates) {
+        const operation = activeOperationId ? this.operations.get(activeOperationId) : undefined;
         await store.completeWithUpdates(event.id, event.lease_token, {
           installationId: event.installation_id,
           deviceId: event.device_id,
           profileId: event.profile_id,
           profileVersion: event.profile_version,
           updates: output.updates ?? [],
+          commands: operation?.stagedCommands,
         });
       } else {
+        const operation = activeOperationId ? this.operations.get(activeOperationId) : undefined;
+        if (operation?.stagedCommands?.length) throw new Error("event command intents require transactional completion");
         await store.complete(event.id, event.lease_token);
       }
       this.circuitSuccess(event.plugin_id);
@@ -508,7 +514,9 @@ export class PluginManager {
         : argument.value;
       args.push({ [argument.name]: value as CommandArgument[string] });
     }
-    await enqueueBatch(this.options.prisma, [operation.deviceId], { cmd: input.command, args });
+    if ((operation.stagedCommands?.length ?? 0) >= 32) throw new Error("operation command intent limit exceeded");
+    operation.stagedCommands ??= [];
+    operation.stagedCommands.push({ deviceId: operation.deviceId, command: { cmd: input.command, args } });
     return { accepted: true };
   }
 

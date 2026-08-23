@@ -46,6 +46,92 @@ export interface EnqueueBatchOptions {
   deliveryTimeoutSeconds?: number;
 }
 
+/** Transaction client used when a caller must commit commands with another effect. */
+export type EnqueueTransactionClient = Prisma.TransactionClient;
+
+/** Creates a command batch inside an existing transaction. */
+export async function enqueueBatchInTransaction(
+  tx: EnqueueTransactionClient,
+  targetDeviceIds: string[],
+  command: DeviceCommand,
+  options: EnqueueBatchOptions = {},
+): Promise<EnqueuedBatch> {
+  if (targetDeviceIds.length === 0) {
+    throw new CommandQueueError("empty_targets", "a command batch must target at least one device");
+  }
+  if (new Set(targetDeviceIds).size !== targetDeviceIds.length) {
+    throw new CommandQueueError("duplicate_targets", "a command batch contains duplicate device IDs");
+  }
+  if (targetDeviceIds.length > MAX_BATCH_TARGETS) {
+    throw new CommandQueueError("too_many_targets", "the command batch contains too many target devices");
+  }
+
+  const batchId = randomUUID();
+  const deviceCount = targetDeviceIds.length;
+  const deliveryExpiresAt = options.deliveryTimeoutSeconds === undefined
+    ? null
+    : new Date(Date.now() + options.deliveryTimeoutSeconds * 1000);
+  const sortedTargets = [...targetDeviceIds].sort();
+  const targets = await tx.$queryRaw<TargetRow[]>`
+    UPDATE devices
+    SET next_command_sequence = next_command_sequence + 1
+    WHERE id IN (${Prisma.join(sortedTargets)})
+    RETURNING id, device_uid, next_command_sequence
+  `;
+
+  if (targets.length !== targetDeviceIds.length) {
+    const found = new Set(targets.map((target) => target.id));
+    const missing = targetDeviceIds.filter((id) => !found.has(id));
+    throw new CommandQueueError(
+      "missing_targets",
+      `command target devices do not exist: ${missing.join(", ")}`,
+      { missing },
+    );
+  }
+
+  for (const target of targets) {
+    try {
+      commandExecution(target.device_uid);
+    } catch {
+      throw new CommandQueueError(
+        "invalid_device_uid",
+        `device ${target.id} has an invalid MQTT device UID`,
+        { deviceId: target.id },
+      );
+    }
+  }
+
+  await tx.commandBatch.create({ data: { id: batchId, deviceCount } });
+  const rows = targets.map((target) => {
+    const sequence = target.next_command_sequence - 1n;
+    if (sequence < 1n) {
+      throw new CommandQueueError(
+        "invalid_sequence",
+        `device ${target.id} command sequence is outside the supported range`,
+        { deviceId: target.id },
+      );
+    }
+    const id = randomUUID();
+    return {
+      id,
+      batchId,
+      deviceId: target.id,
+      sequence,
+      deliveryExpiresAt,
+      payload: Buffer.from(encodeDeviceCommandExecution({
+        id: Buffer.from(id.replace(/-/g, ""), "hex"),
+        seq: sequence,
+        cmd: command.cmd,
+        args: command.args,
+      })),
+      state: "queued",
+    };
+  });
+  await tx.deviceCommand.createMany({ data: rows });
+  await tx.$executeRaw`SELECT pg_notify(${COMMAND_NOTIFY_CHANNEL}, ${batchId})`;
+  return { id: batchId, deviceCount };
+}
+
 /**
  * Atomically creates a command batch for an explicit list of device IDs.
  *
@@ -58,108 +144,8 @@ export async function enqueueBatch(
   command: DeviceCommand,
   options: EnqueueBatchOptions = {},
 ): Promise<EnqueuedBatch> {
-  if (targetDeviceIds.length === 0) {
-    throw new CommandQueueError(
-      "empty_targets",
-      "a command batch must target at least one device",
-    );
-  }
-  if (new Set(targetDeviceIds).size !== targetDeviceIds.length) {
-    throw new CommandQueueError(
-      "duplicate_targets",
-      "a command batch contains duplicate device IDs",
-    );
-  }
-  if (targetDeviceIds.length > MAX_BATCH_TARGETS) {
-    throw new CommandQueueError(
-      "too_many_targets",
-      "the command batch contains too many target devices",
-    );
-  }
-
-  const batchId = randomUUID();
-  const deviceCount = targetDeviceIds.length;
-  const deliveryExpiresAt =
-    options.deliveryTimeoutSeconds === undefined
-      ? null
-      : new Date(Date.now() + options.deliveryTimeoutSeconds * 1000);
-  // deterministic lock order: overlapping concurrent batches update the same
-  // device rows; unsorted input could deadlock (Kimi low-risk)
-  const sortedTargets = [...targetDeviceIds].sort();
-
   try {
-    return await prisma.$transaction(async (tx) => {
-    const targets = await tx.$queryRaw<TargetRow[]>`
-      UPDATE devices
-      SET next_command_sequence = next_command_sequence + 1
-      WHERE id IN (${Prisma.join(sortedTargets)})
-      RETURNING id, device_uid, next_command_sequence
-    `;
-
-    if (targets.length !== targetDeviceIds.length) {
-      const found = new Set(targets.map((t) => t.id));
-      const missing = targetDeviceIds.filter((id) => !found.has(id));
-      throw new CommandQueueError(
-        "missing_targets",
-        `command target devices do not exist: ${missing.join(", ")}`,
-        { missing },
-      );
-    }
-
-    for (const target of targets) {
-      try {
-        commandExecution(target.device_uid);
-      } catch {
-        throw new CommandQueueError(
-          "invalid_device_uid",
-          `device ${target.id} has an invalid MQTT device UID`,
-          { deviceId: target.id },
-        );
-      }
-    }
-
-    await tx.commandBatch.create({
-      data: { id: batchId, deviceCount },
-    });
-
-    const rows = targets.map((target) => {
-      const sequence = target.next_command_sequence - 1n;
-      if (sequence < 1n) {
-        throw new CommandQueueError(
-          "invalid_sequence",
-          `device ${target.id} command sequence is outside the supported range`,
-          { deviceId: target.id },
-        );
-      }
-      const id = randomUUID();
-      return {
-        id,
-        batchId,
-        deviceId: target.id,
-        sequence,
-        deliveryExpiresAt,
-        payload: Buffer.from(
-          encodeDeviceCommandExecution({
-            // 16 raw binary bytes from the dashed UUID
-            id: Buffer.from(id.replace(/-/g, ""), "hex"),
-            seq: sequence,
-            cmd: command.cmd,
-            args: command.args,
-          }),
-        ),
-        state: "queued",
-      };
-    });
-
-    await tx.deviceCommand.createMany({ data: rows });
-
-    // Wake up broker processes (lossy hint only; pg_notify inside a
-    // transaction is delivered only after commit). If no broker is
-    // listening, the poller picks the row up on its next interval.
-    await tx.$executeRaw`SELECT pg_notify(${COMMAND_NOTIFY_CHANNEL}, ${batchId})`;
-
-    return { id: batchId, deviceCount };
-    });
+    return await prisma.$transaction((tx) => enqueueBatchInTransaction(tx, targetDeviceIds, command, options));
   } catch (error) {
     if (error instanceof CommandQueueError) throw error;
     throw new CommandQueueError(
