@@ -210,7 +210,7 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
             getEntity: async (entityKey: string) => reverse.context.entities.get({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, entityKey }),
             enqueueCommand: async (command: string, args: CommandArgument[] = []) => { const result = await reverse.context.commands.enqueue({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, command, args: commandWire(args) }); return result.accepted ? undefined : undefined; },
           };
-          const result = await definition.onEvent(ctx, { id: input.event.id, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload: input.event.payload, installation: input.installation, device: input.device });
+          const result = await definition.onEvent(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload: input.event.payload, installation: input.installation, device: input.device });
           const updates = result?.updates ?? [];
           validateEntityUpdates(profile.entities, updates);
           assertRpcValueBudget(updates, budget);

@@ -46,7 +46,7 @@ export const handshakeOutput = z.object({
 }).strict();
 
 export const eventInput = operation.extend({
-  event: z.object({ id: z.string().min(1).max(128), kind: z.string().min(1).max(256), schema: z.number().int().positive(), receivedAt: z.string().datetime({ offset: true }), payload: z.unknown() }).strict(),
+  event: z.object({ id: z.string().min(1).max(128), seq: z.union([z.bigint(), z.number().safe()]), kind: z.string().min(1).max(256), schema: z.number().int().positive(), receivedAt: z.string().datetime({ offset: true }), payload: z.unknown() }).strict(),
   installation: z.object({ id: z.string().min(1).max(128), projectId: z.string().uuid(), pluginId: z.string().min(1).max(128), pluginVersion: z.string().min(1).max(128), config: z.unknown() }).strict(),
   device: z.object({ id: z.string().uuid(), uid: z.string().min(1).max(256), profileId: z.string().min(1).max(128), profileVersion: z.number().int().positive() }).strict(),
 }).strict();

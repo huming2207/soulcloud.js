@@ -427,6 +427,7 @@ export class PluginManager {
         operationToken,
         event: {
           id: event.event_id.trim(),
+          seq: event.seq,
           kind: envelope.kind,
           schema: envelope.schema,
           receivedAt: event.received_at.toISOString(),

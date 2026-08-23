@@ -131,6 +131,7 @@ interface HandleEventInput {
   deadlineMs: number;
   event: {
     id: string;
+    seq: bigint;
     kind: string;
     schema: number;
     receivedAt: string;

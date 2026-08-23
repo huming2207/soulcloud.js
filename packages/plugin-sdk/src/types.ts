@@ -82,6 +82,7 @@ export interface EntityUpdate {
 
 export interface PluginEventInput {
   id: string;
+  seq: bigint;
   kind: string;
   schema: number;
   receivedAt: string;
