@@ -131,15 +131,10 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
           return;
         }
         if (!connection) return;
-        if (hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
-          // Responses to plugin -> manager reverse calls use the reverse
-          // direction prefix even though they arrive on this socket from the
-          // manager. Feed them to the reverse RPC client; the server handler
-          // must not consume them as manager -> plugin requests.
-          connection.bridge.dispatch("message", { data });
-          return;
-        }
-        void connection.handler.message(connection.bridge, data, { context: { isHandshaken: () => ws.data.handshaken, markHandshaken: () => { ws.data.handshaken = true; } } }).catch(() => ws.close(1011, "RPC handler error"));
+        connection.receive(data, {
+          isHandshaken: () => ws.data.handshaken,
+          markHandshaken: () => { ws.data.handshaken = true; },
+        });
       },
       close(ws) { activeConnections = Math.max(0, activeConnections - 1); void ws.data.connection?.close(); ws.data.connection = undefined; },
       drain(ws) { ws.data.connection?.bridge.dispatch("drain", {}); },
@@ -161,12 +156,14 @@ function hasPrefix(data: string | ArrayBuffer | ArrayBufferView, prefix: string)
 interface RuntimeConnection {
   bridge: ReturnType<typeof createBridge>;
   handler: RPCHandler<any>;
+  receive(data: string | ArrayBuffer | ArrayBufferView, context: { isHandshaken: () => boolean; markHandshaken: () => void }): void;
   close(): Promise<void>;
 }
 
 function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeConnection; handshaken: boolean }>, definition: PluginDefinition, manifestHash: string, budget: RpcValueBudget, maxConcurrent: number, log: (message: string, fields?: Record<string, unknown>) => void): RuntimeConnection {
   const bridge = createBridge(ws);
   const reverse = createContractClientFactory(new RPCLink({ connect: () => bridge, encodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX }, decodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX } }))(pluginToManagerContract);
+  let receiveTail = Promise.resolve();
   let running = 0;
   const implemented = implement(managerToPluginContract).$context<{ isHandshaken: () => boolean; markHandshaken: () => void }>();
   const router = {
@@ -254,5 +251,22 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
     },
   };
   const handler = new RPCHandler(router, { encodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX }, decodePeerMessage: { prefix: MANAGER_TO_PLUGIN_PREFIX } });
-  return { bridge, handler, async close() { bridge.close(); await handler.close(bridge); log("plugin connection closed"); } };
+  return {
+    bridge,
+    handler,
+    receive(data, context) {
+      receiveTail = receiveTail.then(async () => {
+        if (hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
+          // Responses to plugin -> manager reverse calls use the reverse
+          // direction prefix even though they arrive on this socket from the
+          // manager. Feed them to the reverse RPC client; the server handler
+          // must not consume them as manager -> plugin requests.
+          bridge.dispatch("message", { data });
+          return;
+        }
+        await handler.message(bridge, data, { context });
+      }).catch(() => ws.close(1011, "RPC handler error"));
+    },
+    async close() { bridge.close(); await handler.close(bridge); log("plugin connection closed"); },
+  };
 }
