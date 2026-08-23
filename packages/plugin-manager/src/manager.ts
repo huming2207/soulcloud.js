@@ -34,6 +34,9 @@ export interface PluginManagerOptions {
   maxFrameBytes: number;
   maxPendingRequests: number;
   maxReverseCallsPerOperation?: number;
+  maxReverseConcurrency?: number;
+  maxReverseConcurrencyPerPlugin?: number;
+  maxReverseConcurrencyPerInstallation?: number;
   backpressureBytes: number;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
@@ -158,6 +161,9 @@ export class PluginManager {
   private readonly catalog = new Map<string, CatalogEntry>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly operations = new Map<string, ActiveOperation>();
+  private reverseInFlight = 0;
+  private readonly reverseInFlightByPlugin = new Map<string, number>();
+  private readonly reverseInFlightByInstallation = new Map<string, number>();
   private readonly circuits = new Map<string, PluginCircuit>();
   private eventTimer: ReturnType<typeof setInterval> | null = null;
   private eventPollRunning: Promise<void> | null = null;
@@ -657,13 +663,28 @@ export class PluginManager {
     }
     if (operation.state !== "active" || performance.now() >= operation.deadline) throw new Error("operation capability is sealed or expired");
     if (operation.reverseCalls >= (this.options.maxReverseCallsPerOperation ?? 64)) throw new Error("operation reverse call limit exceeded");
+    const pluginInFlight = this.reverseInFlightByPlugin.get(operation.pluginId) ?? 0;
+    const installationInFlight = this.reverseInFlightByInstallation.get(operation.installationId) ?? 0;
+    if (
+      this.reverseInFlight >= (this.options.maxReverseConcurrency ?? 256) ||
+      pluginInFlight >= (this.options.maxReverseConcurrencyPerPlugin ?? 64) ||
+      installationInFlight >= (this.options.maxReverseConcurrencyPerInstallation ?? 16)
+    ) {
+      throw new Error("reverse RPC concurrency limit exceeded");
+    }
     operation.reverseCalls += 1;
     operation.inFlightReverseCalls += 1;
+    this.reverseInFlight += 1;
+    this.reverseInFlightByPlugin.set(operation.pluginId, pluginInFlight + 1);
+    this.reverseInFlightByInstallation.set(operation.installationId, installationInFlight + 1);
     return operation;
   }
 
   private releaseOperation(operation: ActiveOperation): void {
     operation.inFlightReverseCalls -= 1;
+    this.reverseInFlight -= 1;
+    decrementCounter(this.reverseInFlightByPlugin, operation.pluginId);
+    decrementCounter(this.reverseInFlightByInstallation, operation.installationId);
     if (operation.inFlightReverseCalls === 0) {
       for (const resolve of operation.reverseSettledWaiters) resolve();
       operation.reverseSettledWaiters.clear();
@@ -815,4 +836,10 @@ export class PluginManager {
 
 function hashOperationToken(token: string): Buffer {
   return createHash("sha256").update(token).digest();
+}
+
+function decrementCounter(counters: Map<string, number>, key: string): void {
+  const next = (counters.get(key) ?? 1) - 1;
+  if (next === 0) counters.delete(key);
+  else counters.set(key, next);
 }
