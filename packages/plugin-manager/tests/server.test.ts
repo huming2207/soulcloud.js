@@ -68,4 +68,14 @@ describe("plugin SSR route", () => {
     expect(response.status).toBe(200);
     expect(submittedAction).toEqual({ enabled: true });
   });
+
+  test("strictly rejects malformed internal lifecycle input", async () => {
+    const response = await fetch(`${server.url}internal/plugins/installations/${installationId}/state`, {
+      method: "POST",
+      headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+      body: JSON.stringify({ state: "enable" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "invalid_request" });
+  });
 });

@@ -1,6 +1,7 @@
 import { PluginManager } from "./manager";
 import { pluginUiSessionCookieName, verifyPluginUiSession } from "@soulcloud/core";
 import { coerceStringActionInput, validateActionInput, type ActionInputSchema, type PluginUiRoute } from "@soulcloud/plugin-sdk";
+import { z, type ZodType } from "zod";
 
 export interface PluginManagerServerOptions { hostname: string; port: number; serviceToken: string; manager: PluginManager; uiSessionSecret?: string; uiSessionTtlSeconds?: number; }
 function json(status: number, value: unknown): Response { return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } }); }
@@ -69,10 +70,35 @@ async function requestJson(request: Request): Promise<unknown> {
 }
 
 function failure(error: unknown): Response {
-  const status = typeof error === "object" && error !== null && "status" in error ? Number((error as { status: unknown }).status) : 500;
+  const explicitStatus = typeof error === "object" && error !== null && "status" in error ? Number((error as { status: unknown }).status) : undefined;
   const message = error instanceof Error ? error.message : "plugin manager operation failed";
-  const mapped = message.startsWith("invalid action input") ? 400 : message.includes("plugin encoder") ? 502 : status;
-  return json(mapped, { error: mapped === 400 ? "invalid_request" : mapped === 502 ? "plugin_action_failed" : "plugin_manager_error", message });
+  const mapped = Number.isInteger(explicitStatus) && explicitStatus! >= 400 && explicitStatus! <= 599
+    ? explicitStatus!
+    : message.startsWith("invalid action input") ? 400
+      : message.includes("plugin encoder") ? 502
+        : message.includes("not found") ? 404
+          : message.includes("disabled") || message.includes("changed concurrently") || message.includes("changed while") ? 409
+            : 500;
+  const publicMessage = mapped >= 500 && mapped !== 502 ? "plugin manager operation failed" : message;
+  return json(mapped, { error: mapped === 400 ? "invalid_request" : mapped === 404 ? "not_found" : mapped === 409 ? "conflict" : mapped === 502 ? "plugin_action_failed" : mapped === 503 ? "plugin_unavailable" : "plugin_manager_error", message: publicMessage });
+}
+
+const createInstallationSchema = z.object({ projectId: z.string().uuid(), pluginId: z.string().min(1).max(128), pluginVersion: z.string().min(1).max(128), manifestHash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown() }).strict();
+const bindingSchema = z.object({ deviceId: z.string().uuid(), profileId: z.string().min(1).max(128), profileVersion: z.number().int().positive() }).strict();
+const stateSchema = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
+const migrateSchema = z.object({ pluginVersion: z.string().min(1).max(128), manifestHash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown() }).strict();
+const encodeActionSchema = z.object({ installationId: z.string().uuid(), deviceId: z.string().uuid(), actionId: z.string().min(1).max(128), input: z.unknown() }).strict();
+
+function parseBody<T>(schema: ZodType<T>, value: unknown): T {
+  const result = schema.safeParse(value);
+  if (!result.success) throw invalidRequest(result.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; "));
+  return result.data;
+}
+
+function parseInstallationId(value: string): string {
+  const result = z.string().uuid().safeParse(value);
+  if (!result.success) throw invalidRequest("installation ID must be a UUID");
+  return result.data;
 }
 
 function renderDocument(html: string, title?: string, status = 200): Response {
@@ -137,36 +163,36 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
       try {
         const body = await requestJson(request) as Record<string, unknown>;
         if (url.pathname === "/internal/plugins/installations") {
-          const installation = await options.manager.createInstallation({
-            projectId: String(body.projectId), pluginId: String(body.pluginId), pluginVersion: String(body.pluginVersion),
-            manifestHash: String(body.manifestHash), config: body.config ?? null,
-          });
+          const input = parseBody(createInstallationSchema, body);
+          const installation = await options.manager.createInstallation(input);
           return json(201, installation);
         }
         const binding = url.pathname.match(/^\/internal\/plugins\/installations\/([^/]+)\/bindings$/);
         if (binding) {
-          await options.manager.bindDevice({ installationId: binding[1]!, deviceId: String(body.deviceId), profileId: String(body.profileId), profileVersion: Number(body.profileVersion) });
+          const input = parseBody(bindingSchema, body);
+          await options.manager.bindDevice({ installationId: parseInstallationId(binding[1]!), ...input });
           return new Response(null, { status: 204 });
         }
         const state = url.pathname.match(/^\/internal\/plugins\/installations\/([^/]+)\/state$/);
         if (state) {
-          await options.manager.setInstallationState(state[1]!, body.state === "disabled" ? "disabled" : "enabled");
+          const input = parseBody(stateSchema, body);
+          await options.manager.setInstallationState(parseInstallationId(state[1]!), input.state);
           return new Response(null, { status: 204 });
         }
         const reconcile = url.pathname.match(/^\/internal\/plugins\/installations\/([^/]+)\/reconcile$/);
         if (reconcile) {
-          await options.manager.reconcileInstallation(reconcile[1]!);
+          await options.manager.reconcileInstallation(parseInstallationId(reconcile[1]!));
           return new Response(null, { status: 204 });
         }
         const migrate = url.pathname.match(/^\/internal\/plugins\/installations\/([^/]+)\/migrate$/);
         if (migrate) {
-          await options.manager.migrateInstallation(migrate[1]!, String(body.pluginVersion), String(body.manifestHash), body.config ?? null);
+          const input = parseBody(migrateSchema, body);
+          await options.manager.migrateInstallation(parseInstallationId(migrate[1]!), input.pluginVersion, input.manifestHash, input.config);
           return new Response(null, { status: 204 });
         }
         if (url.pathname === "/internal/plugins/actions/encode") {
-          return json(200, await options.manager.encodeAction({
-            installationId: String(body.installationId), deviceId: String(body.deviceId), actionId: String(body.actionId), actionInput: body.input ?? null,
-          }));
+          const input = parseBody(encodeActionSchema, body);
+          return json(200, await options.manager.encodeAction({ installationId: input.installationId, deviceId: input.deviceId, actionId: input.actionId, actionInput: input.input }));
         }
       } catch (error) { return failure(error); }
       return json(404, { error: "not_found" });
