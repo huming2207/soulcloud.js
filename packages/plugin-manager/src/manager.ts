@@ -4,7 +4,7 @@ import {
   completePluginEvent,
   completePluginEventWithUpdates,
   decodeDeviceEvent,
-  enqueueBatch,
+  enqueueBatchInTransaction,
   getPluginEntityState,
   bindDeviceToPluginInstallation,
   createPluginInstallation,
@@ -249,8 +249,6 @@ export class PluginManager {
       if (!encoded || encoded.command !== action.wire.command || encoded.schemaVersion !== action.wire.schemaVersion || !Array.isArray(encoded.args)) {
         throw new Error("plugin encoder output invalid: command, schemaVersion or args are malformed");
       }
-      const binding = await this.options.prisma.pluginDeviceBinding.findUnique({ where: { deviceId: input.deviceId }, select: { installationId: true } });
-      if (!binding || binding.installationId !== installation.id) throw new Error("device is not bound to the plugin installation");
       const args: CommandArgument[] = [];
       for (const argument of encoded.args) {
         if (!argument || typeof argument !== "object" || typeof argument.name !== "string" || !argument.name || !Object.prototype.hasOwnProperty.call(argument, "value")) {
@@ -259,7 +257,22 @@ export class PluginManager {
         const value = argument.value instanceof Blob ? new Uint8Array(await argument.value.arrayBuffer()) : argument.value;
         args.push({ [argument.name]: value as CommandArgument[string] });
       }
-      const batch = await enqueueBatch(this.options.prisma, [input.deviceId], { cmd: encoded.command, args });
+      const batch = await this.options.prisma.$transaction(async (tx) => {
+        const installationRows = await tx.$queryRaw<Array<{ id: string; project_id: string; plugin_id: string; plugin_version: string; manifest_hash: string; state: string }>>`
+          SELECT id, project_id, plugin_id, plugin_version, manifest_hash, state
+          FROM plugin_installations
+          WHERE id = ${installation.id}::uuid
+          FOR UPDATE
+        `;
+        const lockedInstallation = installationRows[0];
+        if (!lockedInstallation || lockedInstallation.state !== "enabled" || lockedInstallation.plugin_id !== installation.pluginId || lockedInstallation.plugin_version !== installation.pluginVersion || lockedInstallation.manifest_hash.trim() !== installation.manifestHash.trim()) {
+          throw new Error("plugin installation changed while encoding action");
+        }
+        await tx.$queryRaw`SELECT id FROM devices WHERE id = ${input.deviceId}::uuid FOR UPDATE`;
+        const binding = await tx.pluginDeviceBinding.findUnique({ where: { deviceId: input.deviceId }, select: { installationId: true } });
+        if (!binding || binding.installationId !== installation.id) throw new Error("device is not bound to the plugin installation");
+        return enqueueBatchInTransaction(tx, [input.deviceId], { cmd: encoded.command, args });
+      });
       return { batchId: batch.id, deviceCount: batch.deviceCount };
     } finally {
       this.operations.delete(operationId);
