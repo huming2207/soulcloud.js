@@ -84,7 +84,7 @@ export interface CatalogEntry {
 export interface ManifestStore {
   list(): Promise<Array<{ pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest }>>;
   get(pluginId: string, pluginVersion: string): Promise<{ manifestHash: string; manifest: PluginManifest } | null>;
-  insert(snapshot: { pluginId: string; pluginVersion: string; manifestHash: string; apiVersion: number; manifest: PluginManifest }): Promise<void>;
+  insert(snapshot: { pluginId: string; pluginVersion: string; manifestHash: string; apiVersion: number; manifest: PluginManifest }): Promise<{ manifestHash: string; manifest: PluginManifest }>;
 }
 
 /** PostgreSQL is the durable source of truth; no manifest is compiled here. */
@@ -92,21 +92,26 @@ export class PrismaManifestStore implements ManifestStore {
   constructor(private readonly prisma: PrismaClient) {}
   async list() {
     const rows = await this.prisma.pluginManifestSnapshot.findMany({ orderBy: [{ pluginId: "asc" }, { firstSeenAt: "desc" }] });
-    return rows.map((row) => ({ pluginId: row.pluginId, pluginVersion: row.pluginVersion, manifestHash: row.manifestHash.trim(), manifest: row.canonicalManifest as unknown as PluginManifest }));
+    return rows.map((row) => ({ pluginId: row.pluginId, pluginVersion: row.pluginVersion, manifestHash: row.manifestHash.trim(), manifest: validateManifest(row.canonicalManifest) }));
   }
   async get(pluginId: string, pluginVersion: string) {
     const row = await this.prisma.pluginManifestSnapshot.findUnique({ where: { pluginId_pluginVersion: { pluginId, pluginVersion } } });
-    return row ? { manifestHash: row.manifestHash.trim(), manifest: row.canonicalManifest as unknown as PluginManifest } : null;
+    return row ? { manifestHash: row.manifestHash.trim(), manifest: validateManifest(row.canonicalManifest) } : null;
   }
-  async insert(snapshot: { pluginId: string; pluginVersion: string; manifestHash: string; apiVersion: number; manifest: PluginManifest }): Promise<void> {
+  async insert(snapshot: { pluginId: string; pluginVersion: string; manifestHash: string; apiVersion: number; manifest: PluginManifest }): Promise<{ manifestHash: string; manifest: PluginManifest }> {
     try {
       await this.prisma.pluginManifestSnapshot.create({ data: { pluginId: snapshot.pluginId, pluginVersion: snapshot.pluginVersion, manifestHash: snapshot.manifestHash, canonicalManifest: snapshot.manifest as unknown as Prisma.InputJsonValue, apiVersion: snapshot.apiVersion } });
     } catch (error) {
-      // A concurrent Manager may have inserted the same version. The caller
-      // re-reads it and rejects a hash mismatch; never overwrite a snapshot.
-      if (!(error instanceof Error) || !error.message.includes("Unique constraint")) throw error;
+      if (!isPrismaUniqueViolation(error)) throw error;
     }
+    const persisted = await this.get(snapshot.pluginId, snapshot.pluginVersion);
+    if (!persisted) throw new Error("plugin manifest snapshot disappeared after insert");
+    return persisted;
   }
+}
+
+function isPrismaUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === "P2002";
 }
 
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
@@ -148,7 +153,14 @@ export class PluginManager {
 
   async start(): Promise<void> {
     if (this.options.manifestStore) {
-      for (const entry of await this.options.manifestStore.list()) this.catalog.set(`${entry.pluginId}@${entry.pluginVersion}`, { ...entry, connected: false });
+      for (const entry of await this.options.manifestStore.list()) {
+        const manifest = validateManifest(entry.manifest);
+        const computed = await sha256Hex(canonicalJson(manifest));
+        if (manifest.id !== entry.pluginId || manifest.version !== entry.pluginVersion || computed !== entry.manifestHash) {
+          throw new Error(`stored plugin manifest snapshot is invalid for ${entry.pluginId}@${entry.pluginVersion}`);
+        }
+        this.catalog.set(`${entry.pluginId}@${entry.pluginVersion}`, { ...entry, manifest, connected: false });
+      }
     }
     for (const [pluginId] of this.options.endpoints) void this.connect(pluginId);
     if (this.options.eventStore) {
@@ -359,7 +371,10 @@ export class PluginManager {
         ? await this.options.manifestStore.get(manifest.id, manifest.version)
         : this.catalog.get(`${manifest.id}@${manifest.version}`);
       if (previous && previous.manifestHash !== computed) throw new Error(`manifest drift for ${manifest.id}@${manifest.version}`);
-      if (!previous && this.options.manifestStore) await this.options.manifestStore.insert({ pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: computed, apiVersion: manifest.apiVersion, manifest });
+      if (!previous && this.options.manifestStore) {
+        const persisted = await this.options.manifestStore.insert({ pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: computed, apiVersion: manifest.apiVersion, manifest });
+        if (persisted.manifestHash !== computed) throw new Error(`manifest drift for ${manifest.id}@${manifest.version}`);
+      }
       this.catalog.set(`${manifest.id}@${manifest.version}`, { pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: computed, manifest, connected: true });
       this.log("plugin connected", { pluginId, version: manifest.version, manifestHash: computed });
     } catch (error) {
