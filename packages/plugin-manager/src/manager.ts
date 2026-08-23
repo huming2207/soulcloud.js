@@ -749,7 +749,7 @@ export class PluginManager {
       }
       if (store.completeWithUpdates) {
         const operation = activeOperationId ? this.operations.get(activeOperationId) : undefined;
-        await store.completeWithUpdates(event.id, event.lease_token, {
+        const completed = await store.completeWithUpdates(event.id, event.lease_token, {
           installationId: event.installation_id,
           deviceId: event.device_id,
           pluginId: event.plugin_id,
@@ -761,10 +761,17 @@ export class PluginManager {
           updates,
           commands: operation?.stagedCommands,
         });
+        if (!completed) {
+          this.log("event completion skipped after lease loss", { eventId: event.id });
+          return;
+        }
       } else {
         const operation = activeOperationId ? this.operations.get(activeOperationId) : undefined;
         if (operation?.stagedCommands?.length) throw new Error("event command intents require transactional completion");
-        await store.complete(event.id, event.lease_token);
+        if (!(await store.complete(event.id, event.lease_token))) {
+          this.log("event completion skipped after lease loss", { eventId: event.id });
+          return;
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -773,7 +780,10 @@ export class PluginManager {
         : "";
       const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT" || code === "MANAGER_DATA_CORRUPTION" || /INVALID_(EVENT_INPUT|PLUGIN_OUTPUT)/.test(message);
       const managerDeferral = code === "MANAGER_OVERLOADED" || code === "MANAGER_STATE_UNAVAILABLE";
-      const consumeAttempt = permanent || (!pluginCallCompleted && !managerDeferral);
+      // Manager-capacity/catalog deferrals are not delivery attempts. A
+      // failed database commit after a valid plugin response still needs a
+      // finite retry budget, but it must not count against plugin health.
+      const consumeAttempt = permanent || !managerDeferral;
       const attemptsExhausted = !permanent && consumeAttempt && event.attempt_count >= (this.options.eventMaxAttempts ?? 5);
       if (!permanent && !pluginCallCompleted && !managerDeferral) this.circuitFailure(circuitKey);
       else this.circuitReleaseProbe(circuitKey);
