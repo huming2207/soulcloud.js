@@ -163,7 +163,7 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
       message(ws, message) {
         const connection = ws.data.connection;
         const data = message instanceof ArrayBuffer ? message : typeof message === "string" ? message : message instanceof Uint8Array ? message : new Uint8Array(message as ArrayBuffer);
-        const bytes = typeof data === "string" ? new TextEncoder().encode(data).byteLength : data.byteLength;
+        const bytes = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
         if (bytes > maxFrameBytes) { ws.close(1009, "RPC frame too large"); return; }
         if (!hasRpcPrefix(data, MANAGER_TO_PLUGIN_PREFIX) && !hasRpcPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
           ws.close(1002, "invalid RPC prefix");

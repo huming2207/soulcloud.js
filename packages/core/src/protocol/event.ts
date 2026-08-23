@@ -36,7 +36,7 @@ export const DeviceEventEnvelopeSchema = z
     kind: z
       .string()
       .min(1)
-      .refine((value) => new TextEncoder().encode(value).byteLength <= MAX_EVENT_KIND_BYTES, {
+      .refine((value) => Buffer.byteLength(value) <= MAX_EVENT_KIND_BYTES, {
         message: `event kind must be at most ${MAX_EVENT_KIND_BYTES} UTF-8 bytes`,
       }),
     schema: z.number().int().positive().max(MAX_EVENT_SCHEMA),

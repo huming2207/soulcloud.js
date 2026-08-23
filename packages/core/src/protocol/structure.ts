@@ -17,6 +17,7 @@
 /** Maximum nesting depth accepted (guards against stack overflow from
  * deeply nested arrays/maps; 512 is far beyond any legitimate payload). */
 export const MAX_STRUCTURE_DEPTH = 512;
+const textDecoder = new TextDecoder();
 
 export class MessagePackStructureError extends Error {
   constructor(message: string) {
@@ -320,7 +321,7 @@ function decodeStringKey(buf: Uint8Array, start: number, end: number): string {
   if (strStart + strLen !== end) {
     throw new MessagePackStructureError("malformed MessagePack map key");
   }
-  return new TextDecoder().decode(buf.subarray(strStart, strStart + strLen));
+  return textDecoder.decode(buf.subarray(strStart, strStart + strLen));
 }
 
 function readU8(reader: Reader): number {

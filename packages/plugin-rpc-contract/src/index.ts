@@ -137,7 +137,7 @@ export function assertRpcValueBudget(value: unknown, budget: RpcValueBudget): vo
   const visit = (current: unknown, depth: number): void => {
     nodes += 1; if (nodes > budget.maxNodes) throw new Error("RPC value node limit exceeded");
     if (depth > budget.maxDepth) throw new Error("RPC value depth limit exceeded");
-    if (typeof current === "string") { strings += new TextEncoder().encode(current).byteLength; if (strings > budget.maxStringBytes) throw new Error("RPC string byte limit exceeded"); return; }
+    if (typeof current === "string") { strings += encoder.encode(current).byteLength; if (strings > budget.maxStringBytes) throw new Error("RPC string byte limit exceeded"); return; }
     if (current instanceof Blob) { blobs += 1; totalBlobBytes += current.size; if (blobs > budget.maxBlobs || current.size > budget.maxBlobBytes || totalBlobBytes > budget.maxTotalBlobBytes) throw new Error("RPC Blob limit exceeded"); return; }
     if (current instanceof ArrayBuffer || ArrayBuffer.isView(current)) {
       const byteLength = current instanceof ArrayBuffer ? current.byteLength : current.byteLength;
@@ -170,6 +170,6 @@ export function canonicalJson(value: unknown): string {
 }
 
 export async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

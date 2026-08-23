@@ -142,7 +142,7 @@ export class PluginConnection {
       ? new Uint8Array(await received.arrayBuffer())
       : received as string | ArrayBuffer | ArrayBufferView;
     const bytes = typeof data === "string"
-      ? new TextEncoder().encode(data).byteLength
+      ? Buffer.byteLength(data)
       : data instanceof ArrayBuffer ? data.byteLength : data.byteLength;
     if (bytes > this.options.maxFrameBytes) { socket.close(1009, "RPC frame too large"); return; }
     if (hasRpcPrefix(data, MANAGER_TO_PLUGIN_PREFIX)) {
