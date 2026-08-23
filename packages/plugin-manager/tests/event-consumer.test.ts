@@ -122,3 +122,42 @@ describe("plugin event consumer", () => {
     expect(dispatched).toEqual(["first-a", "first-b", "second-a"]);
   });
 });
+
+describe("plugin data retention", () => {
+  test("catches up in bounded batches and does not overlap sweeps", async () => {
+    let purgeCalls = 0;
+    const store: PluginEventStore = {
+      lease: async () => [],
+      complete: async () => true,
+      release: async () => true,
+      purge: async (_eventDays, _historyDays, batchSize) => {
+        purgeCalls += 1;
+        return purgeCalls === 1 ? { events: batchSize, history: 0 } : { events: 0, history: 0 };
+      },
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "x".repeat(32),
+      maxFrameBytes: 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024,
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      eventStore: store,
+      retentionBatchSize: 2,
+      retentionMaxBatches: 4,
+      log: () => undefined,
+    });
+    const internals = manager as unknown as {
+      maintain(): void;
+      maintenanceRunning: Promise<void> | null;
+    };
+
+    internals.maintain();
+    const running = internals.maintenanceRunning;
+    internals.maintain();
+    await running;
+    expect(purgeCalls).toBe(2);
+  });
+});

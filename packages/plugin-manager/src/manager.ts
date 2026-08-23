@@ -54,6 +54,8 @@ export interface PluginManagerOptions {
   eventRetentionDays?: number;
   historyRetentionDays?: number;
   maintenanceIntervalMs?: number;
+  retentionBatchSize?: number;
+  retentionMaxBatches?: number;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -63,7 +65,7 @@ export interface PluginEventStore {
   completeWithUpdates?(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[]; commands?: readonly { deviceId: string; command: DeviceCommand }[] }): Promise<boolean>;
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number): Promise<boolean>;
   renew?(leases: readonly { id: string; leaseToken: string }[], leaseMs: number): Promise<number>;
-  purge?(eventRetentionDays: number, historyRetentionDays: number): Promise<{ events: number; history: number }>;
+  purge?(eventRetentionDays: number, historyRetentionDays: number, batchSize: number): Promise<{ events: number; history: number }>;
 }
 
 export class PrismaPluginEventStore implements PluginEventStore {
@@ -77,7 +79,7 @@ export class PrismaPluginEventStore implements PluginEventStore {
     return releasePluginEvent(this.prisma, eventId, leaseToken, permanent, error, retryMs);
   }
   renew(leases: readonly { id: string; leaseToken: string }[], leaseMs: number) { return renewPluginEventLeases(this.prisma, leases, leaseMs); }
-  purge(eventRetentionDays: number, historyRetentionDays: number) { return purgePluginData(this.prisma, eventRetentionDays, historyRetentionDays); }
+  purge(eventRetentionDays: number, historyRetentionDays: number, batchSize: number) { return purgePluginData(this.prisma, eventRetentionDays, historyRetentionDays, batchSize); }
 }
 
 export interface CatalogEntry {
@@ -156,6 +158,7 @@ export class PluginManager {
   private eventTimer: ReturnType<typeof setInterval> | null = null;
   private eventPollRunning: Promise<void> | null = null;
   private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
+  private maintenanceRunning: Promise<void> | null = null;
   private stopping = false;
   private readonly log: (message: string, fields?: Record<string, unknown>) => void;
 
@@ -182,17 +185,38 @@ export class PluginManager {
       this.consumeEvents();
       if (this.options.eventStore.purge) {
         const interval = this.options.maintenanceIntervalMs ?? 3_600_000;
-        this.maintenanceTimer = setInterval(() => void this.runMaintenance(), interval);
+        this.maintenanceTimer = setInterval(() => this.maintain(), interval);
         this.maintenanceTimer.unref?.();
       }
     }
   }
 
+  private maintain(): void {
+    if (this.stopping || this.maintenanceRunning || !this.options.eventStore?.purge) return;
+    const running = this.runMaintenance();
+    this.maintenanceRunning = running;
+    void running.finally(() => {
+      if (this.maintenanceRunning === running) this.maintenanceRunning = null;
+    });
+  }
+
   private async runMaintenance(): Promise<void> {
-    if (this.stopping || !this.options.eventStore?.purge) return;
+    const batchSize = this.options.retentionBatchSize ?? 2_000;
+    const maxBatches = this.options.retentionMaxBatches ?? 8;
+    let events = 0;
+    let history = 0;
     try {
-      const result = await this.options.eventStore.purge(this.options.eventRetentionDays ?? 30, this.options.historyRetentionDays ?? 30);
-      this.log("plugin retention sweep completed", result);
+      for (let batch = 0; batch < maxBatches && !this.stopping; batch += 1) {
+        const result = await this.options.eventStore!.purge!(
+          this.options.eventRetentionDays ?? 30,
+          this.options.historyRetentionDays ?? 30,
+          batchSize,
+        );
+        events += result.events;
+        history += result.history;
+        if (result.events < batchSize && result.history < batchSize) break;
+      }
+      this.log("plugin retention sweep completed", { events, history });
     } catch (error) {
       this.log("plugin retention sweep failed", { error: (error as Error).message });
     }
@@ -772,6 +796,7 @@ export class PluginManager {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     if (this.eventPollRunning) await this.eventPollRunning;
+    if (this.maintenanceRunning) await this.maintenanceRunning;
     for (const connection of this.connections.values()) connection.close();
     this.connections.clear();
   }
