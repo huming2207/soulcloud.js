@@ -53,7 +53,9 @@ export async function ingestDeviceEvent(
   payload: Uint8Array,
 ): Promise<DeviceEventIngestResult> {
   const eventId = bytesToHex(envelope.id);
-  const storedPayload = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+  const storedPayload: Uint8Array<ArrayBuffer> = payload.buffer instanceof ArrayBuffer
+    ? new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
+    : Uint8Array.from(payload);
   return prisma.$transaction(async (tx) => {
     const device = await tx.device.findUnique({
       where: { deviceUid },
