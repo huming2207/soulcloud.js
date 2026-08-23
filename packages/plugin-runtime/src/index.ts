@@ -19,6 +19,6 @@ const runtime = await startPluginRuntime(definition, {
 });
 console.log(`[soulcloud-plugin] ready id=${runtime.manifest.id} version=${runtime.manifest.version} url=${runtime.url}`);
 let stopping = false;
-async function shutdown(signal: string) { if (stopping) return; stopping = true; console.log(`[soulcloud-plugin] ${signal}`); runtime.close(); process.exit(0); }
+async function shutdown(signal: string) { if (stopping) return; stopping = true; console.log(`[soulcloud-plugin] ${signal}`); await runtime.close(); process.exit(0); }
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));

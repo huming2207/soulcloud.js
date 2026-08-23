@@ -84,7 +84,7 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }
 
-export function startPluginManagerServer(options: PluginManagerServerOptions): { url: string; stop(): void } {
+export function startPluginManagerServer(options: PluginManagerServerOptions): { url: string; stop(): Promise<void> } {
   const server = Bun.serve({
     hostname: options.hostname,
     port: options.port,
@@ -92,7 +92,9 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
     async fetch(request) {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health/live") return json(200, { status: "ok" });
-      if (request.method === "GET" && url.pathname === "/health/ready") return json(200, { status: "ready" });
+      if (request.method === "GET" && url.pathname === "/health/ready") {
+        return await options.manager.ready() ? json(200, { status: "ready" }) : json(503, { status: "not_ready" });
+      }
       if (url.pathname.startsWith("/plugins/")) {
         if (!options.uiSessionSecret) return json(503, { error: "plugin_ui_unavailable" });
         const installationId = url.pathname.split("/")[2] ?? "";
@@ -170,5 +172,5 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
       return json(404, { error: "not_found" });
     },
   });
-  return { url: server.url.toString(), stop: () => server.stop(true) };
+  return { url: server.url.toString(), stop: async () => { await server.stop(true); } };
 }

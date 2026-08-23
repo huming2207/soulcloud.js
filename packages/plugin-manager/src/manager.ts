@@ -149,7 +149,7 @@ export class PluginManager {
   private readonly operations = new Map<string, ActiveOperation>();
   private readonly circuits = new Map<string, PluginCircuit>();
   private eventTimer: ReturnType<typeof setInterval> | null = null;
-  private eventPollRunning = false;
+  private eventPollRunning: Promise<void> | null = null;
   private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   private stopping = false;
   private readonly log: (message: string, fields?: Record<string, unknown>) => void;
@@ -172,9 +172,9 @@ export class PluginManager {
     for (const [pluginId] of this.options.endpoints) void this.connect(pluginId);
     if (this.options.eventStore) {
       const interval = this.options.eventPollIntervalMs ?? 500;
-      this.eventTimer = setInterval(() => void this.consumeEvents(), interval);
+      this.eventTimer = setInterval(() => this.consumeEvents(), interval);
       this.eventTimer.unref?.();
-      void this.consumeEvents();
+      this.consumeEvents();
       if (this.options.eventStore.purge) {
         const interval = this.options.maintenanceIntervalMs ?? 3_600_000;
         this.maintenanceTimer = setInterval(() => void this.runMaintenance(), interval);
@@ -419,19 +419,27 @@ export class PluginManager {
     timer.unref?.(); this.timers.set(pluginId, timer);
   }
 
-  private async consumeEvents(): Promise<void> {
+  private consumeEvents(): void {
     if (this.stopping || this.eventPollRunning || !this.options.eventStore) return;
-    this.eventPollRunning = true;
+    const running = this.consumeEventBatch();
+    this.eventPollRunning = running;
+    void running.finally(() => {
+      if (this.eventPollRunning === running) this.eventPollRunning = null;
+    });
+  }
+
+  private async consumeEventBatch(): Promise<void> {
     try {
       const events = await this.options.eventStore.lease(
         this.options.eventBatchSize ?? 32,
         this.options.eventLeaseMs ?? 60_000,
       );
-      for (const event of events) await this.dispatchEvent(event);
+      for (const event of events) {
+        if (this.stopping) await this.releaseEvent(event, false, "plugin manager is shutting down");
+        else await this.dispatchEvent(event);
+      }
     } catch (error) {
       this.log("event poll failed", { error: (error as Error).message });
-    } finally {
-      this.eventPollRunning = false;
     }
   }
 
@@ -676,6 +684,16 @@ export class PluginManager {
   getConnection(pluginId: string): PluginConnection | undefined { return this.connections.get(pluginId); }
   getManifest(pluginId: string, version: string): PluginManifest | undefined { return this.catalog.get(`${pluginId}@${version}`)?.manifest; }
 
+  async ready(): Promise<boolean> {
+    if (!this.options.prisma) return false;
+    try {
+      await this.options.prisma.$queryRaw`SELECT 1`;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private requireConnectedManifest(pluginId: string, pluginVersion: string, manifestHash: string): { entry: CatalogEntry; connection: PluginConnection } {
     const entry = this.catalog.get(`${pluginId}@${pluginVersion}`);
     if (!entry || entry.manifestHash !== manifestHash) throw Object.assign(new Error("plugin manifest is not deployed"), { status: 404 });
@@ -695,6 +713,7 @@ export class PluginManager {
     this.maintenanceTimer = null;
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+    if (this.eventPollRunning) await this.eventPollRunning;
     for (const connection of this.connections.values()) connection.close();
     this.connections.clear();
   }

@@ -26,6 +26,7 @@ const manifest: PluginManifest = {
 let renderedParams: unknown;
 let submittedAction: unknown;
 const manager = {
+  ready: async () => true,
   getManifest: () => manifest,
   renderPluginUi: async (_session: unknown, _requestId: string, params: unknown) => {
     renderedParams = params;
@@ -43,7 +44,7 @@ const token = signPluginUiSession({ secret, ttlSeconds: 300 }, {
 });
 const cookie = `${pluginUiSessionCookieName(installationId)}=${token}`;
 
-afterAll(() => server.stop());
+afterAll(async () => { await server.stop(); });
 
 describe("plugin SSR route", () => {
   test("requires the path-scoped UI session cookie", async () => {

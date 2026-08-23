@@ -51,7 +51,7 @@ export interface PluginRuntimeHandle {
   manifest: PluginManifest;
   manifestHash: string;
   url: string;
-  close(): void;
+  close(): Promise<void>;
 }
 
 function json(status: number, value: unknown): Response {
@@ -144,7 +144,7 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
     },
   });
   log("plugin listening", { url: server.url.toString(), version: manifest.version, manifestHash });
-  return { manifest, manifestHash, url: server.url.toString().replace(/\/$/, ""), close: () => server.stop(true) };
+  return { manifest, manifestHash, url: server.url.toString().replace(/\/$/, ""), close: async () => { await server.stop(true); } };
 }
 
 function hasPrefix(data: string | ArrayBuffer | ArrayBufferView, prefix: string): boolean {
