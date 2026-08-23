@@ -12,6 +12,7 @@ const manager = new PluginManager({
   authToken: config.PLUGIN_RPC_AUTH_TOKEN,
   maxFrameBytes: config.PLUGIN_RPC_MAX_FRAME_BYTES,
   maxPendingRequests: config.PLUGIN_RPC_MAX_PENDING_REQUESTS,
+  maxReverseCallsPerOperation: config.PLUGIN_RPC_MAX_REVERSE_CALLS,
   backpressureBytes: config.PLUGIN_RPC_BACKPRESSURE_BYTES,
   heartbeatIntervalMs: config.PLUGIN_RPC_HEARTBEAT_INTERVAL_MS,
   heartbeatTimeoutMs: config.PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS,

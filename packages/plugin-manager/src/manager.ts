@@ -25,12 +25,14 @@ import {
   type PrismaClient,
 } from "@soulcloud/core";
 import { PluginConnection, type PluginConnectionOptions, type ReverseHandlers } from "./connection";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 export interface PluginManagerOptions {
   endpoints: ReadonlyMap<string, string>;
   authToken: string;
   maxFrameBytes: number;
   maxPendingRequests: number;
+  maxReverseCallsPerOperation?: number;
   backpressureBytes: number;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
@@ -117,7 +119,7 @@ function isPrismaUniqueViolation(error: unknown): boolean {
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
 
 interface ActiveOperation {
-  operationToken: string;
+  operationTokenHash: Buffer;
   connectionId: string;
   installationId: string;
   projectId: string;
@@ -127,6 +129,11 @@ interface ActiveOperation {
   profileId?: string;
   profileVersion?: number;
   stagedCommands?: Array<{ deviceId: string; command: DeviceCommand }>;
+  deadline: number;
+  state: "active" | "sealed";
+  reverseCalls: number;
+  inFlightReverseCalls: number;
+  reverseSettledWaiters: Set<() => void>;
 }
 
 interface PluginCircuit {
@@ -236,13 +243,18 @@ export class PluginManager {
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
     this.operations.set(operationId, {
-      operationToken,
+      operationTokenHash: hashOperationToken(operationToken),
       connectionId: connection.id,
       installationId: installation.id,
       projectId: installation.projectId,
       pluginId: installation.pluginId,
       pluginVersion: installation.pluginVersion,
       deviceId: input.deviceId,
+      deadline: performance.now() + (input.timeoutMs ?? 30_000),
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      reverseSettledWaiters: new Set(),
     });
     try {
       let encoded: { command: string; args: Array<{ name: string; value: unknown }>; schemaVersion: number };
@@ -253,6 +265,7 @@ export class PluginManager {
           actionId: input.actionId,
           input: input.actionInput,
         }, input.timeoutMs ?? 30_000) as { command: string; args: Array<{ name: string; value: unknown }>; schemaVersion: number };
+        await this.sealOperation(operationId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (/INVALID_PLUGIN_OUTPUT|plugin encoder/i.test(message)) throw new Error(`plugin encoder output invalid: ${message}`);
@@ -309,9 +322,21 @@ export class PluginManager {
     if (!connection?.isOpen) throw new Error("plugin is unavailable");
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-    this.operations.set(operationId, { operationToken, connectionId: connection.id, installationId: session.installationId, projectId: session.projectId, pluginId: session.pluginId, pluginVersion: session.pluginVersion });
+    this.operations.set(operationId, {
+      operationTokenHash: hashOperationToken(operationToken),
+      connectionId: connection.id,
+      installationId: session.installationId,
+      projectId: session.projectId,
+      pluginId: session.pluginId,
+      pluginVersion: session.pluginVersion,
+      deadline: performance.now() + 30_000,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      reverseSettledWaiters: new Set(),
+    });
     try {
-      return await connection.request(method, {
+      const result = await connection.request(method, {
         operationId,
         operationToken,
         requestId: input.requestId,
@@ -322,6 +347,8 @@ export class PluginManager {
         params: input.params,
         ...(method === "ui.handleAction" ? { action: input.action } : {}),
       }, 30_000);
+      await this.sealOperation(operationId);
+      return result;
     } finally {
       this.operations.delete(operationId);
     }
@@ -440,7 +467,7 @@ export class PluginManager {
       activeOperationId = operationId;
       const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
       this.operations.set(operationId, {
-        operationToken,
+        operationTokenHash: hashOperationToken(operationToken),
         connectionId: connection.id,
         installationId: event.installation_id,
         projectId: event.project_id,
@@ -449,6 +476,11 @@ export class PluginManager {
         deviceId: event.device_id,
         profileId: event.profile_id,
         profileVersion: event.profile_version,
+        deadline: performance.now() + (this.options.eventTimeoutMs ?? 30_000),
+        state: "active",
+        reverseCalls: 0,
+        inFlightReverseCalls: 0,
+        reverseSettledWaiters: new Set(),
       });
       const result = await connection.request("plugin.handleEvent", {
         operationId,
@@ -475,6 +507,7 @@ export class PluginManager {
           profileVersion: event.profile_version,
         },
       }, this.options.eventTimeoutMs ?? 30_000);
+      await this.sealOperation(operationId);
       const output = result as { updates?: readonly EntityUpdateInput[]; logs?: readonly { level: string; message: string }[] };
       for (const entry of output.logs ?? []) {
         this.log("plugin event log", { pluginId: event.plugin_id, eventId: event.event_id.trim(), level: entry.level, message: entry.message });
@@ -511,45 +544,86 @@ export class PluginManager {
     }
   }
 
-  private operationFor(input: { operationId: string; operationToken: string }, connectionId: string): ActiveOperation {
+  private acquireOperation(input: { operationId: string; operationToken: string }, connectionId: string): ActiveOperation {
     const operation = this.operations.get(input.operationId);
-    if (!operation || operation.connectionId !== connectionId || operation.operationToken !== input.operationToken) {
+    const suppliedHash = hashOperationToken(input.operationToken);
+    if (!operation || operation.connectionId !== connectionId || !timingSafeEqual(operation.operationTokenHash, suppliedHash)) {
       throw new Error("operation capability is invalid or expired");
     }
+    if (operation.state !== "active" || performance.now() >= operation.deadline) throw new Error("operation capability is sealed or expired");
+    if (operation.reverseCalls >= (this.options.maxReverseCallsPerOperation ?? 64)) throw new Error("operation reverse call limit exceeded");
+    operation.reverseCalls += 1;
+    operation.inFlightReverseCalls += 1;
     return operation;
+  }
+
+  private releaseOperation(operation: ActiveOperation): void {
+    operation.inFlightReverseCalls -= 1;
+    if (operation.inFlightReverseCalls === 0) {
+      for (const resolve of operation.reverseSettledWaiters) resolve();
+      operation.reverseSettledWaiters.clear();
+    }
+  }
+
+  private async sealOperation(operationId: string): Promise<void> {
+    const operation = this.operations.get(operationId);
+    if (!operation) throw new Error("operation connection closed before completion");
+    operation.state = "sealed";
+    if (operation.inFlightReverseCalls === 0) return;
+    const remaining = Math.min(250, Math.max(0, operation.deadline - performance.now()));
+    if (remaining === 0) throw new Error("operation expired while reverse calls were active");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => operation.reverseSettledWaiters.add(resolve)),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("operation reverse calls did not settle during cleanup grace")), remaining);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async reverseEntityGet(input: EntityGetInput, signal: AbortSignal, connectionId: string) {
     if (signal.aborted) throw new Error("operation aborted");
-    const operation = this.operationFor(input, connectionId);
-    if (!operation.deviceId) throw new Error("entity read requires a device scope");
-    if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
-    return getPluginEntityState(this.options.prisma, operation.installationId, operation.deviceId, input.entityKey);
+    const operation = this.acquireOperation(input, connectionId);
+    try {
+      if (!operation.deviceId) throw new Error("entity read requires a device scope");
+      if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
+      return await getPluginEntityState(this.options.prisma, operation.installationId, operation.deviceId, input.entityKey);
+    } finally {
+      this.releaseOperation(operation);
+    }
   }
 
   private async reverseCommandEnqueue(input: CommandEnqueueInput, signal: AbortSignal, connectionId: string): Promise<{ accepted: true }> {
     if (signal.aborted) throw new Error("operation aborted");
-    const operation = this.operationFor(input, connectionId);
-    if (!operation.deviceId) throw new Error("command enqueue requires a device scope");
-    if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
-    const binding = await this.options.prisma.pluginDeviceBinding.findUnique({
-      where: { deviceId: operation.deviceId },
-      select: { installationId: true, installation: { select: { state: true, projectId: true } } },
-    });
-    if (!binding || binding.installationId !== operation.installationId || binding.installation.projectId !== operation.projectId || binding.installation.state !== "enabled") {
-      throw new Error("device is not bound to the active plugin installation");
+    const operation = this.acquireOperation(input, connectionId);
+    try {
+      if (!operation.deviceId) throw new Error("command enqueue requires a device scope");
+      if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
+      const binding = await this.options.prisma.pluginDeviceBinding.findUnique({
+        where: { deviceId: operation.deviceId },
+        select: { installationId: true, installation: { select: { state: true, projectId: true } } },
+      });
+      if (!binding || binding.installationId !== operation.installationId || binding.installation.projectId !== operation.projectId || binding.installation.state !== "enabled") {
+        throw new Error("device is not bound to the active plugin installation");
+      }
+      const args: CommandArgument[] = [];
+      for (const argument of input.args) {
+        const value = argument.value instanceof Blob
+          ? new Uint8Array(await argument.value.arrayBuffer())
+          : argument.value;
+        args.push({ [argument.name]: value as CommandArgument[string] });
+      }
+      if ((operation.stagedCommands?.length ?? 0) >= 32) throw new Error("operation command intent limit exceeded");
+      operation.stagedCommands ??= [];
+      operation.stagedCommands.push({ deviceId: operation.deviceId, command: { cmd: input.command, args } });
+      return { accepted: true };
+    } finally {
+      this.releaseOperation(operation);
     }
-    const args: CommandArgument[] = [];
-    for (const argument of input.args) {
-      const value = argument.value instanceof Blob
-        ? new Uint8Array(await argument.value.arrayBuffer())
-        : argument.value;
-      args.push({ [argument.name]: value as CommandArgument[string] });
-    }
-    if ((operation.stagedCommands?.length ?? 0) >= 32) throw new Error("operation command intent limit exceeded");
-    operation.stagedCommands ??= [];
-    operation.stagedCommands.push({ deviceId: operation.deviceId, command: { cmd: input.command, args } });
-    return { accepted: true };
   }
 
   private async releaseEvent(event: LeasedPluginEvent, permanent: boolean, message: string): Promise<void> {
@@ -597,4 +671,8 @@ export class PluginManager {
     for (const connection of this.connections.values()) connection.close();
     this.connections.clear();
   }
+}
+
+function hashOperationToken(token: string): Buffer {
+  return createHash("sha256").update(token).digest();
 }

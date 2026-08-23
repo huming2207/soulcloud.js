@@ -10,6 +10,7 @@ const envSchema = z.object({
   PLUGIN_RPC_AUTH_TOKEN: z.string().min(32),
   PLUGIN_RPC_MAX_FRAME_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
   PLUGIN_RPC_MAX_PENDING_REQUESTS: z.coerce.number().int().positive().default(128),
+  PLUGIN_RPC_MAX_REVERSE_CALLS: z.coerce.number().int().positive().max(1024).default(64),
   PLUGIN_RPC_BACKPRESSURE_BYTES: z.coerce.number().int().positive().default(4 * 1024 * 1024),
   PLUGIN_RPC_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(3_000),
