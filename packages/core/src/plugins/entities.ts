@@ -173,6 +173,14 @@ export interface ApplyEntityUpdatesOptions {
   profileId: string;
   profileVersion: number;
   updates: readonly EntityUpdateInput[];
+  /**
+   * Descriptor declarations captured by an immutable event snapshot. When
+   * present, matching immutable revisions remain usable for history after a
+   * profile migration has deprecated them.
+   */
+  snapshotDescriptors?: readonly EntityDescriptorInput[];
+  /** Old snapshot events must not recreate current state after a rebind. */
+  writeCurrentState?: boolean;
 }
 
 /** Applies a bounded update batch to current state and history in one DB transaction. */
@@ -186,22 +194,17 @@ export async function applyEntityUpdates(
   );
   const keys = updates.map((update) => update.entityKey);
   if (new Set(keys).size !== keys.length) throw new Error("duplicate entity updates are not allowed");
-  const descriptors = await tx.pluginEntityDescriptor.findMany({
-    where: {
-      installationId: options.installationId,
-      profileId: options.profileId,
-      profileVersion: options.profileVersion,
-      deprecated: false,
-    },
-  });
-  const byKey = new Map(descriptors.map((descriptor) => [descriptor.entityKey, descriptor]));
-  const current = await tx.pluginEntityState.findMany({
-    where: {
-      installationId: options.installationId,
-      deviceId: options.deviceId,
-      entityKey: { in: keys },
-    },
-  });
+  const byKey = await resolveEntityDescriptors(tx, options, keys);
+  const writeCurrentState = options.writeCurrentState !== false;
+  const current = writeCurrentState && keys.length > 0
+    ? await tx.pluginEntityState.findMany({
+        where: {
+          installationId: options.installationId,
+          deviceId: options.deviceId,
+          entityKey: { in: keys },
+        },
+      })
+    : [];
   const currentByKey = new Map(current.map((row) => [row.entityKey, row]));
   const stateRows: Array<Record<string, unknown>> = [];
   const historyRows: Array<Record<string, unknown>> = [];
@@ -239,7 +242,7 @@ export async function applyEntityUpdates(
       alarm_level: alarmLevel,
       alarm_code: alarmCode,
     };
-    stateRows.push(row);
+    if (writeCurrentState) stateRows.push(row);
     const changed =
       !previous ||
       !sameStoredValue(previous.value, value) ||
@@ -254,6 +257,35 @@ export async function applyEntityUpdates(
 
   if (stateRows.length > 0) await upsertStateRows(tx, stateRows);
   if (historyRows.length > 0) await insertHistoryRows(tx, historyRows);
+}
+
+async function resolveEntityDescriptors(
+  tx: TransactionClient,
+  options: ApplyEntityUpdatesOptions,
+  keys: readonly string[],
+) {
+  const descriptors = await tx.pluginEntityDescriptor.findMany({
+    where: {
+      installationId: options.installationId,
+      profileId: options.profileId,
+      profileVersion: options.profileVersion,
+      entityKey: { in: [...keys] },
+      ...(options.snapshotDescriptors ? {} : { deprecated: false }),
+    },
+    orderBy: { revision: "desc" },
+  });
+  if (!options.snapshotDescriptors) {
+    return new Map(descriptors.map((descriptor) => [descriptor.entityKey, descriptor]));
+  }
+
+  const declarations = new Map(options.snapshotDescriptors.map((descriptor) => [descriptor.key, descriptor]));
+  const resolved = new Map<string, (typeof descriptors)[number]>();
+  for (const row of descriptors) {
+    if (resolved.has(row.entityKey)) continue;
+    const declaration = declarations.get(row.entityKey);
+    if (declaration && sameDescriptor(row, declaration)) resolved.set(row.entityKey, row);
+  }
+  return resolved;
 }
 
 function descriptorKey(profileId: string, profileVersion: number, entityKey: string): string {

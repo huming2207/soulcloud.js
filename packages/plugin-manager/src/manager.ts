@@ -27,6 +27,7 @@ import {
   Prisma,
   type LeasedPluginEvent,
   type EntityUpdateInput,
+  type EntityDescriptorInput,
   type CommandArgument,
   type DeviceCommand,
   type PluginUiSession,
@@ -80,17 +81,30 @@ export interface PluginManagerOptions {
 export interface PluginEventStore {
   lease(limit: number, leaseMs: number): Promise<LeasedPluginEvent[]>;
   complete(eventId: string, leaseToken: string): Promise<boolean>;
-  completeWithUpdates?(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[]; commands?: readonly { deviceId: string; command: DeviceCommand }[] }): Promise<boolean>;
+  completeWithUpdates?(eventId: string, leaseToken: string, context: PluginEventCompletionContext): Promise<boolean>;
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number, consumeAttempt?: boolean): Promise<boolean>;
   renew?(leases: readonly { id: string; leaseToken: string }[], leaseMs: number): Promise<number>;
   purge?(eventRetentionDays: number, historyRetentionDays: number, batchSize: number): Promise<{ events: number; history: number }>;
+}
+
+export interface PluginEventCompletionContext {
+  installationId: string;
+  deviceId: string;
+  pluginId: string;
+  pluginVersion: string;
+  manifestHash: string;
+  profileId: string;
+  profileVersion: number;
+  snapshotDescriptors: readonly EntityDescriptorInput[];
+  updates: readonly EntityUpdateInput[];
+  commands?: readonly { deviceId: string; command: DeviceCommand }[];
 }
 
 export class PrismaPluginEventStore implements PluginEventStore {
   constructor(private readonly prisma: PrismaClient) {}
   lease(limit: number, leaseMs: number) { return leasePluginEvents(this.prisma, limit, leaseMs); }
   complete(eventId: string, leaseToken: string) { return completePluginEvent(this.prisma, eventId, leaseToken); }
-  completeWithUpdates(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[]; commands?: readonly { deviceId: string; command: DeviceCommand }[] }) {
+  completeWithUpdates(eventId: string, leaseToken: string, context: PluginEventCompletionContext) {
     return completePluginEventWithUpdates(this.prisma, eventId, leaseToken, context);
   }
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number, consumeAttempt = true) {
@@ -738,8 +752,12 @@ export class PluginManager {
         await store.completeWithUpdates(event.id, event.lease_token, {
           installationId: event.installation_id,
           deviceId: event.device_id,
+          pluginId: event.plugin_id,
+          pluginVersion: event.plugin_version,
+          manifestHash: event.manifest_hash.trim(),
           profileId: event.profile_id,
           profileVersion: event.profile_version,
+          snapshotDescriptors: profile.entities,
           updates,
           commands: operation?.stagedCommands,
         });

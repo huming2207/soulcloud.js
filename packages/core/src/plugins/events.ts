@@ -3,7 +3,11 @@ import { enqueueBatchInTransaction } from "../queue/enqueue";
 import type { DeviceCommand } from "../protocol/command";
 import { PLUGIN_EVENTS_CHANNEL } from "../queue/notify";
 import type { DeviceEventEnvelope } from "../protocol/event";
-import { applyEntityUpdates, type EntityUpdateInput } from "./entities";
+import {
+  applyEntityUpdates,
+  type EntityDescriptorInput,
+  type EntityUpdateInput,
+} from "./entities";
 
 export type DeviceEventIngestStatus =
   | "inserted"
@@ -218,21 +222,92 @@ export async function completePluginEventWithUpdates(
   entityContext: {
     installationId: string;
     deviceId: string;
+    pluginId: string;
+    pluginVersion: string;
+    manifestHash: string;
     profileId: string;
     profileVersion: number;
+    snapshotDescriptors: readonly EntityDescriptorInput[];
     updates: readonly EntityUpdateInput[];
     commands?: readonly { deviceId: string; command: DeviceCommand }[];
   },
 ): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT id FROM plugin_events
+    // Lifecycle paths lock installation -> device -> registry. Event
+    // completion uses the same prefix before locking its queue row, avoiding a
+    // bind/migrate-vs-completion deadlock without holding locks during RPC.
+    const installations = await tx.$queryRaw<Array<{
+      id: string;
+      project_id: string;
+      plugin_id: string;
+      plugin_version: string;
+      manifest_hash: string;
+      state: string;
+    }>>`
+      SELECT id, project_id, plugin_id, plugin_version, manifest_hash, state
+      FROM plugin_installations
+      WHERE id = ${entityContext.installationId}::uuid
+      FOR UPDATE
+    `;
+    const devices = await tx.$queryRaw<Array<{ id: string; project_id: string }>>`
+      SELECT id, project_id FROM devices
+      WHERE id = ${entityContext.deviceId}::uuid
+      FOR UPDATE
+    `;
+    const events = await tx.$queryRaw<Array<{
+      id: string;
+      installation_id: string;
+      device_id: string;
+      plugin_id: string;
+      plugin_version: string;
+      manifest_hash: string;
+      profile_id: string;
+      profile_version: number;
+    }>>`
+      SELECT id, installation_id, device_id, plugin_id, plugin_version,
+        manifest_hash, profile_id, profile_version
+      FROM plugin_events
       WHERE id = ${eventId}::uuid AND state = 'leased' AND lease_token = ${leaseToken}
       FOR UPDATE
     `;
-    if (locked.length === 0) return false;
-    await applyEntityUpdates(tx, entityContext);
+    const event = events[0];
+    if (!event) return false;
+    if (
+      event.installation_id !== entityContext.installationId ||
+      event.device_id !== entityContext.deviceId ||
+      event.plugin_id !== entityContext.pluginId ||
+      event.plugin_version !== entityContext.pluginVersion ||
+      event.manifest_hash.trim() !== entityContext.manifestHash ||
+      event.profile_id !== entityContext.profileId ||
+      event.profile_version !== entityContext.profileVersion
+    ) {
+      throw new Error("plugin event completion context does not match its routing snapshot");
+    }
+
+    const installation = installations[0];
+    const device = devices[0];
+    const binding = await tx.pluginDeviceBinding.findUnique({
+      where: { deviceId: entityContext.deviceId },
+      select: { installationId: true, profileId: true, profileVersion: true },
+    });
+    const snapshotIsCurrent =
+      installation?.state === "enabled" &&
+      installation.project_id === device?.project_id &&
+      installation.plugin_id === entityContext.pluginId &&
+      installation.plugin_version === entityContext.pluginVersion &&
+      installation.manifest_hash.trim() === entityContext.manifestHash &&
+      binding?.installationId === entityContext.installationId &&
+      binding.profileId === entityContext.profileId &&
+      binding.profileVersion === entityContext.profileVersion;
+
+    await applyEntityUpdates(tx, {
+      ...entityContext,
+      writeCurrentState: snapshotIsCurrent,
+    });
     for (const intent of entityContext.commands ?? []) {
+      if (intent.deviceId !== entityContext.deviceId) {
+        throw new Error("plugin event command target does not match its routing snapshot");
+      }
       await enqueueBatchInTransaction(tx, [intent.deviceId], intent.command);
     }
     const updated = await tx.$executeRaw`
