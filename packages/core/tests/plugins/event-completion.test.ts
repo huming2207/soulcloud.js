@@ -130,7 +130,7 @@ afterEach(async () => {
 describe("plugin event completion lifecycle snapshots", () => {
   test("keeps old history without restoring current state after a profile rebind", async () => {
     const data = await fixture();
-    const event = await leasedEvent(data);
+    const event = await leasedEvent({ ...data, manifestHash: data.oldHash });
     await bindDeviceToPluginInstallation(prisma, {
       installationId: data.installationId,
       deviceId: data.deviceId,
@@ -163,7 +163,7 @@ describe("plugin event completion lifecycle snapshots", () => {
 
   test("uses the immutable old descriptor after installation migration", async () => {
     const data = await fixture();
-    const event = await leasedEvent(data);
+    const event = await leasedEvent({ ...data, manifestHash: data.oldHash });
     await migratePluginInstallation(
       prisma,
       data.installationId,
