@@ -76,7 +76,7 @@ function commandWire(args: CommandArgument[]): Array<{ name: string; value: stri
   });
 }
 
-function entityValueToWire(value: unknown): unknown {
+function entityValueToWire(value: string | number | boolean | Uint8Array | ArrayBuffer | undefined): string | number | boolean | Blob | undefined {
   if (value instanceof Uint8Array || value instanceof ArrayBuffer) return new Blob([value]);
   return value;
 }

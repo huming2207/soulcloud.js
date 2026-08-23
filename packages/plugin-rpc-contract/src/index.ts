@@ -27,6 +27,7 @@ export function hasRpcPrefix(data: string | ArrayBuffer | ArrayBufferView, prefi
 
 const scalar = z.union([z.string(), z.number().finite(), z.bigint(), z.boolean(), z.null(), z.instanceof(Blob)]);
 const entityValue = z.union([z.string(), z.number().finite(), z.boolean(), z.null(), z.instanceof(Blob)]);
+const entityUpdateValue = z.union([z.string(), z.number().finite(), z.boolean(), z.instanceof(Blob)]);
 const operation = z.object({ operationId: z.string().min(16).max(128), operationToken: z.string().min(32).max(256), deadlineMs: z.number().int().positive().max(600_000) });
 const commandArgument = z.object({ name: z.string().min(1).max(256), value: scalar }).strict();
 const uiUser = z.object({ id: z.string().min(1).max(128), locale: z.string().min(2).max(32), permissions: z.array(z.string().min(1).max(128)).max(256) }).strict();
@@ -53,7 +54,7 @@ export const eventInput = operation.extend({
 }).strict();
 
 export const eventOutput = z.object({
-  updates: z.array(z.object({ entityKey: z.string().min(1).max(128), value: entityValue.optional(), quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]).optional(), sourceTimestamp: z.string().datetime({ offset: true }).optional(), sequence: z.union([z.number().safe(), z.bigint()]).optional(), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string().min(1).max(256) }).strict().nullable().optional() }).strict()).max(4096).default([]),
+  updates: z.array(z.object({ entityKey: z.string().min(1).max(128), value: entityUpdateValue.optional(), quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]).optional(), sourceTimestamp: z.string().datetime({ offset: true }).optional(), sequence: z.union([z.number().safe(), z.bigint()]).optional(), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string().min(1).max(256) }).strict().nullable().optional() }).strict()).max(4096).default([]),
   logs: z.array(z.object({ level: z.enum(["debug", "info", "warn", "error"]), message: z.string().min(1).max(4096) }).strict()).max(64).default([]),
 }).strict();
 

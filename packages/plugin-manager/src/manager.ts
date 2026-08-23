@@ -659,9 +659,9 @@ export class PluginManager {
       if (!operation.deviceId) throw new Error("entity read requires a device scope");
       if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
       const state = await getPluginEntityState(this.options.prisma, operation.installationId, operation.deviceId, input.entityKey);
-      return state && state.value instanceof Uint8Array
-        ? { ...state, value: new Blob([state.value]) }
-        : state;
+      if (!state) return null;
+      const value = state.value instanceof Uint8Array ? new Blob([state.value]) : state.value;
+      return { ...state, value };
     } finally {
       this.releaseOperation(operation);
     }

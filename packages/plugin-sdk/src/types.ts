@@ -74,7 +74,7 @@ export type CommandArgument = Record<string, CommandArgValue>;
 
 export interface EntityUpdate {
   entityKey: string;
-  value?: unknown;
+  value?: string | number | boolean | Uint8Array | ArrayBuffer;
   quality?: EntityQuality;
   sourceTimestamp?: string;
   sequence?: bigint | number;
