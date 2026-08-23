@@ -17,6 +17,15 @@ const envSchema = z.object({
   PLUGIN_RPC_MAX_REVERSE_CONCURRENCY: z.coerce.number().int().positive().max(4096).default(256),
   PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_PLUGIN: z.coerce.number().int().positive().max(1024).default(64),
   PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_INSTALLATION: z.coerce.number().int().positive().max(256).default(16),
+  PLUGIN_RPC_MAX_STAGED_COMMANDS: z.coerce.number().int().positive().max(1024).default(32),
+  PLUGIN_RPC_MAX_STAGED_COMMAND_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(256 * 1024),
+  PLUGIN_RPC_MAX_VALUE_DEPTH: z.coerce.number().int().positive().max(128).default(32),
+  PLUGIN_RPC_MAX_VALUE_NODES: z.coerce.number().int().positive().max(1_000_000).default(4096),
+  PLUGIN_RPC_MAX_ARRAY_ITEMS: z.coerce.number().int().positive().max(1_000_000).default(4096),
+  PLUGIN_RPC_MAX_STRING_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(65_536),
+  PLUGIN_RPC_MAX_BLOBS: z.coerce.number().int().positive().max(4096).default(16),
+  PLUGIN_RPC_MAX_BLOB_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(65_536),
+  PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(256 * 1024),
   PLUGIN_RPC_BACKPRESSURE_BYTES: z.coerce.number().int().positive().default(4 * 1024 * 1024),
   PLUGIN_RPC_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(3_000),
@@ -51,6 +60,9 @@ export function loadPluginManagerConfig(): PluginManagerConfig {
   }
   if (config.PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_INSTALLATION > config.PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_PLUGIN) {
     throw new Error("per-installation reverse concurrency cannot exceed the per-plugin limit");
+  }
+  if (config.PLUGIN_RPC_MAX_BLOB_BYTES > config.PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES) {
+    throw new Error("per-Blob byte limit cannot exceed the total Blob byte limit");
   }
   return config;
 }

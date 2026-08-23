@@ -9,6 +9,7 @@ import {
   RPC_PATH,
   RPC_PROTOCOL_HEADER,
   RPC_VERSION,
+  DEFAULT_RPC_VALUE_BUDGET,
   assertRpcValueBudget,
   canonicalJson,
   eventOutput as eventOutputSchema,
@@ -29,16 +30,6 @@ import {
   type PluginManifest,
   type UiRenderInput,
 } from "@soulcloud/plugin-sdk";
-
-const DEFAULT_BUDGET: RpcValueBudget = {
-  maxDepth: 32,
-  maxNodes: 4096,
-  maxArrayItems: 4096,
-  maxStringBytes: 65_536,
-  maxBlobs: 16,
-  maxBlobBytes: 65_536,
-  maxTotalBlobBytes: 256 * 1024,
-};
 
 export interface PluginRuntimeOptions {
   hostname: string;
@@ -138,7 +129,7 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
   const runtimeDefinition = definePlugin(definition);
   const manifest = runtimeDefinition.manifest;
   const manifestHash = await sha256Hex(canonicalJson(manifest));
-  const budget = { ...DEFAULT_BUDGET, ...options.valueBudget };
+  const budget = { ...DEFAULT_RPC_VALUE_BUDGET, ...options.valueBudget };
   const maxFrameBytes = options.maxFrameBytes ?? 1024 * 1024;
   const maxConcurrent = options.maxConcurrentOperations ?? 8;
   if (!Number.isInteger(maxConcurrent) || maxConcurrent <= 0) throw new RangeError("plugin operation limit must be positive");
@@ -262,7 +253,11 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
             installation: input.installation,
             device: input.device,
             getEntity: async (entityKey: string) => entityStateFromWire(await reverse.context.entities.get({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, entityKey })),
-            enqueueCommand: async (command: string, args: CommandArgument[] = []) => { const result = await reverse.context.commands.enqueue({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, command, args: commandWire(args) }); return result.accepted ? undefined : undefined; },
+            enqueueCommand: async (command: string, args: CommandArgument[] = []) => {
+              assertRpcValueBudget(args, budget);
+              const result = await reverse.context.commands.enqueue({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, command, args: commandWire(args) });
+              return result.accepted ? undefined : undefined;
+            },
           };
           const result = await definition.onEvent(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload: input.event.payload, installation: input.installation, device: input.device });
           const updates = result?.updates ?? [];

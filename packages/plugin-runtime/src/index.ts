@@ -27,6 +27,15 @@ const runtime = await startPluginRuntime(definition, {
   maxConcurrentOperations: positiveInteger("PLUGIN_RPC_MAX_OPERATIONS", 8, 1024),
   backpressureBytes: positiveInteger("PLUGIN_RPC_BACKPRESSURE_BYTES", 4 * 1024 * 1024, 256 * 1024 * 1024),
   idleTimeoutSeconds: positiveInteger("PLUGIN_RPC_IDLE_TIMEOUT_SECONDS", 60, 960),
+  valueBudget: {
+    maxDepth: positiveInteger("PLUGIN_RPC_MAX_VALUE_DEPTH", 32, 128),
+    maxNodes: positiveInteger("PLUGIN_RPC_MAX_VALUE_NODES", 4096, 1_000_000),
+    maxArrayItems: positiveInteger("PLUGIN_RPC_MAX_ARRAY_ITEMS", 4096, 1_000_000),
+    maxStringBytes: positiveInteger("PLUGIN_RPC_MAX_STRING_BYTES", 65_536, 64 * 1024 * 1024),
+    maxBlobs: positiveInteger("PLUGIN_RPC_MAX_BLOBS", 16, 4096),
+    maxBlobBytes: positiveInteger("PLUGIN_RPC_MAX_BLOB_BYTES", 65_536, 64 * 1024 * 1024),
+    maxTotalBlobBytes: positiveInteger("PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES", 256 * 1024, 64 * 1024 * 1024),
+  },
 });
 console.log(`[soulcloud-plugin] ready id=${runtime.manifest.id} version=${runtime.manifest.version} url=${runtime.url}`);
 let stopping = false;

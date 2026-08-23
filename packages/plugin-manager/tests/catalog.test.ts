@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { PluginManifest } from "@soulcloud/plugin-sdk";
 import type { PluginConnection } from "../src/connection";
 import { PluginManager, type ManifestStore } from "../src/manager";
@@ -60,11 +61,64 @@ describe("plugin catalog connection state", () => {
       state: "active",
       reverseCalls: 0,
       inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
       reverseSettledWaiters: new Set<() => void>(),
     };
     internals.registerOperation("first", operation);
     expect(() => internals.registerOperation("second", { ...operation })).toThrow("operation limit");
     internals.finishOperation("first");
     expect(() => internals.registerOperation("second", { ...operation })).not.toThrow();
+  });
+
+  test("rejects staged command bytes before allocating Blob contents", async () => {
+    let databaseReads = 0;
+    const prisma = {
+      pluginDeviceBinding: {
+        findUnique: async () => {
+          databaseReads += 1;
+          return null;
+        },
+      },
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000, prisma: prisma as never,
+      maxStagedCommandBytes: 4,
+    });
+    const operationToken = "0".repeat(64);
+    const operation = {
+      operationTokenHash: createHash("sha256").update(operationToken).digest(),
+      connectionId: "connection",
+      installationId: "installation",
+      projectId: "project",
+      pluginId: "example.plugin",
+      pluginVersion: "1.0.0",
+      deviceId: "device",
+      deadline: performance.now() + 1_000,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set<() => void>(),
+    };
+    const internals = manager as unknown as {
+      operations: Map<string, typeof operation>;
+      reverseCommandEnqueue(input: object, signal: AbortSignal, connectionId: string): Promise<unknown>;
+    };
+    internals.operations.set("operation", operation);
+
+    await expect(internals.reverseCommandEnqueue({
+      operationId: "operation",
+      operationToken,
+      deadlineMs: 1_000,
+      command: "command",
+      args: [{ name: "payload", value: new Blob([Uint8Array.of(1)]) }],
+    }, new AbortController().signal, "connection")).rejects.toThrow("byte limit");
+    expect(databaseReads).toBe(0);
+    expect(operation.stagedCommandCount).toBe(0);
+    expect(operation.stagedCommandBytes).toBe(0);
   });
 });

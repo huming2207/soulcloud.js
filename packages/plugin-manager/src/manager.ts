@@ -1,5 +1,14 @@
 import { validateActionInput, validateManifest, type PluginManifest } from "@soulcloud/plugin-sdk";
-import { canonicalJson, sha256Hex, type EntityGetInput, type CommandEnqueueInput, type HandshakeOutput } from "@soulcloud/plugin-rpc-contract";
+import {
+  DEFAULT_RPC_VALUE_BUDGET,
+  assertRpcValueBudget,
+  canonicalJson,
+  sha256Hex,
+  type CommandEnqueueInput,
+  type EntityGetInput,
+  type HandshakeOutput,
+  type RpcValueBudget,
+} from "@soulcloud/plugin-rpc-contract";
 import {
   completePluginEvent,
   completePluginEventWithUpdates,
@@ -40,6 +49,9 @@ export interface PluginManagerOptions {
   maxReverseConcurrency?: number;
   maxReverseConcurrencyPerPlugin?: number;
   maxReverseConcurrencyPerInstallation?: number;
+  maxStagedCommands?: number;
+  maxStagedCommandBytes?: number;
+  valueBudget?: Partial<RpcValueBudget>;
   backpressureBytes: number;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
@@ -146,6 +158,8 @@ interface ActiveOperation {
   profileId?: string;
   profileVersion?: number;
   stagedCommands?: Array<{ deviceId: string; command: DeviceCommand }>;
+  stagedCommandCount: number;
+  stagedCommandBytes: number;
   deadline: number;
   state: "active" | "sealed";
   reverseCalls: number;
@@ -176,9 +190,11 @@ export class PluginManager {
   private maintenanceRunning: Promise<void> | null = null;
   private stopping = false;
   private readonly log: (message: string, fields?: Record<string, unknown>) => void;
+  private readonly valueBudget: RpcValueBudget;
 
   constructor(private readonly options: PluginManagerOptions) {
     this.log = options.log ?? ((message, fields) => console.log(`[soulcloud-plugin-manager] ${message}`, fields ?? ""));
+    this.valueBudget = { ...DEFAULT_RPC_VALUE_BUDGET, ...options.valueBudget };
   }
 
   async start(): Promise<void> {
@@ -286,6 +302,11 @@ export class PluginManager {
     if (!action) throw publicError("action is not declared by the plugin manifest", 404, "action_not_found");
     const validInput = validateActionInput(action.inputSchema, input.actionInput);
     if (!validInput.ok) throw publicError(`invalid action input: ${validInput.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; ")}`, 400, "invalid_action_input");
+    try {
+      assertRpcValueBudget(input.actionInput, this.valueBudget);
+    } catch (error) {
+      throw publicError(`invalid action input: ${(error as Error).message}`, 400, "invalid_action_input");
+    }
     const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
@@ -301,6 +322,8 @@ export class PluginManager {
       state: "active",
       reverseCalls: 0,
       inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
       reverseSettledWaiters: new Set(),
     });
     try {
@@ -312,6 +335,11 @@ export class PluginManager {
           actionId: input.actionId,
           input: input.actionInput,
         }, input.timeoutMs ?? 30_000) as { command: string; args: Array<{ name: string; value: unknown }>; schemaVersion: number };
+        try {
+          assertRpcValueBudget(encoded, this.valueBudget);
+        } catch (error) {
+          throw new Error(`INVALID_PLUGIN_OUTPUT: ${(error as Error).message}`);
+        }
         await this.sealOperation(operationId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -361,6 +389,11 @@ export class PluginManager {
 
   private async callUi(session: PluginUiSession, method: "ui.render" | "ui.handleAction", input: { requestId: string; params: Record<string, string | number | boolean>; action?: unknown }): Promise<unknown> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    try {
+      assertRpcValueBudget(input, this.valueBudget);
+    } catch (error) {
+      throw publicError(`plugin UI input is too large: ${(error as Error).message}`, 400, "plugin_ui_invalid_input");
+    }
     const installation = await this.options.prisma.pluginInstallation.findUnique({ where: { id: session.installationId }, select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true } });
     if (!installation || installation.state !== "enabled" || installation.projectId !== session.projectId || installation.pluginId !== session.pluginId || installation.pluginVersion !== session.pluginVersion || installation.manifestHash.trim() !== session.manifestHash) throw new Error("plugin UI session is no longer valid");
     const manifest = this.getManifest(session.pluginId, session.pluginVersion);
@@ -379,6 +412,8 @@ export class PluginManager {
       state: "active",
       reverseCalls: 0,
       inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
       reverseSettledWaiters: new Set(),
     });
     try {
@@ -395,6 +430,11 @@ export class PluginManager {
           params: input.params,
           ...(method === "ui.handleAction" ? { action: input.action } : {}),
         }, 30_000);
+        try {
+          assertRpcValueBudget(result, this.valueBudget);
+        } catch (error) {
+          throw new Error(`INVALID_PLUGIN_OUTPUT: ${(error as Error).message}`);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (/INVALID_PLUGIN_OUTPUT/.test(message)) throw publicError(message, 502, "plugin_ui_invalid_output");
@@ -444,6 +484,7 @@ export class PluginManager {
     const connection = this.connectionFor(pluginId);
     try {
       const handshake = await connection.connect();
+      assertRpcValueBudget(handshake, this.valueBudget);
       const manifest = validateManifest(handshake.manifest);
       const computed = await sha256Hex(canonicalJson(manifest));
       if (computed !== handshake.manifestHash) throw new Error(`manifest hash mismatch for ${pluginId}`);
@@ -579,6 +620,11 @@ export class PluginManager {
           throw Object.assign(new Error(`persisted event payload is corrupt: ${(error as Error).message}`), { code: "MANAGER_DATA_CORRUPTION" });
         }
       })();
+      try {
+        assertRpcValueBudget([envelope.data, event.installation_config], this.valueBudget);
+      } catch (error) {
+        throw Object.assign(new Error(`INVALID_EVENT_INPUT: ${(error as Error).message}`), { code: "INVALID_EVENT_INPUT" });
+      }
       const operationId = crypto.randomUUID();
       const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
       this.registerOperation(operationId, {
@@ -595,6 +641,8 @@ export class PluginManager {
         state: "active",
         reverseCalls: 0,
         inFlightReverseCalls: 0,
+        stagedCommandCount: 0,
+        stagedCommandBytes: 0,
         reverseSettledWaiters: new Set(),
       });
       activeOperationId = operationId;
@@ -623,6 +671,11 @@ export class PluginManager {
           profileVersion: event.profile_version,
         },
       }, this.options.eventTimeoutMs ?? 30_000);
+      try {
+        assertRpcValueBudget(result, this.valueBudget);
+      } catch (error) {
+        throw Object.assign(new Error(`INVALID_PLUGIN_OUTPUT: ${(error as Error).message}`), { code: "INVALID_PLUGIN_OUTPUT" });
+      }
       await this.sealOperation(operationId);
       pluginCallCompleted = true;
       const output = result as { updates?: readonly EntityUpdateInput[]; logs?: readonly { level: string; message: string }[] };
@@ -769,9 +822,22 @@ export class PluginManager {
   private async reverseCommandEnqueue(input: CommandEnqueueInput, signal: AbortSignal, connectionId: string): Promise<{ accepted: true }> {
     if (signal.aborted) throw new Error("operation aborted");
     const operation = this.acquireOperation(input, connectionId);
+    let reservation = 0;
+    let reserved = false;
     try {
       if (!operation.deviceId) throw new Error("command enqueue requires a device scope");
       if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
+      assertRpcValueBudget(input.args, this.valueBudget);
+      reservation = commandIntentBytes(input.command, input.args);
+      if (operation.stagedCommandCount >= (this.options.maxStagedCommands ?? 32)) {
+        throw new Error("operation command intent limit exceeded");
+      }
+      if (operation.stagedCommandBytes + reservation > (this.options.maxStagedCommandBytes ?? 256 * 1024)) {
+        throw new Error("operation command intent byte limit exceeded");
+      }
+      operation.stagedCommandCount += 1;
+      operation.stagedCommandBytes += reservation;
+      reserved = true;
       const binding = await this.options.prisma.pluginDeviceBinding.findUnique({
         where: { deviceId: operation.deviceId },
         select: { installationId: true, installation: { select: { state: true, projectId: true } } },
@@ -786,10 +852,15 @@ export class PluginManager {
           : argument.value;
         args.push({ [argument.name]: value as CommandArgument[string] });
       }
-      if ((operation.stagedCommands?.length ?? 0) >= 32) throw new Error("operation command intent limit exceeded");
       operation.stagedCommands ??= [];
       operation.stagedCommands.push({ deviceId: operation.deviceId, command: { cmd: input.command, args } });
       return { accepted: true };
+    } catch (error) {
+      if (reserved) {
+        operation.stagedCommandCount -= 1;
+        operation.stagedCommandBytes -= reservation;
+      }
+      throw error;
     } finally {
       this.releaseOperation(operation);
     }
@@ -872,6 +943,19 @@ export class PluginManager {
     for (const connection of this.connections.values()) connection.close();
     this.connections.clear();
   }
+}
+
+function commandIntentBytes(command: string, args: CommandEnqueueInput["args"]): number {
+  let bytes = Buffer.byteLength(command);
+  for (const argument of args) {
+    bytes += Buffer.byteLength(argument.name);
+    const value = argument.value;
+    if (value instanceof Blob) bytes += value.size;
+    else if (typeof value === "string") bytes += Buffer.byteLength(value);
+    else if (typeof value === "bigint") bytes += value.toString().length;
+    else bytes += 8;
+  }
+  return bytes;
 }
 
 function hashOperationToken(token: string): Buffer {

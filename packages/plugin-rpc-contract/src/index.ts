@@ -119,6 +119,15 @@ export type CommandEnqueueInput = z.infer<typeof commandEnqueueInput>;
 export type PluginCallInput = z.infer<typeof pluginCallInput>;
 
 export interface RpcValueBudget { maxDepth: number; maxNodes: number; maxArrayItems: number; maxStringBytes: number; maxBlobs: number; maxBlobBytes: number; maxTotalBlobBytes: number }
+export const DEFAULT_RPC_VALUE_BUDGET: Readonly<RpcValueBudget> = Object.freeze({
+  maxDepth: 32,
+  maxNodes: 4096,
+  maxArrayItems: 4096,
+  maxStringBytes: 65_536,
+  maxBlobs: 16,
+  maxBlobBytes: 65_536,
+  maxTotalBlobBytes: 256 * 1024,
+});
 export function assertRpcValueBudget(value: unknown, budget: RpcValueBudget): void {
   const seen = new WeakSet<object>(); let nodes = 0; let totalBlobBytes = 0; let blobs = 0; let strings = 0;
   const visit = (current: unknown, depth: number): void => {
