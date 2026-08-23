@@ -271,7 +271,7 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
           bridge.dispatch("message", { data });
           return;
         }
-        await handler.message(bridge, data, { context });
+        await handler.message(bridge, data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">, { context });
       }).catch(() => ws.close(1011, "RPC handler error"));
     },
     async close() { bridge.close(); await handler.close(bridge); log("plugin connection closed"); },
