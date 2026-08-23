@@ -16,6 +16,7 @@ const manager = new PluginManager({
   backpressureBytes: config.PLUGIN_RPC_BACKPRESSURE_BYTES,
   heartbeatIntervalMs: config.PLUGIN_RPC_HEARTBEAT_INTERVAL_MS,
   heartbeatTimeoutMs: config.PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS,
+  connectTimeoutMs: config.PLUGIN_RPC_CONNECT_TIMEOUT_MS,
   reconnectMs: config.PLUGIN_MANAGER_RECONNECT_MS,
   manifestStore: new PrismaManifestStore(prisma),
   eventStore: new PrismaPluginEventStore(prisma),

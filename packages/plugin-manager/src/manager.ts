@@ -37,6 +37,7 @@ export interface PluginManagerOptions {
   backpressureBytes: number;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
+  connectTimeoutMs?: number;
   reconnectMs: number;
   prisma?: PrismaClient;
   uiSessionSecret?: string;
@@ -378,6 +379,7 @@ export class PluginManager {
       backpressureBytes: this.options.backpressureBytes,
       heartbeatIntervalMs: this.options.heartbeatIntervalMs,
       heartbeatTimeoutMs: this.options.heartbeatTimeoutMs,
+      connectTimeoutMs: this.options.connectTimeoutMs,
       reverseHandlers: handlers,
       onDisconnect: (connectionId) => {
         for (const [operationId, operation] of this.operations) {
@@ -419,7 +421,8 @@ export class PluginManager {
 
   private scheduleReconnect(pluginId: string): void {
     if (this.stopping || this.timers.has(pluginId)) return;
-    const timer = setTimeout(() => { this.timers.delete(pluginId); void this.connect(pluginId); }, this.options.reconnectMs);
+    const delay = Math.max(1, Math.round(this.options.reconnectMs * (0.8 + Math.random() * 0.4)));
+    const timer = setTimeout(() => { this.timers.delete(pluginId); void this.connect(pluginId); }, delay);
     timer.unref?.(); this.timers.set(pluginId, timer);
   }
 

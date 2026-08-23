@@ -35,6 +35,7 @@ export interface PluginConnectionOptions {
   backpressureBytes: number;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
+  connectTimeoutMs?: number;
   reverseHandlers: ReverseHandlers;
   onDisconnect?: (connectionId: string) => void;
 }
@@ -49,6 +50,7 @@ export class PluginConnection {
   private bridge: ReturnType<typeof createClientBridge> | null = null;
   private connecting: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private heartbeatPending = false;
   private pending = 0;
   private closed = false;
   private handshaken = false;
@@ -79,17 +81,27 @@ export class PluginConnection {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const socket = new WebSocket(this.options.endpoint, { headers: { "x-soulcloud-rpc-protocol": RPC_PROTOCOL_HEADER, authorization: `Bearer ${this.options.authToken}` } });
+      const connectTimer = setTimeout(
+        () => fail(new PluginConnectionTimeout("plugin WebSocket connection timed out")),
+        this.options.connectTimeoutMs ?? 10_000,
+      );
+      connectTimer.unref?.();
       this.connectionId = crypto.randomUUID();
       this.socket = socket;
       socket.binaryType = "arraybuffer";
       const fail = (error: Error) => {
         if (settled) return;
         settled = true;
+        clearTimeout(connectTimer);
         try { socket.close(); } catch { /* already closed */ }
         this.onClose(socket);
         reject(error);
       };
       socket.addEventListener("error", () => fail(new PluginConnectionError("plugin WebSocket error")));
+      socket.addEventListener("close", () => {
+        this.onClose(socket);
+        fail(new PluginConnectionError("plugin WebSocket closed during connection"));
+      });
       socket.addEventListener("open", () => {
         const bridge = createClientBridge(socket, this.options.backpressureBytes);
         this.bridge = bridge;
@@ -110,8 +122,11 @@ export class PluginConnection {
             .catch(() => socket.close(1002, "invalid RPC frame"));
         });
         socket.addEventListener("error", (event) => bridge.dispatch("error", event));
-        socket.addEventListener("close", () => this.onClose(socket));
-        this.finishHandshake().then(() => { settled = true; resolve(); }).catch((error) => { socket.close(1002, "handshake failed"); fail(error instanceof Error ? error : new Error(String(error))); });
+        this.finishHandshake().then(() => {
+          settled = true;
+          clearTimeout(connectTimer);
+          resolve();
+        }).catch((error) => { socket.close(1002, "handshake failed"); fail(error instanceof Error ? error : new Error(String(error))); });
       });
     });
   }
@@ -180,9 +195,10 @@ export class PluginConnection {
   }
 
   private async ping(): Promise<void> {
-    if (!this.forward || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    if (this.heartbeatPending || !this.forward || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    this.heartbeatPending = true;
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.options.heartbeatTimeoutMs);
-    try { await this.forward.system.ping({ nonce: crypto.randomUUID() }, { signal: controller.signal }); } catch { this.socket.close(1011, "heartbeat timeout"); } finally { clearTimeout(timer); }
+    try { await this.forward.system.ping({ nonce: crypto.randomUUID() }, { signal: controller.signal }); } catch { this.socket.close(1011, "heartbeat timeout"); } finally { clearTimeout(timer); this.heartbeatPending = false; }
   }
 
   private onClose(socket: WebSocket | null = this.socket): void {
@@ -192,6 +208,7 @@ export class PluginConnection {
     const bridge = this.bridge;
     bridge?.notifyClose();
     this.handshaken = false; this.forward = null; this.manifestInfo = null; this.bridge = null;
+    this.heartbeatPending = false;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer); this.heartbeatTimer = null;
     this.reverseHandler = null; this.socket = null;
     this.connectionId = crypto.randomUUID();

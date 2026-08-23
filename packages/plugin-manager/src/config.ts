@@ -14,6 +14,7 @@ const envSchema = z.object({
   PLUGIN_RPC_BACKPRESSURE_BYTES: z.coerce.number().int().positive().default(4 * 1024 * 1024),
   PLUGIN_RPC_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(3_000),
+  PLUGIN_RPC_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().max(120_000).default(10_000),
   PLUGIN_MANAGER_RECONNECT_MS: z.coerce.number().int().positive().default(2_000),
   PLUGIN_MANAGER_UI_SESSION_SECRET: z.string().min(32).optional(),
   PLUGIN_UI_SESSION_TTL_SECONDS: z.coerce.number().int().positive().max(900).default(300),
