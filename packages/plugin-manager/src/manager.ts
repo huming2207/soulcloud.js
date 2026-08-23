@@ -195,6 +195,7 @@ export class PluginManager {
 
   async createInstallation(input: CreateInstallationInput): Promise<{ id: string }> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    this.requireConnectedManifest(input.pluginId, input.pluginVersion, input.manifestHash);
     return createPluginInstallation(this.options.prisma, input);
   }
 
@@ -210,6 +211,9 @@ export class PluginManager {
 
   async migrateInstallation(installationId: string, pluginVersion: string, manifestHash: string, config: unknown): Promise<void> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    const installation = await this.options.prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { pluginId: true } });
+    if (!installation) throw Object.assign(new Error("plugin installation not found"), { status: 404 });
+    this.requireConnectedManifest(installation.pluginId, pluginVersion, manifestHash);
     return migratePluginInstallation(this.options.prisma, installationId, pluginVersion, manifestHash, config);
   }
 
@@ -238,8 +242,7 @@ export class PluginManager {
     if (!action) throw new Error("action is not declared by the plugin manifest");
     const validInput = validateActionInput(action.inputSchema, input.actionInput);
     if (!validInput.ok) throw new Error(`invalid action input: ${validInput.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; ")}`);
-    const connection = this.connections.get(installation.pluginId);
-    if (!connection?.isOpen) throw new Error("plugin is unavailable");
+    const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
     this.operations.set(operationId, {
@@ -318,8 +321,7 @@ export class PluginManager {
     if (!installation || installation.state !== "enabled" || installation.projectId !== session.projectId || installation.pluginId !== session.pluginId || installation.pluginVersion !== session.pluginVersion || installation.manifestHash.trim() !== session.manifestHash) throw new Error("plugin UI session is no longer valid");
     const manifest = this.getManifest(session.pluginId, session.pluginVersion);
     if (!manifest?.ui?.routes.some((route) => route.id === session.routeId)) throw new Error("plugin UI route is not declared");
-    const connection = this.connections.get(session.pluginId);
-    if (!connection?.isOpen) throw new Error("plugin is unavailable");
+    const { connection } = this.requireConnectedManifest(session.pluginId, session.pluginVersion, session.manifestHash);
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
     this.operations.set(operationId, {
@@ -441,9 +443,14 @@ export class PluginManager {
       return;
     }
     const connection = this.connections.get(event.plugin_id);
-    if (!connection?.isOpen) {
+    const connectedManifest = connection?.manifest;
+    if (
+      !connection?.isOpen ||
+      connectedManifest?.pluginVersion !== event.plugin_version ||
+      connectedManifest.manifestHash !== event.manifest_hash.trim()
+    ) {
       this.circuitFailure(circuitKey);
-      await this.releaseEvent(event, false, "plugin is unavailable");
+      await this.releaseEvent(event, false, "matching plugin version is unavailable");
       return;
     }
     let activeOperationId: string | undefined;
@@ -656,9 +663,29 @@ export class PluginManager {
     this.circuits.delete(key);
   }
 
-  listCatalog(): CatalogEntry[] { return [...this.catalog.values()].map((entry) => ({ ...entry, connected: this.connections.get(entry.pluginId)?.isOpen ?? false })); }
+  listCatalog(): CatalogEntry[] {
+    return [...this.catalog.values()].map((entry) => {
+      const connection = this.connections.get(entry.pluginId);
+      const handshake = connection?.manifest;
+      return {
+        ...entry,
+        connected: connection?.isOpen === true && handshake?.pluginVersion === entry.pluginVersion && handshake.manifestHash === entry.manifestHash,
+      };
+    });
+  }
   getConnection(pluginId: string): PluginConnection | undefined { return this.connections.get(pluginId); }
   getManifest(pluginId: string, version: string): PluginManifest | undefined { return this.catalog.get(`${pluginId}@${version}`)?.manifest; }
+
+  private requireConnectedManifest(pluginId: string, pluginVersion: string, manifestHash: string): { entry: CatalogEntry; connection: PluginConnection } {
+    const entry = this.catalog.get(`${pluginId}@${pluginVersion}`);
+    if (!entry || entry.manifestHash !== manifestHash) throw Object.assign(new Error("plugin manifest is not deployed"), { status: 404 });
+    const connection = this.connections.get(pluginId);
+    const handshake = connection?.manifest;
+    if (!connection?.isOpen || handshake?.pluginVersion !== pluginVersion || handshake.manifestHash !== manifestHash) {
+      throw Object.assign(new Error("requested plugin version is unavailable"), { status: 503 });
+    }
+    return { entry, connection };
+  }
 
   async stop(): Promise<void> {
     this.stopping = true;
