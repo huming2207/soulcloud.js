@@ -1,6 +1,6 @@
 # Soulcloud 插件架构与需求
 
-**状态**：目标架构，替换此前所有 Station/Agent/workflow 设计
+**状态**：目标架构；服务端基础纵切已实现，未完成项以实施计划为准
 **日期**：2026-08-23
 
 本文定义 Soulcloud 的设备侧扩展、云端插件、Plugin Manager、设备 MQTT 事件和插件 SSR UI。
@@ -117,12 +117,12 @@ soulcloud/v1/devices/{uid}/event
 - 插件定义的 telemetry/entity update source；
 - 告警、校准结果和外设状态变化。
 
-第一版 envelope 需要稳定的幂等身份、顺序信息、kind、schema 和 payload。下面是候选结构，
-精确 binary/整数编码、`id` 长度以及 `seq` 的掉电持久化要求必须在实施阶段 0 单独确认，不能
-仅凭本架构文档直接实现：
+第一版 envelope 已固定为一个严格 MessagePack map：`id` 是 16-byte bin，`seq` 是 uint64，
+`kind` 是最多 128 UTF-8 bytes 的非空字符串，`schema` 是正的 int32，`data` 必须存在。禁止
+unknown/duplicate/missing field 和 trailing bytes：
 
 ```ts
-interface DeviceEventEnvelopeCandidate {
+interface DeviceEventEnvelope {
   id: Uint8Array;
   seq: bigint;
   kind: string;
@@ -130,6 +130,9 @@ interface DeviceEventEnvelopeCandidate {
   data: unknown;
 }
 ```
+
+Soulcloud Client 是否必须将 `seq` 跨掉电持久化仍需结合 flash 磨损和设备幂等存储方案确认；
+这不改变 wire format，也不能用随机重置序号替代 `id` 幂等。
 
 协议规则：
 
@@ -180,7 +183,7 @@ Plugin Manager 是独立 Bun 服务，不嵌入 Human API，也不是面向设�
 - 为 plugin 提供带 project/installation/device/operation scope 的反向 RPC；
 - 权威校验 plugin 输出，并与 event completion 原子提交；
 - 实施 deadline、并发、大小、退避、dead-letter 和 circuit breaker；
-- 承载 `/plugins/*` SSR 路由、短期 UI session 校验和 SSR stream 透传；
+- 承载 `/plugins/*` SSR 路由、短期 UI session 校验和有界 HTML fragment；streaming 是后续能力；
 - 提供 per-plugin/installation 的日志、metric 和诊断状态。
 
 ### 5.2 不负责
@@ -215,7 +218,8 @@ plugin 是可信但可能有 bug 的云端代码。每个 plugin 独立构建和
 - endpoint 由 `.env`/部署配置提供；
 - project 管理员只能 enable/configure 已部署且 handshake 成功的 plugin/version；
 - plugin instance 只暴露 health 和 oRPC/WebSocket endpoint；
-- 多个相同 plugin/version instance 必须返回完全相同的 manifest hash。
+- 多个相同 plugin/version instance 必须返回完全相同的 manifest hash。当前部署配置仍只支持
+  每个 plugin ID 一个 endpoint；多版本和多副本 endpoint 语义必须先确认再扩展。
 
 容器运行边界：
 
@@ -340,16 +344,22 @@ ui.render
 ui.handleAction
 ```
 
-最小反向 procedure：
+已实现的最小反向 procedure：
 
 ```text
 context.entities.get
 context.commands.enqueue
+```
+
+已保留 contract、但尚未提供生产 handler 的 procedure：
+
+```text
 context.plugins.callScoped
 context.ui.getData
 ```
 
-每次业务调用绑定短期 operation ID/token 和绝对 deadline。反向调用沿同一 WebSocket 返回，
+每次业务调用绑定短期 operation ID/token；Manager 保存本地 monotonic absolute deadline，wire
+只发送剩余时间预算。反向调用沿同一 WebSocket 返回，
 且不能自报 project/device scope。详细边界见 `plugin-rpc-protocol.md`。
 
 ## 11. Plugin SSR UI
@@ -364,8 +374,8 @@ Browser /plugins/{installation}/...
   → Plugin Manager：验证 UI session + route + scope
   → oRPC ui.render
   → plugin 内 React SSR
-  → 有界 HTML stream/fragment
-  → Plugin Manager：shell/CSP/header filter/stream limit
+  → 有界 HTML fragment
+  → Plugin Manager：shell/CSP/status/output limit
   → Browser
 ```
 
@@ -450,7 +460,8 @@ Plugin Manager internal API 使用独立 service credential、请求 deadline �
    不提供旧 package、endpoint 或环境变量兼容层。
 4. manifest 从编译期双 registry 改为 plugin handshake + DB immutable snapshot。
 5. 将 `/event` 接入 Device Broker 和现有 durable `plugin_events`。
-6. 保留已有 event lease、fairness、retry、dead-letter、retention 和 Entity transaction 能力。
+6. 保留 event lease、按 installation 隔离的有界消费、retry、dead-letter、retention 和 Entity
+   transaction；数据库 lease 选择层的跨 installation fairness 仍待压测后决定。
 7. Human API 改用 Plugin Manager internal API 获取 catalog、执行 Action 和管理 installation。
 8. 增加 `/plugins/*`、短期 UI session、`ui.render` 和纯 SSR 表单纵切。
 9. 更新 Compose 网络：plugin 可访问 Manager、其他 plugin 和公网，但不能访问 Broker/DB/

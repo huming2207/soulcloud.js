@@ -1,6 +1,6 @@
 # Soulcloud 插件架构分阶段实施计划
 
-**状态**：阶段 0–6 的基础纵切已实现并由 CI 验证；阶段 7–8 仍待实施
+**状态**：阶段 0–3 与服务端阶段 4–5 基础纵切已实现；设备 Client、完整 SSR、阶段 7–8 待实施
 **日期**：2026-08-23
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`
 
@@ -68,9 +68,9 @@ CI 类型/单元测试覆盖。
 - 定义 Human API → Manager internal auth 和 UI session signing/key rotation；
 - 建立新 package、路由、env、数据库 migration、Compose service 和测试清单。
 
-### 尚需单独确认但不阻塞文档
+### 尚需单独确认但不改变已冻结 wire
 
-- `/event.id` 的固定字节长度和 `seq` 掉电持久化要求；
+- `seq` 在不同等级 Soulcloud Client 上的掉电持久化策略（`id` 已固定为 16-byte bin）；
 - Human API → Manager 使用 oRPC/HTTP 还是普通内部 HTTP JSON；
 - SSR HTML sanitizer/CSP 的具体库和允许标签；
 - plugin 公网 egress 在 Compose、systemd 和 Kubernetes 下的具体网络实施。
@@ -157,8 +157,9 @@ installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接�
 
 ## 阶段 3：Plugin Manager internal API 与资源隔离
 
-**状态：已完成基础纵切；生产级配额/观测仍属于阶段 8。** Human API 通过 service-auth
-内部 HTTP 调用 Manager，插件 RPC、事件消费和 SSR 有独立连接/并发/请求上限。
+**状态：基础纵切已完成；资源预算仍部分完成。** Human API 通过 service-auth 内部 HTTP 调用
+Manager；事件消费已按 installation 有界并发，Action/SSR 的独立预算、DB pool reservation 和
+完整观测仍属于阶段 8。
 
 ### 工作
 
@@ -186,8 +187,9 @@ installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接�
 
 ## 阶段 4：Device `/event` 端到端路径
 
-**状态：已完成基础纵切。** Broker 只校验并持久化通用 envelope，Manager 异步 lease；QoS 1
-幂等、固定入队时间、retry/dead-letter、retention 和 Entity completion 已落地。
+**状态：服务端基础纵切已完成，Soulcloud Client 未在本仓库验证。** Broker 只校验并持久化
+通用 envelope，Manager 异步 lease；QoS 1 幂等、固定入队时间、retry/dead-letter、retention、
+lease 续期和 Entity completion 已落地。真实 Client publish/掉电 sequence 仍是退出条件。
 
 ### Shared protocol
 
@@ -260,8 +262,10 @@ scoped plugin-to-plugin 和更完整的 UI catalog 仍待后续阶段补齐。
 
 ## 阶段 6：Plugin SSR MVP
 
-**状态：已完成 MVP。** Human API 签发短期 path-scoped HttpOnly session cookie，Manager 验签并转发有限 HTML fragment；
-React 代码只在 plugin 进程执行，当前不提供 hydration/RSC/streaming pass-through。
+**状态：传输纵切已完成，产品 MVP 未完成。** Human API 能签发短期 path-scoped HttpOnly
+session cookie，Manager 能验签并转发有界 HTML fragment；当前只有真实 WebSocket 集成测试，
+尚无部署示例 React plugin 页面，`context.ui.getData` 也没有生产 handler。不提供
+hydration/RSC/streaming pass-through。
 
 ### Session 与路由
 
@@ -274,7 +278,7 @@ React 代码只在 plugin 进程执行，当前不提供 hydration/RSC/streaming
 
 - manifest 声明 SSR routes 和 input/query schema；
 - plugin 内执行 React SSR，Manager 不 import component/module；
-- 实现 `ui.render` HTML fragment/stream 和 `ui.handleAction`；
+- 实现 `ui.render` HTML fragment 和 `ui.handleAction`；
 - Manager 添加统一 document shell、CSP、header allowlist、deadline、byte/backpressure limit；
 - 普通 form/link 提供交互；第一版不 hydration/RSC/client bundle；
 - 为未来 SSR stream pass-through 保留 capability negotiation，但不暴露 plugin endpoint。
@@ -342,3 +346,18 @@ plugin-to-plugin/data capability 实现。
 - plugin 直连 Broker、Device 或硬件；
 - 第一版 client-side plugin JavaScript/RSC；
 - 尚无实测需求的对象存储、多 broker 和高频 telemetry 独立管线。
+
+## 进入下一阶段前必须确认的语义
+
+以下事项会改变 schema 或部署路由，不能由实现者自行假设：
+
+1. 一个 Soulcloud Device 是否允许同时绑定多个 plugin installation。当前数据库主键使每个
+   device 只能绑定一个 installation；若业务上需要多个插件同时消费同一设备事件，必须先确定
+   fan-out、profile 和 Action 归属语义。
+2. 同一 plugin ID 是否需要同时在线多个 version，以及同 version 是否需要多个 endpoint。
+   当前 `PLUGIN_ENDPOINTS` 是 `pluginId=url`，一次只能连接一个 endpoint；这意味着升级到新
+   endpoint 后，旧 snapshot event 会暂停等待旧版本重新可用。
+3. Entity `history: "sampled"` 的采样周期由谁声明。当前还没有 interval 字段，因此实现暂时按
+   `all` 写 history；不能在未确认周期、对齐方式和 DB clock 语义前假装已经采样。
+4. installation config 是否需要 manifest schema。当前 config 是有界 JSON snapshot，但不做
+   plugin-specific schema 校验；若 UI/API 要支持通用配置表单，应先定义 schema 契约。

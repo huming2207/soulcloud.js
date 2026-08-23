@@ -1,6 +1,6 @@
 # Plugin Manager ↔ plugin 双向 RPC 与 SSR 协议
 
-**状态**：当前实现协议；旧插件 RPC 代码和入口已删除
+**状态**：目标协议及当前实现边界；旧插件 RPC 代码和入口已删除
 **日期**：2026-08-23
 
 本文只规定独立 Plugin Manager 与云端 plugin instance 之间的通信。Soulcloud Client 不使用
@@ -15,7 +15,7 @@
 - event、Action、Entity 和 SSR 使用同一身份、deadline、大小与并发边界；
 - plugin crash/hang/OOM 只影响该 plugin；
 - SSR React component 在 plugin 内执行，Manager 只校验和透传结果；
-- 支持多个 Manager replica 和多个相同 plugin/version instance。
+- PostgreSQL lease 支持多个 Manager replica；同一 plugin/version 多 endpoint/多副本路由尚未实现。
 
 非目标：
 
@@ -39,7 +39,7 @@ Plugin Manager                         plugin instance
       │                                      │
       │──── plugin/action/ui call ──────────▶│
       │◀─── scoped reverse calls ────────────│
-      │◀─── result / HTML stream ────────────│
+      │◀─── result / HTML fragment ──────────│
 ```
 
 每个 Manager replica 可以连接每个 endpoint。相同 plugin/version 的多个 instance 必须返回
@@ -184,7 +184,7 @@ interface PluginUiContext {
 
 禁止传递长期 JWT、cookie、数据库对象、任意 request header 或未经过 route schema 的 query。
 
-结果支持初始 HTML fragment/stream，并为以后更透明的 SSR pass-through 保留 capability：
+当前结果是有界 HTML fragment，并为以后更透明的 SSR pass-through 保留 capability：
 
 ```ts
 interface PluginSsrMeta {
@@ -195,7 +195,7 @@ interface PluginSsrMeta {
 }
 ```
 
-HTML stream 必须受 deadline、chunk、累计字节和 backpressure 限制。Manager 生成公共 document
+未来启用 HTML stream 时必须受 deadline、chunk、累计字节和 backpressure 限制。Manager 生成公共 document
 shell、CSP 和错误页。plugin 不能设置 cookie、CORS、CSP、redirect target 或任意响应 header；
 允许的 title/status/cache metadata 仍由 Manager 校验。
 
@@ -205,11 +205,16 @@ shell、CSP 和错误页。plugin 不能设置 cookie、CORS、CSP、redirect ta
 
 ## 6. Plugin → Manager reverse procedure
 
-第一版：
+当前已实现：
 
 ```text
 context.entities.get
 context.commands.enqueue
+```
+
+contract 已保留但生产 handler 尚未实现：
+
+```text
 context.plugins.callScoped
 context.ui.getData
 ```
@@ -300,9 +305,10 @@ credential。要求：
 
 ## 10. Deadline、取消与 liveness
 
-每个父调用由 Manager 决定绝对 deadline。reverse call 预算不得超过父 deadline，plugin 不能
-通过自报 timeout 延长。deadline 到期后 Manager abort 本地请求、discard operation/staged
-effects、按错误类别 retry/dead-letter，并关闭失效连接后 jitter backoff 重连。
+每个父调用由 Manager 用本地 monotonic clock 保存绝对 deadline；wire 的 `deadlineMs` 是发送时
+剩余预算，不是跨进程可比较的绝对时钟。reverse call 不能延长父 deadline。到期后 Manager
+abort 本地请求、discard operation/staged effects，并按错误类别 retry/dead-letter。连接是否
+失效由 WebSocket、heartbeat 和 connect timeout 判断，应用不因单次业务 timeout 杀进程。
 
 Manager 不 kill/restart plugin。`system.ping` 只检测连接和 plugin event loop；真正 liveness
 restart 由 Docker/systemd/Kubernetes 执行。
@@ -360,7 +366,7 @@ PLUGIN_ENDPOINTS=plugin.id=ws://plugin-id:8090/rpc/ws
 PLUGIN_MANAGER_INTERNAL_BIND=0.0.0.0
 PLUGIN_MANAGER_INTERNAL_PORT=8091
 PLUGIN_MANAGER_SERVICE_TOKEN=...
-PLUGIN_MANAGER_UI_SESSION_PUBLIC_KEY=...
+PLUGIN_MANAGER_UI_SESSION_SECRET=...
 PLUGIN_RPC_AUTH_TOKEN=...
 
 PLUGIN_RPC_MAX_FRAME_BYTES=...
@@ -370,12 +376,18 @@ PLUGIN_RPC_MAX_REVERSE_CALLS=...
 PLUGIN_RPC_BACKPRESSURE_BYTES=...
 PLUGIN_RPC_HEARTBEAT_INTERVAL_MS=...
 PLUGIN_RPC_HEARTBEAT_TIMEOUT_MS=...
+PLUGIN_RPC_CONNECT_TIMEOUT_MS=...
 
 PLUGIN_EVENT_POLL_INTERVAL_MS=...
-PLUGIN_EVENT_LEASE_SECONDS=...
+PLUGIN_EVENT_LEASE_MS=...
+PLUGIN_EVENT_BATCH_SIZE=...
+PLUGIN_EVENT_MAX_CONCURRENCY=...
 PLUGIN_EVENT_TIMEOUT_MS=...
 PLUGIN_EVENT_MAX_ATTEMPTS=...
 PLUGIN_EVENT_RETENTION_DAYS=...
+PLUGIN_ENTITY_HISTORY_RETENTION_DAYS=...
+PLUGIN_RETENTION_BATCH_SIZE=...
+PLUGIN_RETENTION_MAX_BATCHES=...
 
 PLUGIN_SSR_TIMEOUT_MS=...
 PLUGIN_SSR_MAX_HTML_BYTES=...
