@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import type { PluginManifest } from "@soulcloud/plugin-sdk";
+import type { PluginUiSession } from "@soulcloud/core";
 import type { PluginConnection } from "../src/connection";
 import { PluginManager, type ManifestStore } from "../src/manager";
 import { canonicalJson, sha256Hex } from "@soulcloud/plugin-rpc-contract";
@@ -161,5 +162,65 @@ describe("plugin catalog connection state", () => {
     expect(databaseReads).toBe(0);
     expect(operation.stagedCommandCount).toBe(0);
     expect(operation.stagedCommandBytes).toBe(0);
+  });
+
+  test("does not return SSR output after the installation is disabled in flight", async () => {
+    const persisted: PluginManifest = {
+      ...manifest("1.0.0"),
+      ui: { routes: [{ id: "main", path: "/main" }] },
+    };
+    const manifestHash = await sha256Hex(canonicalJson(persisted));
+    let reads = 0;
+    const prisma = {
+      pluginInstallation: {
+        findUnique: async () => {
+          reads += 1;
+          return {
+            projectId: "00000000-0000-4000-8000-000000000001",
+            pluginId: persisted.id,
+            pluginVersion: persisted.version,
+            manifestHash,
+            state: reads === 1 ? "enabled" : "disabled",
+          };
+        },
+      },
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000, prisma: prisma as never,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+      connections: Map<string, PluginConnection>;
+    };
+    internals.catalog.set(`${persisted.id}@${persisted.version}`, {
+      pluginId: persisted.id,
+      pluginVersion: persisted.version,
+      manifestHash,
+      manifest: persisted,
+      connected: true,
+    });
+    internals.connections.set(persisted.id, {
+      id: "connection",
+      isOpen: true,
+      manifest: { pluginVersion: persisted.version, manifestHash },
+      request: async () => ({ html: "<p>stale</p>" }),
+    } as unknown as PluginConnection);
+    const session: PluginUiSession = {
+      sub: "00000000-0000-4000-8000-000000000002",
+      projectId: "00000000-0000-4000-8000-000000000001",
+      installationId: "00000000-0000-4000-8000-000000000003",
+      pluginId: persisted.id,
+      pluginVersion: persisted.version,
+      manifestHash,
+      routeId: "main",
+      permissions: [],
+      locale: "en",
+      nonce: "nonce",
+    };
+
+    await expect(manager.renderPluginUi(session, "request", {})).rejects.toThrow("no longer valid");
+    expect(reads).toBe(2);
   });
 });

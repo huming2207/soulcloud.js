@@ -424,8 +424,7 @@ export class PluginManager {
     } catch (error) {
       throw publicError(`plugin UI input is too large: ${(error as Error).message}`, 400, "plugin_ui_invalid_input");
     }
-    const installation = await this.options.prisma.pluginInstallation.findUnique({ where: { id: session.installationId }, select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true } });
-    if (!installation || installation.state !== "enabled" || installation.projectId !== session.projectId || installation.pluginId !== session.pluginId || installation.pluginVersion !== session.pluginVersion || installation.manifestHash.trim() !== session.manifestHash) throw new Error("plugin UI session is no longer valid");
+    await this.assertUiSessionCurrent(session);
     const manifest = this.getManifest(session.pluginId, session.pluginVersion);
     if (!manifest?.ui?.routes.some((route) => route.id === session.routeId)) throw new Error("plugin UI route is not declared");
     const { connection } = this.requireConnectedManifest(session.pluginId, session.pluginVersion, session.manifestHash);
@@ -472,9 +471,35 @@ export class PluginManager {
         throw error;
       }
       await this.sealOperation(operationId);
+      // Do not return a page rendered from a snapshot that was disabled or
+      // migrated while the plugin call was in flight.
+      await this.assertUiSessionCurrent(session);
       return result;
     } finally {
       this.finishOperation(operationId);
+    }
+  }
+
+  private async assertUiSessionCurrent(session: PluginUiSession): Promise<void> {
+    const installation = await this.options.prisma!.pluginInstallation.findUnique({
+      where: { id: session.installationId },
+      select: {
+        projectId: true,
+        pluginId: true,
+        pluginVersion: true,
+        manifestHash: true,
+        state: true,
+      },
+    });
+    if (
+      !installation ||
+      installation.state !== "enabled" ||
+      installation.projectId !== session.projectId ||
+      installation.pluginId !== session.pluginId ||
+      installation.pluginVersion !== session.pluginVersion ||
+      installation.manifestHash.trim() !== session.manifestHash
+    ) {
+      throw publicError("plugin UI session is no longer valid", 403, "plugin_ui_session_invalid");
     }
   }
 
