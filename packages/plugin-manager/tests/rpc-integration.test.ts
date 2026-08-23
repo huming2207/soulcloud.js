@@ -135,4 +135,75 @@ describe("plugin oRPC WebSocket transport", () => {
     expect(output.html).toBe("<p>Plugin</p>");
     expect(uiInputHasOperationProof).toBe(false);
   });
+
+  test("shares the operation limit across WebSocket connections", async () => {
+    let handlerEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { handlerEntered = resolve; });
+    let releaseHandler!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseHandler = resolve; });
+    const limitedRuntime = await startPluginRuntime(definePlugin({
+      manifest: {
+        id: "limited.plugin",
+        version: "1.0.0",
+        apiVersion: 1,
+        profiles: [{
+          id: "fixture",
+          version: 1,
+          manufacturer: "Soulcloud",
+          model: "fixture",
+          capabilities: [],
+          entities: [],
+        }],
+        actions: [],
+        events: [{ kind: "reading", schemaVersion: 1 }],
+      },
+      onEvent: async () => {
+        handlerEntered();
+        await blocked;
+        return {};
+      },
+    }), { hostname: "127.0.0.1", port: 0, authToken, maxConcurrentOperations: 1 });
+    const connectionOptions = {
+      pluginId: "limited.plugin",
+      endpoint: limitedRuntime.url.replace(/^http/, "ws"),
+      authToken,
+      maxFrameBytes: 1024 * 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024 * 1024,
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 1_000,
+      reverseHandlers: {
+        entityGet: async () => null,
+        commandEnqueue: async () => ({ accepted: true as const }),
+        pluginCall: async () => null,
+        uiGetData: async () => null,
+      },
+    };
+    const first = new PluginConnection(connectionOptions);
+    const second = new PluginConnection(connectionOptions);
+    try {
+      await Promise.all([first.connect(), second.connect()]);
+      const eventInput = {
+        operationId: randomUUID(),
+        operationToken: `${randomUUID()}${randomUUID()}`,
+        event: { id: "00".repeat(16), seq: 1n, kind: "reading", schema: 1, receivedAt: new Date().toISOString(), payload: null },
+        installation: { id: randomUUID(), projectId: randomUUID(), pluginId: "limited.plugin", pluginVersion: "1.0.0", config: null },
+        device: { id: randomUUID(), uid: "fixture-1", profileId: "fixture", profileVersion: 1 },
+      };
+      const firstRequest = first.request("plugin.handleEvent", eventInput, 1_000);
+      await entered;
+      await expect(second.request("plugin.handleEvent", {
+        ...eventInput,
+        operationId: randomUUID(),
+        operationToken: `${randomUUID()}${randomUUID()}`,
+      }, 1_000)).rejects.toThrow("OVERLOADED");
+      releaseHandler();
+      await firstRequest;
+    } finally {
+      releaseHandler();
+      first.close();
+      second.close();
+      await limitedRuntime.close();
+    }
+  });
 });

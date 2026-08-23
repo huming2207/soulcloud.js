@@ -141,6 +141,8 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
   const budget = { ...DEFAULT_BUDGET, ...options.valueBudget };
   const maxFrameBytes = options.maxFrameBytes ?? 1024 * 1024;
   const maxConcurrent = options.maxConcurrentOperations ?? 8;
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent <= 0) throw new RangeError("plugin operation limit must be positive");
+  const operationLimiter = { running: 0, max: maxConcurrent };
   const log = options.log ?? ((message, fields) => console.log(`[soulcloud-plugin:${manifest.id}] ${message}`, fields ?? ""));
   let activeConnections = 0;
   const server = Bun.serve<{ connection?: RuntimeConnection; handshaken: boolean }>({
@@ -164,7 +166,7 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
       idleTimeout: options.idleTimeoutSeconds ?? 60,
       open(ws) {
         activeConnections += 1;
-        ws.data.connection = createRuntimeConnection(ws, runtimeDefinition, manifestHash, budget, maxConcurrent, log);
+        ws.data.connection = createRuntimeConnection(ws, runtimeDefinition, manifestHash, budget, operationLimiter, log);
       },
       message(ws, message) {
         const connection = ws.data.connection;
@@ -205,10 +207,14 @@ interface RuntimeConnection {
   close(): Promise<void>;
 }
 
-function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeConnection; handshaken: boolean }>, definition: PluginDefinition, manifestHash: string, budget: RpcValueBudget, maxConcurrent: number, log: (message: string, fields?: Record<string, unknown>) => void): RuntimeConnection {
+interface OperationLimiter {
+  running: number;
+  max: number;
+}
+
+function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeConnection; handshaken: boolean }>, definition: PluginDefinition, manifestHash: string, budget: RpcValueBudget, operations: OperationLimiter, log: (message: string, fields?: Record<string, unknown>) => void): RuntimeConnection {
   const bridge = createBridge(ws);
   const reverse = createContractClientFactory(new RPCLink({ connect: () => bridge, encodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX }, decodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX } }))(pluginToManagerContract);
-  let running = 0;
   const implemented = implement(managerToPluginContract).$context<{ isHandshaken: () => boolean; markHandshaken: () => void }>();
   const router = {
     system: {
@@ -222,16 +228,16 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
     action: {
       encode: implemented.action.encode.handler(({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
-        if (running >= maxConcurrent) rpcError("OVERLOADED", "plugin operation limit reached");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
         const descriptor = definition.manifest.actions.find((action) => action.id === input.actionId);
         const encoder = definition.encodeAction?.[input.actionId];
         if (!descriptor || !encoder) rpcError("INVALID_ACTION_INPUT", "unknown action");
         const check = validateActionInput(descriptor.inputSchema, input.input);
         if (!check.ok) rpcError("INVALID_ACTION_INPUT", check.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; "));
-        running += 1;
+        operations.running += 1;
         try { const args = encoder(input.input); assertRpcValueBudget(args, budget); return { command: descriptor.wire.command, args: commandWire(args), schemaVersion: descriptor.wire.schemaVersion }; }
         catch (error) { rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message); }
-        finally { running -= 1; }
+        finally { operations.running -= 1; }
       }),
     },
     plugin: {
@@ -245,8 +251,8 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
         } catch (error) {
           rpcError("INVALID_EVENT_INPUT", (error as Error).message);
         }
-        if (running >= maxConcurrent) rpcError("OVERLOADED", "plugin operation limit reached");
-        running += 1;
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), input.deadlineMs);
         try {
@@ -273,7 +279,7 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
           const parsed = eventOutputSchema.safeParse(wireOutput);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
-        } finally { clearTimeout(timer); running -= 1; }
+        } finally { clearTimeout(timer); operations.running -= 1; }
       }),
     },
     ui: {
@@ -281,8 +287,8 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         const renderer = definition.render?.[input.routeId];
         if (!renderer) rpcError("NOT_FOUND", "unknown UI route");
-        if (running >= maxConcurrent) rpcError("OVERLOADED", "plugin operation limit reached");
-        running += 1;
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
         try {
           const result = await renderer(pluginUiInput(input));
           assertRpcValueBudget(result, budget);
@@ -290,15 +296,15 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
         } finally {
-          running -= 1;
+          operations.running -= 1;
         }
       }),
       handleAction: implemented.ui.handleAction.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         const actionHandler = definition.handleAction?.[input.routeId];
         if (!actionHandler) rpcError("NOT_FOUND", "unknown UI route");
-        if (running >= maxConcurrent) rpcError("OVERLOADED", "plugin operation limit reached");
-        running += 1;
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
         try {
           const result = await actionHandler(input.action, pluginUiInput(input)) as { redirect?: string; errors?: { field: string; message: string }[] };
           assertRpcValueBudget(result, budget);
@@ -306,7 +312,7 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
         } finally {
-          running -= 1;
+          operations.running -= 1;
         }
       }),
     },
