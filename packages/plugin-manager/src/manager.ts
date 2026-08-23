@@ -430,7 +430,7 @@ export class PluginManager {
 
   private async consumeEventBatch(): Promise<void> {
     try {
-      const events = await this.options.eventStore.lease(
+      const events = await this.options.eventStore!.lease(
         this.options.eventBatchSize ?? 32,
         this.options.eventLeaseMs ?? 60_000,
       );
