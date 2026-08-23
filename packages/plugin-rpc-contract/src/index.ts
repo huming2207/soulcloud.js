@@ -155,6 +155,43 @@ export function assertRpcValueBudget(value: unknown, budget: RpcValueBudget): vo
   visit(value, 0);
 }
 
+/**
+ * RPC wire binary adapter. oRPC's JSON serializer keeps Blob values intact
+ * but serializes Uint8Array/ArrayBuffer values as plain objects, so every
+ * binary value crossing the WebSocket must be converted before sending.
+ */
+export function rpcBinaryToBlob(value: unknown): unknown {
+  if (value instanceof Uint8Array) return new Blob([value]);
+  if (value instanceof ArrayBuffer) return new Blob([new Uint8Array(value)]);
+  if (Array.isArray(value)) return value.map(rpcBinaryToBlob);
+  if (isPlainObject(value)) {
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) result[key] = rpcBinaryToBlob(item);
+    return result;
+  }
+  return value;
+}
+
+/** Restores Blob values to Uint8Array before plugin code sees them. */
+export async function rpcBinaryFromBlob(value: unknown): Promise<unknown> {
+  if (value instanceof Blob) return new Uint8Array(await value.arrayBuffer());
+  if (Array.isArray(value)) return Promise.all(value.map(rpcBinaryFromBlob));
+  if (isPlainObject(value)) {
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      result[key] = await rpcBinaryFromBlob(item);
+    }
+    return result;
+  }
+  return value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 export function canonicalJson(value: unknown): string {
   const visit = (current: unknown): string => {
     if (current === null || typeof current === "boolean" || typeof current === "string") return JSON.stringify(current);

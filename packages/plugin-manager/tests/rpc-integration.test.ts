@@ -11,6 +11,7 @@ let reverseEntityKey: string | undefined;
 let reverseCommand: string | undefined;
 let reverseEntityValue: unknown;
 let uiInputHasOperationProof = false;
+let eventPayloadValue: unknown;
 
 beforeAll(async () => {
   runtime = await startPluginRuntime(definePlugin({
@@ -34,7 +35,8 @@ beforeAll(async () => {
       ui: { routes: [{ id: "main", path: "/main" }] },
     },
     encodeAction: { reboot: () => [{ delay: 3n }] },
-    onEvent: async (context) => {
+    onEvent: async (context, event) => {
+      eventPayloadValue = event.payload;
       reverseEntityValue = await context.getEntity("temperature");
       await context.enqueueCommand("acknowledge");
       return {
@@ -143,6 +145,54 @@ describe("plugin oRPC WebSocket transport", () => {
     expect(reverseEntityKey).toBe("temperature");
     expect((reverseEntityValue as { value: unknown }).value).toEqual(Uint8Array.of(4, 5, 6));
     expect(reverseCommand).toBe("acknowledge");
+  });
+
+  test("restores binary device event payloads across the RPC adapter", async () => {
+    const installationId = randomUUID();
+    const projectId = randomUUID();
+    const deviceId = randomUUID();
+    const base = {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      event: {
+        id: "00".repeat(16),
+        seq: 1n,
+        kind: "reading",
+        schema: 1,
+        receivedAt: new Date().toISOString(),
+      },
+      installation: { id: installationId, projectId, pluginId: "integration.plugin", pluginVersion: "1.0.0", config: null },
+      device: { id: deviceId, uid: "fixture-1", profileId: "fixture", profileVersion: 1 },
+    };
+
+    await connection.request("plugin.handleEvent", {
+      ...base,
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      event: { ...base.event, payload: Uint8Array.of(7, 8, 9) },
+    }, 1_000);
+    expect(eventPayloadValue).toEqual(Uint8Array.of(7, 8, 9));
+    expect(eventPayloadValue).toBeInstanceOf(Uint8Array);
+
+    await connection.request("plugin.handleEvent", {
+      ...base,
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      event: {
+        ...base.event,
+        payload: {
+          samples: [Uint8Array.of(1, 2, 3), Uint8Array.of(4, 5)],
+          flags: { ready: true },
+        },
+      },
+    }, 1_000);
+    const nested = eventPayloadValue as { samples: Uint8Array[]; flags: { ready: boolean } };
+    expect(nested.flags).toEqual({ ready: true });
+    expect(nested.samples).toHaveLength(2);
+    expect(nested.samples[0]).toEqual(Uint8Array.of(1, 2, 3));
+    expect(nested.samples[0]).toBeInstanceOf(Uint8Array);
+    expect(nested.samples[1]).toEqual(Uint8Array.of(4, 5));
+    expect(nested.samples[1]).toBeInstanceOf(Uint8Array);
   });
 
   test("does not expose wire operation proofs to plugin UI code", async () => {

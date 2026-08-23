@@ -16,6 +16,7 @@ import {
   hasRpcPrefix,
   managerToPluginContract,
   pluginToManagerContract,
+  rpcBinaryFromBlob,
   sha256Hex,
   uiActionOutput as uiActionOutputSchema,
   uiRenderOutput as uiRenderOutputSchema,
@@ -249,8 +250,9 @@ function createRuntimeConnection(
         if (!definition.onEvent) return { updates: [], logs: [] };
         const profile = definition.manifest.profiles.find((item) => item.id === input.device.profileId && item.version === input.device.profileVersion);
         if (!profile) rpcError("INVALID_EVENT_INPUT", "unknown device profile");
+        const payload = await rpcBinaryFromBlob(input.event.payload);
         try {
-          assertRpcValueBudget(input.event.payload, budget);
+          assertRpcValueBudget(payload, budget);
         } catch (error) {
           rpcError("INVALID_EVENT_INPUT", (error as Error).message);
         }
@@ -271,7 +273,7 @@ function createRuntimeConnection(
               return result.accepted ? undefined : undefined;
             },
           };
-          const result = await definition.onEvent(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload: input.event.payload, installation: input.installation, device: input.device });
+          const result = await definition.onEvent(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload, installation: input.installation, device: input.device });
           const updates = result?.updates ?? [];
           try {
             validateEntityUpdates(profile.entities, updates);

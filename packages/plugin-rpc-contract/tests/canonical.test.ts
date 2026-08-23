@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, canonicalJson, eventOutput, sha256Hex } from "../src";
+import { assertRpcValueBudget, canonicalJson, eventOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
   test("sorts object keys without changing array order", async () => {
@@ -30,5 +30,39 @@ describe("RPC integer bounds", () => {
     const update = (sequence: bigint) => ({ updates: [{ entityKey: "counter", sequence }], logs: [] });
     expect(eventOutput.safeParse(update((1n << 64n) - 1n)).success).toBe(true);
     expect(eventOutput.safeParse(update(1n << 64n)).success).toBe(false);
+  });
+});
+
+describe("RPC binary adapter", () => {
+  test("round-trips root and nested Uint8Array values through Blob", async () => {
+    const wire = rpcBinaryToBlob({
+      raw: Uint8Array.of(1, 2, 3),
+      nested: { sample: Uint8Array.of(4, 5) },
+      list: [Uint8Array.of(6)],
+      text: "keep",
+    });
+    expect(wire).toEqual({
+      raw: expect.any(Blob),
+      nested: { sample: expect.any(Blob) },
+      list: [expect.any(Blob)],
+      text: "keep",
+    });
+
+    const restored = await rpcBinaryFromBlob(wire);
+    expect(restored).toEqual({
+      raw: Uint8Array.of(1, 2, 3),
+      nested: { sample: Uint8Array.of(4, 5) },
+      list: [Uint8Array.of(6)],
+      text: "keep",
+    });
+    expect((restored as { raw: unknown }).raw).toBeInstanceOf(Uint8Array);
+  });
+
+  test("is idempotent for values that already crossed the wire", async () => {
+    const original = { blob: new Blob([Uint8Array.of(1)]) };
+    const wire = rpcBinaryToBlob(original);
+    expect(wire).toEqual(original);
+    expect((wire as { blob: Blob }).blob).toBe(original.blob);
+    expect(await rpcBinaryFromBlob({ text: "plain" })).toEqual({ text: "plain" });
   });
 });

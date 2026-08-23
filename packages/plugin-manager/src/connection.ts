@@ -11,6 +11,7 @@ import {
   hasRpcPrefix,
   managerToPluginContract,
   pluginToManagerContract,
+  rpcBinaryToBlob,
   type CommandEnqueueInput,
   type EntityGetInput,
   type EntityGetOutput,
@@ -196,7 +197,14 @@ export class PluginConnection {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const operation = input as Record<string, unknown>;
-      if (method === "plugin.handleEvent") return await this.forward.plugin.handleEvent({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
+      if (method === "plugin.handleEvent") {
+        const event = (operation.event ?? {}) as Record<string, unknown>;
+        return await this.forward.plugin.handleEvent({
+          ...operation,
+          deadlineMs: timeoutMs,
+          event: { ...event, payload: rpcBinaryToBlob(event.payload) },
+        }, { signal: controller.signal });
+      }
       if (method === "action.encode") return await this.forward.action.encode({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
       if (method === "ui.render") return await this.forward.ui.render({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
       return await this.forward.ui.handleAction({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });

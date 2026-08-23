@@ -87,7 +87,11 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       if (installation.projectId !== device.projectId || !(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
-        const result = await callManager(options, `/internal/plugins/installations/${params.id}/bindings`, parsed.data);
+        const result = await callManager(options, `/internal/plugins/installations/${params.id}/bindings`, {
+          deviceId: parsed.data.device_id,
+          profileId: parsed.data.profile_id,
+          profileVersion: parsed.data.profile_version,
+        });
         set.status = result.status;
         return result.value;
       } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
