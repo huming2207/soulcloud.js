@@ -91,7 +91,7 @@ export async function bindDeviceToPluginInstallation(
 
     const lockedBinding = await tx.pluginDeviceBinding.findUnique({
       where: { deviceId: input.deviceId },
-      select: { installationId: true },
+      select: { installationId: true, profileId: true, profileVersion: true },
     });
     if (lockedBinding && !installationsById.has(lockedBinding.installationId)) {
       throw new Error("device plugin binding changed concurrently; retry the bind");
@@ -104,6 +104,26 @@ export async function bindDeviceToPluginInstallation(
       (item) => item.id === input.profileId && item.version === input.profileVersion,
     );
     if (!profile) throw new Error("profile is not declared by the plugin manifest");
+
+    const bindingChanged = !lockedBinding ||
+      lockedBinding.installationId !== input.installationId ||
+      lockedBinding.profileId !== input.profileId ||
+      lockedBinding.profileVersion !== input.profileVersion;
+    if (bindingChanged) {
+      const stateInstallationIds = [...new Set([
+        input.installationId,
+        ...(lockedBinding ? [lockedBinding.installationId] : []),
+      ])];
+      // Current state has no profile column because a device has one active
+      // binding. Never reinterpret a previous profile's values/revisions when
+      // that binding changes; immutable history remains available separately.
+      await tx.pluginEntityState.deleteMany({
+        where: {
+          deviceId: input.deviceId,
+          installationId: { in: stateInstallationIds },
+        },
+      });
+    }
 
     await registerInstallationProfileEntitiesInTransaction(
       tx,

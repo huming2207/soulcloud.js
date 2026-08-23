@@ -115,6 +115,35 @@ describe("plugin installation lifecycle", () => {
     expect(state.value).toBe(20);
   });
 
+  test("clears current Entity state when the active profile changes", async () => {
+    await bindDeviceToPluginInstallation(prisma, {
+      installationId: installationA,
+      deviceId: deviceIds[1]!,
+      profileId: "profile-b",
+      profileVersion: 1,
+    });
+    expect(await prisma.pluginEntityState.count({
+      where: { installationId: installationA, deviceId: deviceIds[1]! },
+    })).toBe(0);
+
+    await prisma.$transaction((tx) => applyEntityUpdates(tx, {
+      installationId: installationA,
+      deviceId: deviceIds[1]!,
+      profileId: "profile-b",
+      profileVersion: 1,
+      updates: [{ entityKey: "temperature", value: 30, sequence: 1n }],
+    }));
+    await bindDeviceToPluginInstallation(prisma, {
+      installationId: installationA,
+      deviceId: deviceIds[1]!,
+      profileId: "profile-b",
+      profileVersion: 1,
+    });
+    expect(await prisma.pluginEntityState.count({
+      where: { installationId: installationA, deviceId: deviceIds[1]! },
+    })).toBe(1);
+  });
+
   test("reconcile reports a binding that is not in the pinned manifest", async () => {
     await prisma.pluginDeviceBinding.update({ where: { deviceId: deviceIds[1]! }, data: { profileId: "missing-profile" } });
     await expect(reconcilePluginInstallation(prisma, installationA))
