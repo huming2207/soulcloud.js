@@ -45,7 +45,7 @@ export async function registerInstallationProfileEntitiesInTransaction(
 ): Promise<void> {
     await tx.$executeRaw`SELECT id FROM plugin_installations WHERE id = ${installationId}::uuid FOR UPDATE`;
     const existing = await tx.pluginEntityDescriptor.findMany({
-      where: { installationId },
+      where: { installationId, profileId, profileVersion },
       orderBy: { revision: "asc" },
     });
     const latest = new Map<string, (typeof existing)[number]>();
@@ -97,14 +97,7 @@ export async function registerInstallationProfileEntitiesInTransaction(
     }
 
     for (const row of existing) {
-      // A single installation may serve devices with different manifest
-      // profiles. Only the profile being reconciled may be deprecated here;
-      // another profile remains active while any device still uses it.
-      if (
-        row.profileId === profileId &&
-        row.profileVersion === profileVersion &&
-        !wanted.has(row.entityKey)
-      ) {
+      if (!wanted.has(row.entityKey)) {
         deprecatedIds.push(row.id);
       }
     }
