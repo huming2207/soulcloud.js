@@ -8,6 +8,7 @@ import {
   RPC_PATH,
   RPC_PROTOCOL_HEADER,
   RPC_VERSION,
+  hasRpcPrefix,
   managerToPluginContract,
   pluginToManagerContract,
   type CommandEnqueueInput,
@@ -91,7 +92,7 @@ export class PluginConnection {
       };
       socket.addEventListener("error", () => fail(new PluginConnectionError("plugin WebSocket error")));
       socket.addEventListener("open", () => {
-        const bridge = createClientBridge(socket);
+        const bridge = createClientBridge(socket, this.options.backpressureBytes);
         this.bridge = bridge;
         const reverseImpl = implement(pluginToManagerContract).$context<{ signal: AbortSignal }>();
         const handler = {
@@ -110,6 +111,7 @@ export class PluginConnection {
             .then(() => this.handleSocketMessage(socket, bridge, event))
             .catch(() => socket.close(1002, "invalid reverse RPC frame"));
         });
+        socket.addEventListener("error", (event) => bridge.dispatch("error", event));
         socket.addEventListener("close", () => this.onClose(socket));
         this.finishHandshake().then(() => { settled = true; resolve(); }).catch((error) => { socket.close(1002, "handshake failed"); fail(error instanceof Error ? error : new Error(String(error))); });
       });
@@ -130,7 +132,14 @@ export class PluginConnection {
       ? new TextEncoder().encode(data).byteLength
       : data instanceof ArrayBuffer ? data.byteLength : data.byteLength;
     if (bytes > this.options.maxFrameBytes) { socket.close(1009, "RPC frame too large"); return; }
-    if (!hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) return;
+    if (hasRpcPrefix(data, MANAGER_TO_PLUGIN_PREFIX)) {
+      bridge.dispatch("message", { data });
+      return;
+    }
+    if (!hasRpcPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
+      socket.close(1002, "invalid RPC prefix");
+      return;
+    }
     try {
       await this.reverseHandler?.message(
         bridge,
@@ -183,6 +192,7 @@ export class PluginConnection {
     const connectionId = this.connectionId;
     const reverseHandler = this.reverseHandler;
     const bridge = this.bridge;
+    bridge?.notifyClose();
     this.handshaken = false; this.forward = null; this.manifestInfo = null; this.bridge = null;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer); this.heartbeatTimer = null;
     this.reverseHandler = null; this.socket = null;
@@ -209,20 +219,31 @@ export class PluginConnection {
   }
 }
 
-function hasPrefix(data: string | ArrayBuffer | ArrayBufferView, prefix: string): boolean {
-  if (typeof data === "string") return data.startsWith(prefix);
-  const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  const expected = new TextEncoder().encode(prefix); if (bytes.byteLength < expected.byteLength) return false;
-  for (let index = 0; index < expected.length; index += 1) if (bytes[index] !== expected[index]) return false;
-  return true;
-}
-
-function createClientBridge(socket: WebSocket) {
+function createClientBridge(socket: WebSocket, backpressureBytes: number) {
+  const listeners = new Map<string, Set<(event: unknown) => void>>();
+  let closed = false;
+  const dispatch = (type: string, event: unknown): void => {
+    for (const listener of listeners.get(type) ?? []) listener(event);
+  };
   return {
-    get readyState() { return socket.readyState; },
-    send(data: string | Uint8Array<ArrayBuffer>) { return socket.send(data); },
-    addEventListener(type: string, listener: (event: unknown) => void) { socket.addEventListener(type, listener as EventListener); },
-    removeEventListener(type: string, listener: (event: unknown) => void) { socket.removeEventListener(type, listener as EventListener); },
+    get readyState() { return closed ? WebSocket.CLOSED : socket.readyState; },
+    send(data: string | Uint8Array<ArrayBuffer>) {
+      if (socket.bufferedAmount > backpressureBytes) throw new PluginConnectionError("plugin send queue is full");
+      return socket.send(data);
+    },
+    addEventListener(type: string, listener: (event: unknown) => void) {
+      let set = listeners.get(type);
+      if (!set) listeners.set(type, set = new Set());
+      set.add(listener);
+    },
+    removeEventListener(type: string, listener: (event: unknown) => void) { listeners.get(type)?.delete(listener); },
+    dispatch,
+    notifyClose() {
+      if (closed) return;
+      closed = true;
+      dispatch("close", {});
+      listeners.clear();
+    },
     close() { socket.close(); },
   };
 }
