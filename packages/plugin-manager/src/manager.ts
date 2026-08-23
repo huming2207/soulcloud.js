@@ -28,7 +28,7 @@ import { PluginConnection, type PluginConnectionOptions, type ReverseHandlers } 
 
 export interface PluginManagerOptions {
   endpoints: ReadonlyMap<string, string>;
-  authToken?: string;
+  authToken: string;
   maxFrameBytes: number;
   maxPendingRequests: number;
   backpressureBytes: number;

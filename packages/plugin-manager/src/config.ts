@@ -7,6 +7,7 @@ const envSchema = z.object({
   PLUGIN_MANAGER_INTERNAL_BIND: z.string().default("127.0.0.1"),
   PLUGIN_MANAGER_INTERNAL_PORT: z.coerce.number().int().min(1).max(65_535).default(8091),
   PLUGIN_MANAGER_SERVICE_TOKEN: z.string().min(16),
+  PLUGIN_RPC_AUTH_TOKEN: z.string().min(32),
   PLUGIN_RPC_MAX_FRAME_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
   PLUGIN_RPC_MAX_PENDING_REQUESTS: z.coerce.number().int().positive().default(128),
   PLUGIN_RPC_BACKPRESSURE_BYTES: z.coerce.number().int().positive().default(4 * 1024 * 1024),

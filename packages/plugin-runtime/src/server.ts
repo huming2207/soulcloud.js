@@ -19,6 +19,7 @@ import {
 import {
   validateActionInput,
   validateEntityUpdates,
+  validateManifest,
   type CommandArgument,
   type PluginDefinition,
   type PluginManifest,
@@ -37,7 +38,7 @@ const DEFAULT_BUDGET: RpcValueBudget = {
 export interface PluginRuntimeOptions {
   hostname: string;
   port: number;
-  authToken?: string;
+  authToken: string;
   maxFrameBytes?: number;
   maxConcurrentOperations?: number;
   backpressureBytes?: number;
@@ -91,7 +92,9 @@ function createBridge(ws: Bun.ServerWebSocket<unknown>) {
 }
 
 export async function startPluginRuntime(definition: PluginDefinition, options: PluginRuntimeOptions): Promise<PluginRuntimeHandle> {
-  const manifest = definition.manifest;
+  if (options.authToken.length < 32) throw new Error("plugin RPC auth token must be at least 32 characters");
+  const manifest = validateManifest(definition.manifest);
+  const runtimeDefinition = { ...definition, manifest };
   const manifestHash = await sha256Hex(canonicalJson(manifest));
   const budget = { ...DEFAULT_BUDGET, ...options.valueBudget };
   const maxFrameBytes = options.maxFrameBytes ?? 1024 * 1024;
@@ -107,7 +110,7 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
       if (url.pathname === "/health" && request.method === "GET") return json(200, { status: "ok", pluginId: manifest.id, pluginVersion: manifest.version, manifestHash });
       if (url.pathname !== RPC_PATH || request.method !== "GET") return json(404, { error: "not_found" });
       if (request.headers.get("x-soulcloud-rpc-protocol") !== RPC_PROTOCOL_HEADER) return json(400, { error: "unsupported_rpc_protocol" });
-      if (options.authToken && request.headers.get("authorization") !== `Bearer ${options.authToken}`) return json(401, { error: "unauthorized" });
+      if (request.headers.get("authorization") !== `Bearer ${options.authToken}`) return json(401, { error: "unauthorized" });
       if (activeConnections >= 16) return json(503, { error: "connection_limit" });
       if (!server.upgrade(request, { data: { handshaken: false } })) return json(400, { error: "upgrade_failed" });
       return undefined as unknown as Response;
@@ -119,7 +122,7 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
       idleTimeout: options.idleTimeoutSeconds ?? 60,
       open(ws) {
         activeConnections += 1;
-        ws.data.connection = createRuntimeConnection(ws, definition, manifestHash, budget, maxConcurrent, log);
+        ws.data.connection = createRuntimeConnection(ws, runtimeDefinition, manifestHash, budget, maxConcurrent, log);
       },
       message(ws, message) {
         const connection = ws.data.connection;

@@ -8,10 +8,12 @@ const definition = loaded.default ?? loaded.plugin;
 if (!definition) throw new Error("PLUGIN_ENTRYPOINT must export default or plugin");
 const port = Number.parseInt(process.env.PLUGIN_PORT ?? "8090", 10);
 if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("PLUGIN_PORT must be a valid port");
+const authToken = process.env.PLUGIN_RPC_AUTH_TOKEN;
+if (!authToken || authToken.length < 32) throw new Error("PLUGIN_RPC_AUTH_TOKEN must be at least 32 characters");
 const runtime = await startPluginRuntime(definition, {
   hostname: process.env.PLUGIN_BIND ?? "0.0.0.0",
   port,
-  authToken: process.env.PLUGIN_RPC_AUTH_TOKEN,
+  authToken,
   maxFrameBytes: Number.parseInt(process.env.PLUGIN_RPC_MAX_FRAME_BYTES ?? String(1024 * 1024), 10),
   backpressureBytes: Number.parseInt(process.env.PLUGIN_RPC_BACKPRESSURE_BYTES ?? String(4 * 1024 * 1024), 10),
 });

@@ -28,7 +28,7 @@ export interface ReverseHandlers {
 export interface PluginConnectionOptions {
   pluginId: string;
   endpoint: string;
-  authToken?: string;
+  authToken: string;
   maxFrameBytes: number;
   maxPendingRequests: number;
   backpressureBytes: number;
@@ -78,7 +78,7 @@ export class PluginConnection {
   private async openSocket(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const socket = new WebSocket(this.options.endpoint, { headers: { "x-soulcloud-rpc-protocol": RPC_PROTOCOL_HEADER, ...(this.options.authToken ? { authorization: `Bearer ${this.options.authToken}` } : {}) } });
+      const socket = new WebSocket(this.options.endpoint, { headers: { "x-soulcloud-rpc-protocol": RPC_PROTOCOL_HEADER, authorization: `Bearer ${this.options.authToken}` } });
       this.connectionId = crypto.randomUUID();
       this.socket = socket;
       this.incomingTail = Promise.resolve();

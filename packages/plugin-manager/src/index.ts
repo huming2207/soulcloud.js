@@ -9,7 +9,7 @@ const manager = new PluginManager({
   prisma,
   uiSessionSecret: config.PLUGIN_MANAGER_UI_SESSION_SECRET,
   uiSessionTtlSeconds: config.PLUGIN_UI_SESSION_TTL_SECONDS,
-  authToken: process.env.PLUGIN_RPC_AUTH_TOKEN,
+  authToken: config.PLUGIN_RPC_AUTH_TOKEN,
   maxFrameBytes: config.PLUGIN_RPC_MAX_FRAME_BYTES,
   maxPendingRequests: config.PLUGIN_RPC_MAX_PENDING_REQUESTS,
   backpressureBytes: config.PLUGIN_RPC_BACKPRESSURE_BYTES,
