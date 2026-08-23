@@ -13,6 +13,7 @@ import {
   assertRpcValueBudget,
   canonicalJson,
   eventOutput as eventOutputSchema,
+  hasRpcPrefix,
   managerToPluginContract,
   pluginToManagerContract,
   sha256Hex,
@@ -164,7 +165,7 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
         const data = message instanceof ArrayBuffer ? message : typeof message === "string" ? message : message instanceof Uint8Array ? message : new Uint8Array(message as ArrayBuffer);
         const bytes = typeof data === "string" ? new TextEncoder().encode(data).byteLength : data.byteLength;
         if (bytes > maxFrameBytes) { ws.close(1009, "RPC frame too large"); return; }
-        if (!hasPrefix(data, MANAGER_TO_PLUGIN_PREFIX) && !hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
+        if (!hasRpcPrefix(data, MANAGER_TO_PLUGIN_PREFIX) && !hasRpcPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
           ws.close(1002, "invalid RPC prefix");
           return;
         }
@@ -180,15 +181,6 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
   });
   log("plugin listening", { url: server.url.toString(), version: manifest.version, manifestHash });
   return { manifest, manifestHash, url: server.url.toString().replace(/\/$/, ""), close: async () => { await server.stop(true); } };
-}
-
-function hasPrefix(data: string | ArrayBuffer | ArrayBufferView, prefix: string): boolean {
-  if (typeof data === "string") return data.startsWith(prefix);
-  const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  const expected = new TextEncoder().encode(prefix);
-  if (bytes.byteLength < expected.byteLength) return false;
-  for (let index = 0; index < expected.length; index += 1) if (bytes[index] !== expected[index]) return false;
-  return true;
 }
 
 interface RuntimeConnection {
@@ -317,7 +309,7 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
     bridge,
     handler,
     receive(data, context) {
-      if (hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
+      if (hasRpcPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
         // A reverse response may be needed by the currently running forward
         // handler. Dispatch it immediately; putting it on receiveTail would
         // deadlock handleEvent -> reverse call -> response.
