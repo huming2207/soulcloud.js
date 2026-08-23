@@ -171,6 +171,29 @@ export async function completePluginEvent(
   return result === 1;
 }
 
+/** Extends active leases in one round trip while a Manager drains its batch. */
+export async function renewPluginEventLeases(
+  prisma: PrismaClient,
+  leases: readonly { id: string; leaseToken: string }[],
+  leaseMs: number,
+): Promise<number> {
+  if (leases.length === 0) return 0;
+  if (!Number.isInteger(leaseMs) || leaseMs <= 0) throw new RangeError("event lease duration must be positive");
+  const rows = leases.map((lease) => ({ id: lease.id, lease_token: lease.leaseToken }));
+  return prisma.$executeRaw`
+    WITH active AS (
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb)
+      AS x(id uuid, lease_token text)
+    )
+    UPDATE plugin_events e
+    SET lease_expires_at = CURRENT_TIMESTAMP + (${leaseMs} * INTERVAL '1 millisecond')
+    FROM active a
+    WHERE e.id = a.id
+      AND e.state = 'leased'
+      AND e.lease_token = a.lease_token
+  `;
+}
+
 /** Completes an event and applies its Entity updates under the same commit. */
 export async function completePluginEventWithUpdates(
   prisma: PrismaClient,

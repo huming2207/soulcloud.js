@@ -13,6 +13,7 @@ import {
   setPluginInstallationState,
   leasePluginEvents,
   releasePluginEvent,
+  renewPluginEventLeases,
   purgePluginData,
   Prisma,
   type LeasedPluginEvent,
@@ -59,6 +60,7 @@ export interface PluginEventStore {
   complete(eventId: string, leaseToken: string): Promise<boolean>;
   completeWithUpdates?(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[]; commands?: readonly { deviceId: string; command: DeviceCommand }[] }): Promise<boolean>;
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number): Promise<boolean>;
+  renew?(leases: readonly { id: string; leaseToken: string }[], leaseMs: number): Promise<number>;
   purge?(eventRetentionDays: number, historyRetentionDays: number): Promise<{ events: number; history: number }>;
 }
 
@@ -72,6 +74,7 @@ export class PrismaPluginEventStore implements PluginEventStore {
   release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number) {
     return releasePluginEvent(this.prisma, eventId, leaseToken, permanent, error, retryMs);
   }
+  renew(leases: readonly { id: string; leaseToken: string }[], leaseMs: number) { return renewPluginEventLeases(this.prisma, leases, leaseMs); }
   purge(eventRetentionDays: number, historyRetentionDays: number) { return purgePluginData(this.prisma, eventRetentionDays, historyRetentionDays); }
 }
 
@@ -434,9 +437,36 @@ export class PluginManager {
         this.options.eventBatchSize ?? 32,
         this.options.eventLeaseMs ?? 60_000,
       );
-      for (const event of events) {
-        if (this.stopping) await this.releaseEvent(event, false, "plugin manager is shutting down");
-        else await this.dispatchEvent(event);
+      const pending = new Map(events.map((event) => [event.id, { id: event.id, leaseToken: event.lease_token }]));
+      const leaseMs = this.options.eventLeaseMs ?? 60_000;
+      let renewal: Promise<void> | null = null;
+      const renewTimer = this.options.eventStore!.renew && pending.size > 0
+        ? setInterval(() => {
+            if (renewal) return;
+            const leases = [...pending.values()];
+            if (leases.length === 0) return;
+            const running = this.options.eventStore!.renew!(leases, leaseMs)
+              .then(() => undefined)
+              .catch((error) => {
+                this.log("event lease renewal failed", { count: leases.length, error: (error as Error).message });
+              });
+            renewal = running;
+            void running.finally(() => { if (renewal === running) renewal = null; });
+          }, Math.max(100, Math.floor(leaseMs / 3)))
+        : null;
+      renewTimer?.unref?.();
+      try {
+        for (const event of events) {
+          try {
+            if (this.stopping) await this.releaseEvent(event, false, "plugin manager is shutting down");
+            else await this.dispatchEvent(event);
+          } finally {
+            pending.delete(event.id);
+          }
+        }
+      } finally {
+        if (renewTimer) clearInterval(renewTimer);
+        if (renewal) await renewal;
       }
     } catch (error) {
       this.log("event poll failed", { error: (error as Error).message });
