@@ -129,5 +129,17 @@ export function validateEntityUpdates(descriptors: EntityDescriptor[], updates: 
     if (!descriptor) throw new Error(`unknown entity ${update.entityKey}`);
     if (!valueMatches(descriptor, update.value)) throw new Error(`invalid value for entity ${update.entityKey}`);
     if (update.quality && !["good", "bad", "uncertain", "stale", "unknown"].includes(update.quality)) throw new Error(`invalid quality for entity ${update.entityKey}`);
+    if (update.sequence !== undefined) {
+      const validSequence = typeof update.sequence === "bigint"
+        ? update.sequence >= 0n
+        : Number.isSafeInteger(update.sequence) && update.sequence >= 0;
+      if (!validSequence) throw new Error(`invalid sequence for entity ${update.entityKey}`);
+    }
+    if (update.sourceTimestamp !== undefined && Number.isNaN(new Date(update.sourceTimestamp).getTime())) {
+      throw new Error(`invalid source timestamp for entity ${update.entityKey}`);
+    }
+    if (update.alarm && (update.alarm.code.length < 1 || update.alarm.code.length > 256)) {
+      throw new Error(`invalid alarm code for entity ${update.entityKey}`);
+    }
   }
 }

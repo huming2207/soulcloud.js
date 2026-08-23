@@ -71,6 +71,9 @@ async function requestJson(request: Request): Promise<unknown> {
 
 function failure(error: unknown): Response {
   const explicitStatus = typeof error === "object" && error !== null && "status" in error ? Number((error as { status: unknown }).status) : undefined;
+  const explicitCode = typeof error === "object" && error !== null && "publicCode" in error
+    ? String((error as { publicCode: unknown }).publicCode)
+    : undefined;
   const message = error instanceof Error ? error.message : "plugin manager operation failed";
   const mapped = Number.isInteger(explicitStatus) && explicitStatus! >= 400 && explicitStatus! <= 599
     ? explicitStatus!
@@ -80,7 +83,10 @@ function failure(error: unknown): Response {
           : message.includes("disabled") || message.includes("changed concurrently") || message.includes("changed while") ? 409
             : 500;
   const publicMessage = mapped >= 500 && mapped !== 502 ? "plugin manager operation failed" : message;
-  return json(mapped, { error: mapped === 400 ? "invalid_request" : mapped === 404 ? "not_found" : mapped === 409 ? "conflict" : mapped === 502 ? "plugin_action_failed" : mapped === 503 ? "plugin_unavailable" : "plugin_manager_error", message: publicMessage });
+  const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "plugin_ui_invalid_output"].includes(explicitCode)
+    ? explicitCode
+    : mapped === 400 ? "invalid_request" : mapped === 404 ? "not_found" : mapped === 409 ? "conflict" : mapped === 502 ? "plugin_output_invalid" : mapped === 503 ? "plugin_unavailable" : "plugin_manager_error";
+  return json(mapped, { error: code, message: publicMessage });
 }
 
 const createInstallationSchema = z.object({ projectId: z.string().uuid(), pluginId: z.string().min(1).max(128), pluginVersion: z.string().min(1).max(128), manifestHash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown() }).strict();

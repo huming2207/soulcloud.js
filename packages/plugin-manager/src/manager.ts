@@ -123,6 +123,10 @@ function isPrismaUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === "P2002";
 }
 
+function publicError(message: string, status: number, publicCode: string): Error {
+  return Object.assign(new Error(message), { status, publicCode });
+}
+
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
 
 interface ActiveOperation {
@@ -268,9 +272,9 @@ export class PluginManager {
     const manifest = this.getManifest(installation.pluginId, installation.pluginVersion);
     if (!manifest || manifest.version !== installation.pluginVersion) throw new Error("plugin manifest is unavailable");
     const action = manifest.actions.find((item) => item.id === input.actionId);
-    if (!action) throw new Error("action is not declared by the plugin manifest");
+    if (!action) throw publicError("action is not declared by the plugin manifest", 404, "action_not_found");
     const validInput = validateActionInput(action.inputSchema, input.actionInput);
-    if (!validInput.ok) throw new Error(`invalid action input: ${validInput.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; ")}`);
+    if (!validInput.ok) throw publicError(`invalid action input: ${validInput.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; ")}`, 400, "invalid_action_input");
     const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
@@ -300,16 +304,16 @@ export class PluginManager {
         await this.sealOperation(operationId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (/INVALID_PLUGIN_OUTPUT|plugin encoder/i.test(message)) throw new Error(`plugin encoder output invalid: ${message}`);
+        if (/INVALID_PLUGIN_OUTPUT|plugin encoder/i.test(message)) throw publicError(`plugin encoder output invalid: ${message}`, 502, "invalid_action_output");
         throw error;
       }
       if (!encoded || encoded.command !== action.wire.command || encoded.schemaVersion !== action.wire.schemaVersion || !Array.isArray(encoded.args)) {
-        throw new Error("plugin encoder output invalid: command, schemaVersion or args are malformed");
+        throw publicError("plugin encoder output invalid: command, schemaVersion or args are malformed", 502, "invalid_action_output");
       }
       const args: CommandArgument[] = [];
       for (const argument of encoded.args) {
         if (!argument || typeof argument !== "object" || typeof argument.name !== "string" || !argument.name || !Object.prototype.hasOwnProperty.call(argument, "value")) {
-          throw new Error("plugin encoder output invalid: each argument must contain a name and value");
+          throw publicError("plugin encoder output invalid: each argument must contain a name and value", 502, "invalid_action_output");
         }
         const value = argument.value instanceof Blob ? new Uint8Array(await argument.value.arrayBuffer()) : argument.value;
         args.push({ [argument.name]: value as CommandArgument[string] });
@@ -367,17 +371,24 @@ export class PluginManager {
       reverseSettledWaiters: new Set(),
     });
     try {
-      const result = await connection.request(method, {
-        operationId,
-        operationToken,
-        requestId: input.requestId,
-        routeId: session.routeId,
-        installationId: session.installationId,
-        projectId: session.projectId,
-        user: { id: session.sub, locale: session.locale, permissions: session.permissions },
-        params: input.params,
-        ...(method === "ui.handleAction" ? { action: input.action } : {}),
-      }, 30_000);
+      let result: unknown;
+      try {
+        result = await connection.request(method, {
+          operationId,
+          operationToken,
+          requestId: input.requestId,
+          routeId: session.routeId,
+          installationId: session.installationId,
+          projectId: session.projectId,
+          user: { id: session.sub, locale: session.locale, permissions: session.permissions },
+          params: input.params,
+          ...(method === "ui.handleAction" ? { action: input.action } : {}),
+        }, 30_000);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/INVALID_PLUGIN_OUTPUT/.test(message)) throw publicError(message, 502, "plugin_ui_invalid_output");
+        throw error;
+      }
       await this.sealOperation(operationId);
       return result;
     } finally {

@@ -12,6 +12,16 @@ describe("validateEntityUpdates", () => {
       ],
     )).toThrow("duplicate entity update temperature");
   });
+
+  test("rejects sequence and timestamp errors before RPC output", () => {
+    const descriptors = [{ key: "temperature", valueType: "number" as const, category: "measurement" as const }];
+    expect(() => validateEntityUpdates(descriptors, [
+      { entityKey: "temperature", value: 20, sequence: -1n },
+    ])).toThrow("invalid sequence");
+    expect(() => validateEntityUpdates(descriptors, [
+      { entityKey: "temperature", value: 20, sourceTimestamp: "not-a-date" },
+    ])).toThrow("invalid source timestamp");
+  });
 });
 
 describe("plugin UI manifest validation", () => {

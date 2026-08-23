@@ -69,6 +69,36 @@ describe("plugin SSR route", () => {
     expect(submittedAction).toEqual({ enabled: true });
   });
 
+  test("reports invalid plugin UI output as a 502 plugin error", async () => {
+    const failingManager = {
+      ...manager,
+      ready: async () => true,
+      getManifest: () => manifest,
+      renderPluginUi: async () => {
+        throw Object.assign(new Error("INVALID_PLUGIN_OUTPUT: invalid status"), {
+          status: 502,
+          publicCode: "plugin_ui_invalid_output",
+        });
+      },
+    } as unknown as PluginManager;
+    const failingServer = startPluginManagerServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      serviceToken: "internal-service-token",
+      manager: failingManager,
+      uiSessionSecret: secret,
+    });
+    try {
+      const response = await fetch(`${failingServer.url}plugins/${installationId}/overview?count=3`, {
+        headers: { cookie },
+      });
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ error: "plugin_ui_invalid_output" });
+    } finally {
+      await failingServer.stop();
+    }
+  });
+
   test("strictly rejects malformed internal lifecycle input", async () => {
     const response = await fetch(`${server.url}internal/plugins/installations/${installationId}/state`, {
       method: "POST",

@@ -11,9 +11,12 @@ import {
   RPC_VERSION,
   assertRpcValueBudget,
   canonicalJson,
+  eventOutput as eventOutputSchema,
   managerToPluginContract,
   pluginToManagerContract,
   sha256Hex,
+  uiActionOutput as uiActionOutputSchema,
+  uiRenderOutput as uiRenderOutputSchema,
   type RpcValueBudget,
 } from "@soulcloud/plugin-rpc-contract";
 import {
@@ -263,10 +266,13 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
           } catch (error) {
             rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
           }
-          return {
+          const wireOutput = {
             updates: updates.map((update) => ({ ...update, value: entityValueToWire(update.value) })),
             logs: result?.logs ?? [],
           };
+          const parsed = eventOutputSchema.safeParse(wireOutput);
+          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+          return parsed.data;
         } finally { clearTimeout(timer); running -= 1; }
       }),
     },
@@ -280,7 +286,9 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
         try {
           const result = await renderer(pluginUiInput(input));
           assertRpcValueBudget(result, budget);
-          return result;
+          const parsed = uiRenderOutputSchema.safeParse(result);
+          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+          return parsed.data;
         } finally {
           running -= 1;
         }
@@ -294,7 +302,9 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
         try {
           const result = await actionHandler(input.action, pluginUiInput(input)) as { redirect?: string; errors?: { field: string; message: string }[] };
           assertRpcValueBudget(result, budget);
-          return result;
+          const parsed = uiActionOutputSchema.safeParse(result);
+          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+          return parsed.data;
         } finally {
           running -= 1;
         }
