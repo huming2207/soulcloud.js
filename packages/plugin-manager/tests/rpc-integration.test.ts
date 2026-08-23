@@ -10,6 +10,7 @@ let connection: PluginConnection;
 let reverseEntityKey: string | undefined;
 let reverseCommand: string | undefined;
 let reverseEntityValue: unknown;
+let uiInputHasOperationProof = false;
 
 beforeAll(async () => {
   runtime = await startPluginRuntime(definePlugin({
@@ -30,6 +31,7 @@ beforeAll(async () => {
       }],
       actions: [{ id: "reboot", inputSchema: {}, wire: { command: "reboot", schemaVersion: 1 } }],
       events: [{ kind: "reading", schemaVersion: 1 }],
+      ui: { routes: [{ id: "main", path: "/main" }] },
     },
     encodeAction: { reboot: () => [{ delay: 3n }] },
     onEvent: async (context) => {
@@ -41,6 +43,12 @@ beforeAll(async () => {
           { entityKey: "capture", value: Uint8Array.of(1, 2, 3) },
         ],
       };
+    },
+    render: {
+      main: async (input) => {
+        uiInputHasOperationProof = "operationToken" in input || "deadlineMs" in input;
+        return { html: "<p>Plugin</p>" };
+      },
     },
   }), { hostname: "127.0.0.1", port: 0, authToken });
 
@@ -111,5 +119,20 @@ describe("plugin oRPC WebSocket transport", () => {
     expect(reverseEntityKey).toBe("temperature");
     expect((reverseEntityValue as { value: unknown }).value).toEqual(Uint8Array.of(4, 5, 6));
     expect(reverseCommand).toBe("acknowledge");
+  });
+
+  test("does not expose wire operation proofs to plugin UI code", async () => {
+    const output = await connection.request("ui.render", {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      requestId: randomUUID(),
+      routeId: "main",
+      installationId: randomUUID(),
+      projectId: randomUUID(),
+      user: { id: randomUUID(), locale: "en", permissions: [] },
+      params: {},
+    }, 1_000) as { html: string };
+    expect(output.html).toBe("<p>Plugin</p>");
+    expect(uiInputHasOperationProof).toBe(false);
   });
 });

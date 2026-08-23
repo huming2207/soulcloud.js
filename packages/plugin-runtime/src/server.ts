@@ -24,6 +24,7 @@ import {
   type PluginDefinition,
   type PluginEntityState,
   type PluginManifest,
+  type UiRenderInput,
 } from "@soulcloud/plugin-sdk";
 
 const DEFAULT_BUDGET: RpcValueBudget = {
@@ -79,6 +80,24 @@ function commandWire(args: CommandArgument[]): Array<{ name: string; value: stri
 function entityValueToWire(value: string | number | boolean | Uint8Array | ArrayBuffer | undefined): string | number | boolean | Blob | undefined {
   if (value instanceof Uint8Array || value instanceof ArrayBuffer) return new Blob([value]);
   return value;
+}
+
+function pluginUiInput(input: {
+  requestId: string;
+  installationId: string;
+  projectId: string;
+  user: UiRenderInput["user"];
+  routeId: string;
+  params: UiRenderInput["params"];
+}): UiRenderInput {
+  return {
+    requestId: input.requestId,
+    installationId: input.installationId,
+    projectId: input.projectId,
+    user: input.user,
+    routeId: input.routeId,
+    params: input.params,
+  };
 }
 
 async function entityStateFromWire(state: {
@@ -259,7 +278,7 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
         if (running >= maxConcurrent) rpcError("OVERLOADED", "plugin operation limit reached");
         running += 1;
         try {
-          const result = await renderer(input);
+          const result = await renderer(pluginUiInput(input));
           assertRpcValueBudget(result, budget);
           return result;
         } finally {
@@ -273,7 +292,7 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
         if (running >= maxConcurrent) rpcError("OVERLOADED", "plugin operation limit reached");
         running += 1;
         try {
-          const result = await actionHandler(input.action, input) as { redirect?: string; errors?: { field: string; message: string }[] };
+          const result = await actionHandler(input.action, pluginUiInput(input)) as { redirect?: string; errors?: { field: string; message: string }[] };
           assertRpcValueBudget(result, budget);
           return result;
         } finally {
