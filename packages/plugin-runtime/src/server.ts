@@ -194,14 +194,18 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
       handleEvent: implemented.plugin.handleEvent.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         if (!definition.onEvent) return { updates: [], logs: [] };
+        const profile = definition.manifest.profiles.find((item) => item.id === input.device.profileId && item.version === input.device.profileVersion);
+        if (!profile) rpcError("INVALID_EVENT_INPUT", "unknown device profile");
+        try {
+          assertRpcValueBudget(input.event.payload, budget);
+        } catch (error) {
+          rpcError("INVALID_EVENT_INPUT", (error as Error).message);
+        }
         if (running >= maxConcurrent) rpcError("OVERLOADED", "plugin operation limit reached");
         running += 1;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), input.deadlineMs);
         try {
-          assertRpcValueBudget(input.event.payload, budget);
-          const profile = definition.manifest.profiles.find((item) => item.id === input.device.profileId && item.version === input.device.profileVersion);
-          if (!profile) rpcError("INVALID_EVENT_INPUT", "unknown device profile");
           const ctx = {
             operationId: input.operationId,
             signal: controller.signal,
@@ -212,10 +216,13 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
           };
           const result = await definition.onEvent(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload: input.event.payload, installation: input.installation, device: input.device });
           const updates = result?.updates ?? [];
-          validateEntityUpdates(profile.entities, updates);
-          assertRpcValueBudget(updates, budget);
+          try {
+            validateEntityUpdates(profile.entities, updates);
+            assertRpcValueBudget(updates, budget);
+          } catch (error) {
+            rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+          }
           return { updates, logs: result?.logs ?? [] };
-        } catch (error) { rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message); }
         finally { clearTimeout(timer); running -= 1; }
       }),
     },

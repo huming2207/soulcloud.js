@@ -447,7 +447,10 @@ export class PluginManager {
           profileVersion: event.profile_version,
         },
       }, this.options.eventTimeoutMs ?? 30_000);
-      const output = result as { updates?: readonly EntityUpdateInput[] };
+      const output = result as { updates?: readonly EntityUpdateInput[]; logs?: readonly { level: string; message: string }[] };
+      for (const entry of output.logs ?? []) {
+        this.log("plugin event log", { pluginId: event.plugin_id, eventId: event.event_id.trim(), level: entry.level, message: entry.message });
+      }
       if (store.completeWithUpdates) {
         const operation = activeOperationId ? this.operations.get(activeOperationId) : undefined;
         await store.completeWithUpdates(event.id, event.lease_token, {
