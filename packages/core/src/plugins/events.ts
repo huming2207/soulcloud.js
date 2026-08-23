@@ -236,6 +236,7 @@ export async function releasePluginEvent(
   permanent: boolean,
   error: string,
   retryMs: number,
+  consumeAttempt = true,
 ): Promise<boolean> {
   if (!permanent && (!Number.isInteger(retryMs) || retryMs < 0)) {
     throw new RangeError("event retry duration must be a non-negative integer");
@@ -251,6 +252,7 @@ export async function releasePluginEvent(
         UPDATE plugin_events
         SET state = 'queued', lease_expires_at = NULL, lease_token = NULL,
             available_at = CURRENT_TIMESTAMP + (${retryMs} * INTERVAL '1 millisecond'),
+            attempt_count = CASE WHEN ${consumeAttempt} THEN attempt_count ELSE GREATEST(attempt_count - 1, 0) END,
             last_error = ${error}
         WHERE id = ${eventId}::uuid AND state = 'leased' AND lease_token = ${leaseToken}
       `;

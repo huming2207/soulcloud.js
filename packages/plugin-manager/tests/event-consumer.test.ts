@@ -121,6 +121,32 @@ describe("plugin event consumer", () => {
     await consuming;
     expect(dispatched).toEqual(["first-a", "first-b", "second-a"]);
   });
+
+  test("does not consume an attempt while the matching plugin version is unavailable", async () => {
+    let consumedAttempt: boolean | undefined;
+    const store: PluginEventStore = {
+      lease: async () => [],
+      complete: async () => true,
+      release: async (_id, _token, _permanent, _error, _retryMs, consumeAttempt) => {
+        consumedAttempt = consumeAttempt;
+        return true;
+      },
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "x".repeat(32),
+      maxFrameBytes: 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024,
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      eventStore: store,
+    });
+    const internals = manager as unknown as { dispatchEvent(event: LeasedPluginEvent): Promise<void> };
+    await internals.dispatchEvent(leasedEvent("offline"));
+    expect(consumedAttempt).toBe(false);
+  });
 });
 
 describe("plugin data retention", () => {

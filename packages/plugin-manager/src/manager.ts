@@ -69,7 +69,7 @@ export interface PluginEventStore {
   lease(limit: number, leaseMs: number): Promise<LeasedPluginEvent[]>;
   complete(eventId: string, leaseToken: string): Promise<boolean>;
   completeWithUpdates?(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[]; commands?: readonly { deviceId: string; command: DeviceCommand }[] }): Promise<boolean>;
-  release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number): Promise<boolean>;
+  release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number, consumeAttempt?: boolean): Promise<boolean>;
   renew?(leases: readonly { id: string; leaseToken: string }[], leaseMs: number): Promise<number>;
   purge?(eventRetentionDays: number, historyRetentionDays: number, batchSize: number): Promise<{ events: number; history: number }>;
 }
@@ -81,8 +81,8 @@ export class PrismaPluginEventStore implements PluginEventStore {
   completeWithUpdates(eventId: string, leaseToken: string, context: { installationId: string; deviceId: string; profileId: string; profileVersion: number; updates: readonly EntityUpdateInput[]; commands?: readonly { deviceId: string; command: DeviceCommand }[] }) {
     return completePluginEventWithUpdates(this.prisma, eventId, leaseToken, context);
   }
-  release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number) {
-    return releasePluginEvent(this.prisma, eventId, leaseToken, permanent, error, retryMs);
+  release(eventId: string, leaseToken: string, permanent: boolean, error: string, retryMs: number, consumeAttempt = true) {
+    return releasePluginEvent(this.prisma, eventId, leaseToken, permanent, error, retryMs, consumeAttempt);
   }
   renew(leases: readonly { id: string; leaseToken: string }[], leaseMs: number) { return renewPluginEventLeases(this.prisma, leases, leaseMs); }
   purge(eventRetentionDays: number, historyRetentionDays: number, batchSize: number) { return purgePluginData(this.prisma, eventRetentionDays, historyRetentionDays, batchSize); }
@@ -519,7 +519,7 @@ export class PluginManager {
             const group = queue[nextGroup++]!;
             for (const event of group) {
               try {
-                if (this.stopping) await this.releaseEvent(event, false, "plugin manager is shutting down");
+                if (this.stopping) await this.releaseEvent(event, false, "plugin manager is shutting down", false);
                 else await this.dispatchEvent(event);
               } finally {
                 pending.delete(event.id);
@@ -542,7 +542,7 @@ export class PluginManager {
     const store = this.options.eventStore!;
     const circuitKey = `${event.plugin_id}\u0000${event.installation_id}`;
     if (!this.circuitAllows(circuitKey)) {
-      await this.releaseEvent(event, false, "plugin circuit is open");
+      await this.releaseEvent(event, false, "plugin circuit is open", false);
       return;
     }
     const connection = this.connections.get(event.plugin_id);
@@ -553,14 +553,14 @@ export class PluginManager {
       connectedManifest.manifestHash !== event.manifest_hash.trim()
     ) {
       this.circuitFailure(circuitKey);
-      await this.releaseEvent(event, false, "matching plugin version is unavailable");
+      await this.releaseEvent(event, false, "matching plugin version is unavailable", false);
       return;
     }
     let activeOperationId: string | undefined;
     let pluginCallCompleted = false;
     try {
       const manifestEntry = this.catalog.get(`${event.plugin_id}@${event.plugin_version}`);
-      if (!manifestEntry) throw new Error("plugin manifest snapshot is unavailable");
+      if (!manifestEntry) throw Object.assign(new Error("plugin manifest snapshot is unavailable"), { code: "MANAGER_STATE_UNAVAILABLE" });
       if (manifestEntry.manifestHash !== event.manifest_hash.trim()) {
         const error = `plugin manifest hash drift for ${event.plugin_id}@${event.plugin_version}`;
         await this.releaseEvent(event, true, error);
@@ -572,7 +572,13 @@ export class PluginManager {
         await this.releaseEvent(event, true, error);
         return;
       }
-      const envelope = decodeDeviceEvent(event.payload);
+      const envelope = (() => {
+        try {
+          return decodeDeviceEvent(event.payload);
+        } catch (error) {
+          throw Object.assign(new Error(`persisted event payload is corrupt: ${(error as Error).message}`), { code: "MANAGER_DATA_CORRUPTION" });
+        }
+      })();
       const operationId = crypto.randomUUID();
       const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
       this.registerOperation(operationId, {
@@ -650,10 +656,12 @@ export class PluginManager {
       const code = typeof error === "object" && error !== null && "code" in error
         ? String((error as { code: unknown }).code)
         : "";
-      const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT" || /INVALID_(EVENT_INPUT|PLUGIN_OUTPUT)/.test(message);
-      const attemptsExhausted = !permanent && event.attempt_count >= (this.options.eventMaxAttempts ?? 5);
-      if (!permanent && !pluginCallCompleted && code !== "MANAGER_OVERLOADED") this.circuitFailure(circuitKey);
-      await this.releaseEvent(event, permanent || attemptsExhausted, attemptsExhausted ? `${message}; retry limit exhausted` : message);
+      const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT" || code === "MANAGER_DATA_CORRUPTION" || /INVALID_(EVENT_INPUT|PLUGIN_OUTPUT)/.test(message);
+      const managerDeferral = code === "MANAGER_OVERLOADED" || code === "MANAGER_STATE_UNAVAILABLE";
+      const consumeAttempt = permanent || (!pluginCallCompleted && !managerDeferral);
+      const attemptsExhausted = !permanent && consumeAttempt && event.attempt_count >= (this.options.eventMaxAttempts ?? 5);
+      if (!permanent && !pluginCallCompleted && !managerDeferral) this.circuitFailure(circuitKey);
+      await this.releaseEvent(event, permanent || attemptsExhausted, attemptsExhausted ? `${message}; retry limit exhausted` : message, consumeAttempt);
     } finally {
       // Operation capabilities are valid only while the parent RPC is live.
       if (activeOperationId) this.finishOperation(activeOperationId);
@@ -787,10 +795,10 @@ export class PluginManager {
     }
   }
 
-  private async releaseEvent(event: LeasedPluginEvent, permanent: boolean, message: string): Promise<void> {
+  private async releaseEvent(event: LeasedPluginEvent, permanent: boolean, message: string, consumeAttempt = true): Promise<void> {
     const retryMs = permanent ? 0 : Math.min(60_000, 1_000 * 2 ** Math.min(event.attempt_count, 6));
     try {
-      await this.options.eventStore!.release(event.id, event.lease_token, permanent, message.slice(0, 2_000), retryMs);
+      await this.options.eventStore!.release(event.id, event.lease_token, permanent, message.slice(0, 2_000), retryMs, consumeAttempt);
     } catch (error) {
       this.log("event lease release failed", { eventId: event.id, error: (error as Error).message });
     }
