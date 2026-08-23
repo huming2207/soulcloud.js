@@ -12,7 +12,7 @@ import { applyEntityUpdates } from "../../src/plugins/entities";
 const projectId = randomUUID();
 const pluginId = `test.lifecycle.${randomUUID()}`;
 const deviceIds = [randomUUID(), randomUUID()];
-const hashes = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+const hashes = ["a".repeat(64), "b".repeat(64), "c".repeat(64), "d".repeat(64)];
 let installationA: string;
 let installationB: string;
 
@@ -50,6 +50,19 @@ beforeAll(async () => {
       { pluginId, pluginVersion: "1.0.0", manifestHash: hashes[0]!, apiVersion: 1, canonicalManifest: manifest("1.0.0", ["profile-a", "profile-b"]) },
       { pluginId, pluginVersion: "2.0.0", manifestHash: hashes[1]!, apiVersion: 1, canonicalManifest: manifest("2.0.0", ["profile-b"]) },
       { pluginId, pluginVersion: "3.0.0", manifestHash: hashes[2]!, apiVersion: 1, canonicalManifest: manifest("3.0.0", ["profile-c"]) },
+      {
+        pluginId,
+        pluginVersion: "4.0.0",
+        manifestHash: hashes[3]!,
+        apiVersion: 1,
+        canonicalManifest: {
+          ...manifest("4.0.0", ["profile-b"]),
+          profiles: [{
+            ...manifest("4.0.0", ["profile-b"]).profiles[0]!,
+            entities: [{ key: "temperature", valueType: "string", category: "measurement" }],
+          }],
+        },
+      },
     ],
   });
   installationA = (await createPluginInstallation(prisma, { projectId, pluginId, pluginVersion: "1.0.0", manifestHash: hashes[0]!, config: null })).id;
@@ -174,6 +187,16 @@ describe("plugin installation lifecycle", () => {
     expect(state.quality).toBe("bad");
     expect(state.sequence?.toString()).toBe(sequence.toString());
     expect(state.sourceTimestamp?.toISOString()).toBe(sourceTimestamp);
+  });
+
+  test("drops current state whose descriptor changes during migration", async () => {
+    expect(await prisma.pluginEntityState.count({
+      where: { installationId: installationA, deviceId: deviceIds[1]!, entityKey: "temperature" },
+    })).toBe(1);
+    await migratePluginInstallation(prisma, installationA, "4.0.0", hashes[3]!, null);
+    expect(await prisma.pluginEntityState.count({
+      where: { installationId: installationA, deviceId: deviceIds[1]!, entityKey: "temperature" },
+    })).toBe(0);
   });
 
   test("reconcile reports a binding that is not in the pinned manifest", async () => {

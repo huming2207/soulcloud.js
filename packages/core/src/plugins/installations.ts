@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "../db";
 import {
   deprecateUnboundInstallationProfilesInTransaction,
+  deleteIncompatibleEntityStatesInTransaction,
   registerInstallationProfileEntitiesInTransaction,
   type EntityDescriptorInput,
 } from "./entities";
@@ -195,6 +196,7 @@ export async function migratePluginInstallation(
       await registerInstallationProfileEntitiesInTransaction(tx, installationId, profile.id, profile.version, profile.entities);
     }
     await deprecateUnboundInstallationProfilesInTransaction(tx, installationId);
+    await deleteIncompatibleEntityStatesInTransaction(tx, installationId);
   });
 }
 
@@ -215,6 +217,7 @@ export async function reconcilePluginInstallation(
       await registerInstallationProfileEntitiesInTransaction(tx, installationId, profile.id, profile.version, profile.entities);
     }
     await deprecateUnboundInstallationProfilesInTransaction(tx, installationId);
+    await deleteIncompatibleEntityStatesInTransaction(tx, installationId);
   });
 }
 

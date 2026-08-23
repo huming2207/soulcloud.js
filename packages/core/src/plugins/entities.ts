@@ -143,6 +143,30 @@ export async function deprecateUnboundInstallationProfilesInTransaction(
   `;
 }
 
+/** Removes current values that cannot be interpreted by the active binding. */
+export async function deleteIncompatibleEntityStatesInTransaction(
+  tx: TransactionClient,
+  installationId: string,
+): Promise<void> {
+  await tx.$executeRaw`
+    DELETE FROM plugin_entity_states AS s
+    WHERE s.installation_id = ${installationId}::uuid
+      AND NOT EXISTS (
+        SELECT 1
+        FROM plugin_device_bindings AS b
+        JOIN plugin_entity_descriptors AS d
+          ON d.installation_id = b.installation_id
+         AND d.profile_id = b.profile_id
+         AND d.profile_version = b.profile_version
+         AND d.entity_key = s.entity_key
+         AND d.revision = s.descriptor_revision
+         AND d.deprecated = false
+        WHERE b.device_id = s.device_id
+          AND b.installation_id = s.installation_id
+      )
+  `;
+}
+
 export interface ApplyEntityUpdatesOptions {
   installationId: string;
   deviceId: string;
