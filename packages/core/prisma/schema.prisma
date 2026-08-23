@@ -573,5 +573,6 @@ model PluginEntityHistory {
 
   @@index([deviceId, entityKey, ingestedAt, id], map: "plugin_entity_history_device_entity_time_idx")
   @@index([installationId, ingestedAt], map: "plugin_entity_history_installation_time_idx")
+  @@index([ingestedAt, id], map: "plugin_entity_history_retention_idx")
   @@map("plugin_entity_history")
 }
