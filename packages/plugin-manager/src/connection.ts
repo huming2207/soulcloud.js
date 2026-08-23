@@ -80,7 +80,15 @@ export class PluginConnection {
   private async openSocket(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const socket = new WebSocket(this.options.endpoint, { headers: { "x-soulcloud-rpc-protocol": RPC_PROTOCOL_HEADER, authorization: `Bearer ${this.options.authToken}` } });
+      const socket = new WebSocket(this.options.endpoint, {
+        headers: {
+          "x-soulcloud-rpc-protocol": RPC_PROTOCOL_HEADER,
+          authorization: `Bearer ${this.options.authToken}`,
+        },
+        // The client API has no configurable decompressed-payload ceiling.
+        // Keep the manual frame bound meaningful by refusing compression.
+        perMessageDeflate: false,
+      });
       const connectTimer = setTimeout(
         () => fail(new PluginConnectionTimeout("plugin WebSocket connection timed out")),
         this.options.connectTimeoutMs ?? 10_000,
@@ -103,7 +111,11 @@ export class PluginConnection {
         fail(new PluginConnectionError("plugin WebSocket closed during connection"));
       });
       socket.addEventListener("open", () => {
-        const bridge = createClientBridge(socket, this.options.backpressureBytes);
+        const bridge = createClientBridge(
+          socket,
+          this.options.backpressureBytes,
+          this.options.maxFrameBytes,
+        );
         this.bridge = bridge;
         const reverseImpl = implement(pluginToManagerContract).$context<{ signal: AbortSignal }>();
         const handler = {
@@ -234,7 +246,11 @@ export class PluginConnection {
   }
 }
 
-function createClientBridge(socket: WebSocket, backpressureBytes: number) {
+function createClientBridge(
+  socket: WebSocket,
+  backpressureBytes: number,
+  maxFrameBytes: number,
+) {
   const listeners = new Map<string, Set<(event: unknown) => void>>();
   let closed = false;
   const dispatch = (type: string, event: unknown): void => {
@@ -243,6 +259,8 @@ function createClientBridge(socket: WebSocket, backpressureBytes: number) {
   return {
     get readyState() { return closed ? WebSocket.CLOSED : socket.readyState; },
     send(data: string | Uint8Array<ArrayBuffer>) {
+      const bytes = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
+      if (bytes > maxFrameBytes) throw new PluginConnectionError("plugin RPC frame is too large");
       if (socket.bufferedAmount > backpressureBytes) throw new PluginConnectionError("plugin send queue is full");
       return socket.send(data);
     },

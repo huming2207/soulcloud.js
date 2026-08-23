@@ -109,7 +109,7 @@ async function entityStateFromWire(state: {
   return { ...state, value: new Uint8Array(await value.arrayBuffer()) };
 }
 
-function createBridge(ws: Bun.ServerWebSocket<unknown>) {
+function createBridge(ws: Bun.ServerWebSocket<unknown>, maxFrameBytes: number) {
   const listeners = new Map<string, Set<(event: unknown) => void>>();
   let readyState: 0 | 1 | 2 | 3 = 1;
   const dispatch = (type: string, event: unknown): void => {
@@ -117,7 +117,11 @@ function createBridge(ws: Bun.ServerWebSocket<unknown>) {
   };
   return {
     get readyState() { return readyState; },
-    send(data: string | Uint8Array<ArrayBuffer>) { return ws.send(data); },
+    send(data: string | Uint8Array<ArrayBuffer>) {
+      const bytes = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
+      if (bytes > maxFrameBytes) throw new Error("plugin RPC frame is too large");
+      return ws.send(data);
+    },
     addEventListener(type: string, listener: (event: unknown) => void) { let set = listeners.get(type); if (!set) listeners.set(type, set = new Set()); set.add(listener); },
     removeEventListener(type: string, listener: (event: unknown) => void) { listeners.get(type)?.delete(listener); },
     dispatch,
@@ -158,7 +162,15 @@ export async function startPluginRuntime(definition: PluginDefinition, options: 
       idleTimeout: options.idleTimeoutSeconds ?? 60,
       open(ws) {
         activeConnections += 1;
-        ws.data.connection = createRuntimeConnection(ws, runtimeDefinition, manifestHash, budget, operationLimiter, log);
+        ws.data.connection = createRuntimeConnection(
+          ws,
+          runtimeDefinition,
+          manifestHash,
+          budget,
+          operationLimiter,
+          maxFrameBytes,
+          log,
+        );
       },
       message(ws, message) {
         const connection = ws.data.connection;
@@ -195,8 +207,16 @@ interface OperationLimiter {
   max: number;
 }
 
-function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeConnection; handshaken: boolean }>, definition: PluginDefinition, manifestHash: string, budget: RpcValueBudget, operations: OperationLimiter, log: (message: string, fields?: Record<string, unknown>) => void): RuntimeConnection {
-  const bridge = createBridge(ws);
+function createRuntimeConnection(
+  ws: Bun.ServerWebSocket<{ connection?: RuntimeConnection; handshaken: boolean }>,
+  definition: PluginDefinition,
+  manifestHash: string,
+  budget: RpcValueBudget,
+  operations: OperationLimiter,
+  maxFrameBytes: number,
+  log: (message: string, fields?: Record<string, unknown>) => void,
+): RuntimeConnection {
+  const bridge = createBridge(ws, maxFrameBytes);
   const reverse = createContractClientFactory(new RPCLink({ connect: () => bridge, encodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX }, decodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX } }))(pluginToManagerContract);
   const implemented = implement(managerToPluginContract).$context<{ isHandshaken: () => boolean; markHandshaken: () => void }>();
   const router = {
