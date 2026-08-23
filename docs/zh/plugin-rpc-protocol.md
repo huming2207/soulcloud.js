@@ -422,6 +422,7 @@ PLUGIN_SSR_MAX_CONCURRENCY=...
   `plugin-manager`、`plugin-runtime`、SDK 和 RPC contract 是全新实现；
 - 编译期 manifest/worker 双 registry 已删除，唯一声明来自 handshake + immutable snapshot；
 - Station/workflow/device-side plugin runtime 不属于当前系统；
-- 已落地的 oRPC transport、operation capability、event queue、Entity transaction、retry、
-  retention 和 circuit-breaker 继续遵守本协议；
+- 已落地的 oRPC transport、按 operation 类型收窄的 capability、双端 value/Blob budget、
+  staged-command 累计预算、event queue、Entity transaction、retry、retention 和 circuit-breaker
+  继续遵守本协议；
 - 后续只在本协议和最新实施计划上增量实现阶段 7–8，不恢复旧设计或建立双轨兼容。

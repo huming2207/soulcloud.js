@@ -158,8 +158,10 @@ installation 固定 `plugin_id + plugin_version + manifest_hash`。首版直接�
 ## 阶段 3：Plugin Manager internal API 与资源隔离
 
 **状态：基础纵切已完成；资源预算仍部分完成。** Human API 通过 service-auth 内部 HTTP 调用
-Manager；事件消费已按 installation 有界并发，Action/SSR 的独立预算、DB pool reservation 和
-完整观测仍属于阶段 8。
+Manager，且同步 Action 的 operation deadline 短于 Human API internal HTTP deadline；RPC
+value/Blob、active operation、reverse call 和 staged command 数量/累计字节均已有部署可调硬上限。
+事件消费已按 installation 有界并发，Action/SSR 的独立预算、DB pool reservation 和完整观测
+仍属于阶段 8。
 
 ### 工作
 
@@ -187,9 +189,11 @@ Manager；事件消费已按 installation 有界并发，Action/SSR 的独立预
 
 ## 阶段 4：Device `/event` 端到端路径
 
-**状态：服务端基础纵切已完成，Soulcloud Client 未在本仓库验证。** Broker 只校验并持久化
-通用 envelope，Manager 异步 lease；QoS 1 幂等、固定入队时间、retry/dead-letter、retention、
-lease 续期和 Entity completion 已落地。真实 Client publish/掉电 sequence 仍是退出条件。
+**状态：服务端基础纵切已完成，Soulcloud Client 未在本仓库验证。** Broker 只校验通用
+envelope、持久化完整 uint64 sequence，且不解释 plugin payload；相同
+`(device_id, event_id)` 的相同内容幂等成功，不同内容会被 ACK 后记录为冲突，避免设备永久重投。
+Manager 异步 lease；QoS 1 幂等、固定入队时间、retry/dead-letter、retention、lease 续期和
+Entity completion 已落地。真实 Client publish/掉电 sequence 仍是退出条件。
 
 ### Shared protocol
 
@@ -232,7 +236,8 @@ lease 续期和 Entity completion 已落地。真实 Client publish/掉电 seque
 ## 阶段 5：Action、Entity 与安装生命周期切换
 
 **状态：已完成基础纵切。** Action 输入/encoder 输出分类、profile descriptor revision、
-多 profile binding、deprecated 收敛、stale DB 时钟和批量 Entity upsert 已落地；历史查询 API、
+多 profile binding、deprecated 收敛、stale DB 时钟、完整 uint64 sequence、批量 Entity upsert
+和升级后不兼容 current state 清理已落地；历史查询 API、
 scoped plugin-to-plugin 和更完整的 UI catalog 仍待后续阶段补齐。
 
 ### 工作
