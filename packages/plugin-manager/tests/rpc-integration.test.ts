@@ -90,6 +90,30 @@ afterAll(async () => {
 });
 
 describe("plugin oRPC WebSocket transport", () => {
+  test("rejects an outbound frame before it exceeds the configured limit", async () => {
+    const limited = new PluginConnection({
+      pluginId: "integration.plugin",
+      endpoint: runtime.url.replace(/^http/, "ws"),
+      authToken,
+      maxFrameBytes: 1,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024 * 1024,
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 1_000,
+      reverseHandlers: {
+        entityGet: async () => null,
+        commandEnqueue: async () => ({ accepted: true }),
+        pluginCall: async () => null,
+        uiGetData: async () => null,
+      },
+    });
+    try {
+      await expect(limited.connect()).rejects.toThrow("frame is too large");
+    } finally {
+      limited.close();
+    }
+  });
+
   test("handshakes and encodes an action", async () => {
     expect(connection.manifest?.pluginVersion).toBe("1.0.0");
     const output = await connection.request("action.encode", {
