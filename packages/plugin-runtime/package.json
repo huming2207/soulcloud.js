@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
+  },
   "scripts": { "dev": "bun run --watch src/index.ts", "start": "bun run src/index.ts" },
   "dependencies": {
     "@orpc/client": "2.0.0-beta.30",
