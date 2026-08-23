@@ -147,6 +147,53 @@ describe("plugin event consumer", () => {
     await internals.dispatchEvent(leasedEvent("offline"));
     expect(consumedAttempt).toBe(false);
   });
+
+  test("releases a half-open probe after a Manager-state deferral", async () => {
+    const errors: string[] = [];
+    const store: PluginEventStore = {
+      lease: async () => [],
+      complete: async () => true,
+      release: async (_id, _token, _permanent, error) => {
+        errors.push(error);
+        return true;
+      },
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "x".repeat(32),
+      maxFrameBytes: 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024,
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      eventStore: store,
+    });
+    const event = leasedEvent("half-open");
+    const circuitKey = `${event.plugin_id}\u0000${event.installation_id}`;
+    const internals = manager as unknown as {
+      connections: Map<string, object>;
+      circuits: Map<string, { failures: number; openedAt: number; probeInProgress: boolean }>;
+      dispatchEvent(event: LeasedPluginEvent): Promise<void>;
+    };
+    internals.connections.set(event.plugin_id, {
+      isOpen: true,
+      manifest: { pluginVersion: event.plugin_version, manifestHash: event.manifest_hash },
+    });
+    internals.circuits.set(circuitKey, {
+      failures: 5,
+      openedAt: Date.now() - 31_000,
+      probeInProgress: false,
+    });
+
+    await internals.dispatchEvent(event);
+    await internals.dispatchEvent(event);
+
+    expect(errors).toEqual([
+      "plugin manifest snapshot is unavailable",
+      "plugin manifest snapshot is unavailable",
+    ]);
+  });
 });
 
 describe("plugin data retention", () => {

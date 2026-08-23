@@ -678,6 +678,9 @@ export class PluginManager {
       }
       await this.sealOperation(operationId);
       pluginCallCompleted = true;
+      // The breaker measures plugin/transport health, not the later database
+      // commit. A responsive, valid plugin closes a half-open probe here.
+      this.circuitSuccess(circuitKey);
       const output = result as { updates?: readonly EntityUpdateInput[]; logs?: readonly { level: string; message: string }[] };
       for (const entry of output.logs ?? []) {
         this.log("plugin event log", { pluginId: event.plugin_id, eventId: event.event_id.trim(), level: entry.level, message: entry.message });
@@ -703,7 +706,6 @@ export class PluginManager {
         if (operation?.stagedCommands?.length) throw new Error("event command intents require transactional completion");
         await store.complete(event.id, event.lease_token);
       }
-      this.circuitSuccess(circuitKey);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = typeof error === "object" && error !== null && "code" in error
@@ -714,6 +716,7 @@ export class PluginManager {
       const consumeAttempt = permanent || (!pluginCallCompleted && !managerDeferral);
       const attemptsExhausted = !permanent && consumeAttempt && event.attempt_count >= (this.options.eventMaxAttempts ?? 5);
       if (!permanent && !pluginCallCompleted && !managerDeferral) this.circuitFailure(circuitKey);
+      else this.circuitReleaseProbe(circuitKey);
       await this.releaseEvent(event, permanent || attemptsExhausted, attemptsExhausted ? `${message}; retry limit exhausted` : message, consumeAttempt);
     } finally {
       // Operation capabilities are valid only while the parent RPC is live.
@@ -894,6 +897,11 @@ export class PluginManager {
 
   private circuitSuccess(key: string): void {
     this.circuits.delete(key);
+  }
+
+  private circuitReleaseProbe(key: string): void {
+    const circuit = this.circuits.get(key);
+    if (circuit) circuit.probeInProgress = false;
   }
 
   listCatalog(): CatalogEntry[] {
