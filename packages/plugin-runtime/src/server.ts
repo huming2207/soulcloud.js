@@ -223,7 +223,7 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
             rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
           }
           return { updates, logs: result?.logs ?? [] };
-        finally { clearTimeout(timer); running -= 1; }
+        } finally { clearTimeout(timer); running -= 1; }
       }),
     },
     ui: {
