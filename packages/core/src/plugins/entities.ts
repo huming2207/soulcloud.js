@@ -186,7 +186,7 @@ export async function applyEntityUpdates(
     }
     const previous = currentByKey.get(update.entityKey);
     const sequence = normalizeSequence(update.sequence);
-    if (previous?.sequence !== null && previous?.sequence !== undefined && sequence !== undefined && sequence < previous.sequence) continue;
+    if (previous?.sequence !== null && previous?.sequence !== undefined && sequence !== undefined && sequence <= previous.sequence) continue;
     const value = update.value === undefined ? previous?.value ?? null : toJsonValue(update.value);
     const quality = update.quality ?? previous?.quality ?? "unknown";
     const sourceTimestamp = parseTimestamp(update.sourceTimestamp);
@@ -205,7 +205,7 @@ export async function applyEntityUpdates(
       alarm_code: alarmCode,
     };
     stateRows.push(row);
-    const changed = !previous || JSON.stringify(previous.value) !== JSON.stringify(value) || previous.quality !== quality;
+    const changed = !previous || !sameStoredValue(previous.value, value) || previous.quality !== quality;
     if (descriptor.history === "all" || (descriptor.history === "changes" && changed) || descriptor.history === "sampled") {
       historyRows.push(row);
     }
@@ -231,9 +231,24 @@ function sameDescriptor(row: { valueType: string; category: string; unit: string
   return row.valueType === descriptor.valueType &&
     row.category === descriptor.category &&
     row.unit === (descriptor.unit ?? null) &&
-    JSON.stringify(row.enumValues) === JSON.stringify(descriptor.enumValues ?? null) &&
+    sameStringArray(row.enumValues, descriptor.enumValues ?? null) &&
     row.staleAfterSeconds === (descriptor.staleAfterSeconds ?? null) &&
     row.history === (descriptor.history ?? "none");
+}
+
+function sameStringArray(left: unknown, right: readonly string[] | null): boolean {
+  if (left === null || right === null) return left === right;
+  if (!Array.isArray(left) || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) if (left[index] !== right[index]) return false;
+  return true;
+}
+
+function sameStoredValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  const leftBinary = (left as { $binary?: unknown }).$binary;
+  const rightBinary = (right as { $binary?: unknown }).$binary;
+  return typeof leftBinary === "string" && leftBinary === rightBinary;
 }
 
 function valueMatches(valueType: string, enumValues: unknown, value: unknown): boolean {

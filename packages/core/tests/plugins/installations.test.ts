@@ -7,6 +7,7 @@ import {
   migratePluginInstallation,
   reconcilePluginInstallation,
 } from "../../src/plugins/installations";
+import { applyEntityUpdates } from "../../src/plugins/entities";
 
 const projectId = randomUUID();
 const pluginId = `test.lifecycle.${randomUUID()}`;
@@ -85,6 +86,33 @@ describe("plugin installation lifecycle", () => {
     const installation = await prisma.pluginInstallation.findUniqueOrThrow({ where: { id: installationA } });
     expect(installation.pluginVersion).toBe("1.0.0");
     expect(installation.manifestHash.trim()).toBe(hashes[0]!);
+  });
+
+  test("does not overwrite Entity state with an already committed sequence", async () => {
+    await prisma.$transaction((tx) => applyEntityUpdates(tx, {
+      installationId: installationA,
+      deviceId: deviceIds[1]!,
+      profileId: "profile-a",
+      profileVersion: 1,
+      updates: [{ entityKey: "temperature", value: 20, sequence: 7n }],
+    }));
+    await prisma.$transaction((tx) => applyEntityUpdates(tx, {
+      installationId: installationA,
+      deviceId: deviceIds[1]!,
+      profileId: "profile-a",
+      profileVersion: 1,
+      updates: [{ entityKey: "temperature", value: 99, sequence: 7n }],
+    }));
+    const state = await prisma.pluginEntityState.findUniqueOrThrow({
+      where: {
+        installationId_deviceId_entityKey: {
+          installationId: installationA,
+          deviceId: deviceIds[1]!,
+          entityKey: "temperature",
+        },
+      },
+    });
+    expect(state.value).toBe(20);
   });
 
   test("reconcile reports a binding that is not in the pinned manifest", async () => {
