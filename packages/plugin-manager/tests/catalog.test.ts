@@ -51,6 +51,7 @@ describe("plugin catalog connection state", () => {
       finishOperation(id: string): void;
     };
     const operation = {
+      kind: "event",
       operationTokenHash: Buffer.alloc(32),
       connectionId: "connection",
       installationId: "installation",
@@ -71,7 +72,7 @@ describe("plugin catalog connection state", () => {
     expect(() => internals.registerOperation("second", { ...operation })).not.toThrow();
   });
 
-  test("rejects staged command bytes before allocating Blob contents", async () => {
+  test("enforces reverse command operation scope and staged bytes before database work", async () => {
     let databaseReads = 0;
     const prisma = {
       pluginDeviceBinding: {
@@ -89,6 +90,7 @@ describe("plugin catalog connection state", () => {
     });
     const operationToken = "0".repeat(64);
     const operation = {
+      kind: "action",
       operationTokenHash: createHash("sha256").update(operationToken).digest(),
       connectionId: "connection",
       installationId: "installation",
@@ -110,6 +112,14 @@ describe("plugin catalog connection state", () => {
     };
     internals.operations.set("operation", operation);
 
+    await expect(internals.reverseCommandEnqueue({
+      operationId: "operation",
+      operationToken,
+      deadlineMs: 1_000,
+      command: "x",
+      args: [],
+    }, new AbortController().signal, "connection")).rejects.toThrow("not allowed");
+    operation.kind = "event";
     await expect(internals.reverseCommandEnqueue({
       operationId: "operation",
       operationToken,

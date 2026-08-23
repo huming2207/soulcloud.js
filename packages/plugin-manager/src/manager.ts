@@ -148,6 +148,7 @@ function publicError(message: string, status: number, publicCode: string): Error
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
 
 interface ActiveOperation {
+  kind: "action" | "event" | "ui";
   operationTokenHash: Buffer;
   connectionId: string;
   installationId: string;
@@ -313,6 +314,7 @@ export class PluginManager {
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
     this.registerOperation(operationId, {
+      kind: "action",
       operationTokenHash: hashOperationToken(operationToken),
       connectionId: connection.id,
       installationId: installation.id,
@@ -404,6 +406,7 @@ export class PluginManager {
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
     this.registerOperation(operationId, {
+      kind: "ui",
       operationTokenHash: hashOperationToken(operationToken),
       connectionId: connection.id,
       installationId: session.installationId,
@@ -646,6 +649,7 @@ export class PluginManager {
       const operationId = crypto.randomUUID();
       const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
       this.registerOperation(operationId, {
+        kind: "event",
         operationTokenHash: hashOperationToken(operationToken),
         connectionId: connection.id,
         installationId: event.installation_id,
@@ -837,6 +841,7 @@ export class PluginManager {
     if (signal.aborted) throw new Error("operation aborted");
     const operation = this.acquireOperation(input, connectionId);
     try {
+      if (operation.kind !== "event") throw new Error("entity read is not allowed for this operation");
       if (!operation.deviceId) throw new Error("entity read requires a device scope");
       if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
       const state = await getPluginEntityState(this.options.prisma, operation.installationId, operation.deviceId, input.entityKey);
@@ -854,6 +859,7 @@ export class PluginManager {
     let reservation = 0;
     let reserved = false;
     try {
+      if (operation.kind !== "event") throw new Error("command enqueue is not allowed for this operation");
       if (!operation.deviceId) throw new Error("command enqueue requires a device scope");
       if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
       assertRpcValueBudget(input.args, this.valueBudget);
