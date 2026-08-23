@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { coerceStringActionInput, validateActionInput, validateEntityUpdates, validateManifest } from "../src/validation";
+import { definePlugin } from "../src/define";
 
 describe("validateEntityUpdates", () => {
   test("rejects duplicate updates before they reach the database batch", () => {
@@ -25,5 +26,34 @@ describe("plugin UI manifest validation", () => {
     const value = coerceStringActionInput(schema, { count: "3", enabled: "true" });
     expect(value).toEqual({ count: 3, enabled: true });
     expect(validateActionInput(schema, value)).toEqual({ ok: true });
+  });
+});
+
+describe("plugin implementation validation", () => {
+  test("fails startup when a declared operation has no implementation", () => {
+    const base = { id: "example.plugin", version: "1", apiVersion: 1 as const, profiles: [], actions: [], events: [] };
+    expect(() => definePlugin({
+      manifest: {
+        ...base,
+        actions: [{ id: "run", inputSchema: {}, wire: { command: "run", schemaVersion: 1 } }],
+      },
+    })).toThrow("plugin action run has no encoder");
+    expect(() => definePlugin({
+      manifest: { ...base, events: [{ kind: "result", schemaVersion: 1 }] },
+    })).toThrow("plugin declares events but has no event handler");
+    expect(() => definePlugin({
+      manifest: {
+        ...base,
+        ui: { routes: [{ id: "main", path: "/main", methods: ["GET", "POST"], actionSchema: {} }] },
+      },
+      render: { main: async () => ({ html: "ok" }) },
+    })).toThrow("plugin UI route main accepts POST but has no action handler");
+  });
+
+  test("rejects implementations not declared by the manifest", () => {
+    const manifest = { id: "example.plugin", version: "1", apiVersion: 1 as const, profiles: [], actions: [], events: [] };
+    expect(() => definePlugin({ manifest, encodeAction: { ghost: () => [] } })).toThrow(
+      "plugin encoder ghost is not declared in the manifest",
+    );
   });
 });

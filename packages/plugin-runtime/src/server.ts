@@ -18,8 +18,8 @@ import {
 } from "@soulcloud/plugin-rpc-contract";
 import {
   validateActionInput,
+  definePlugin,
   validateEntityUpdates,
-  validateManifest,
   type CommandArgument,
   type PluginDefinition,
   type PluginEntityState,
@@ -113,8 +113,8 @@ function createBridge(ws: Bun.ServerWebSocket<unknown>) {
 
 export async function startPluginRuntime(definition: PluginDefinition, options: PluginRuntimeOptions): Promise<PluginRuntimeHandle> {
   if (options.authToken.length < 32) throw new Error("plugin RPC auth token must be at least 32 characters");
-  const manifest = validateManifest(definition.manifest);
-  const runtimeDefinition = { ...definition, manifest };
+  const runtimeDefinition = definePlugin(definition);
+  const manifest = runtimeDefinition.manifest;
   const manifestHash = await sha256Hex(canonicalJson(manifest));
   const budget = { ...DEFAULT_BUDGET, ...options.valueBudget };
   const maxFrameBytes = options.maxFrameBytes ?? 1024 * 1024;
