@@ -62,13 +62,25 @@ export async function bindDeviceToPluginInstallation(
   input: BindDeviceInput,
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    // All lifecycle paths use installation -> device -> registry lock order.
-    const installationRows = await tx.$queryRaw<Array<{ id: string; project_id: string }>>`
-      SELECT id, project_id FROM plugin_installations
-      WHERE id = ${input.installationId}::uuid
+    // Read the old binding only to discover every installation lock that may
+    // be needed. It is re-read after the device lock before any write.
+    const observedBinding = await tx.pluginDeviceBinding.findUnique({
+      where: { deviceId: input.deviceId },
+      select: { installationId: true },
+    });
+    const installationIds = [...new Set([
+      input.installationId,
+      ...(observedBinding ? [observedBinding.installationId] : []),
+    ])].sort();
+    // All lifecycle paths use installation(s, sorted) -> device -> registry.
+    const installationRows = await tx.$queryRaw<Array<{ id: string; project_id: string; state: string }>>`
+      SELECT id, project_id, state FROM plugin_installations
+      WHERE id IN (${Prisma.join(installationIds.map((id) => Prisma.sql`${id}::uuid`))})
+      ORDER BY id
       FOR UPDATE
     `;
-    const installationRow = installationRows[0];
+    const installationsById = new Map(installationRows.map((row) => [row.id, row]));
+    const installationRow = installationsById.get(input.installationId);
     if (!installationRow) throw new Error("plugin installation not found");
     const deviceRows = await tx.$queryRaw<Array<{ id: string; project_id: string }>>`
       SELECT id, project_id FROM devices WHERE id = ${input.deviceId}::uuid FOR UPDATE
@@ -76,6 +88,14 @@ export async function bindDeviceToPluginInstallation(
     const deviceRow = deviceRows[0];
     if (!deviceRow) throw new Error("device not found");
     if (deviceRow.project_id !== installationRow.project_id) throw new Error("device and installation belong to different projects");
+
+    const lockedBinding = await tx.pluginDeviceBinding.findUnique({
+      where: { deviceId: input.deviceId },
+      select: { installationId: true },
+    });
+    if (lockedBinding && !installationsById.has(lockedBinding.installationId)) {
+      throw new Error("device plugin binding changed concurrently; retry the bind");
+    }
 
     const installation = await tx.pluginInstallation.findUniqueOrThrow({ where: { id: input.installationId } });
     if (installation.state !== "enabled") throw new Error("plugin installation is disabled");
@@ -107,6 +127,9 @@ export async function bindDeviceToPluginInstallation(
       },
     });
     await deprecateUnboundInstallationProfilesInTransaction(tx, input.installationId);
+    if (lockedBinding && lockedBinding.installationId !== input.installationId) {
+      await deprecateUnboundInstallationProfilesInTransaction(tx, lockedBinding.installationId);
+    }
   });
 }
 
@@ -148,7 +171,7 @@ export async function migratePluginInstallation(
     const profiles = new Map(bindings.map((binding) => [`${binding.profileId}\u0000${binding.profileVersion}`, binding]));
     for (const binding of profiles.values()) {
       const profile = manifest.profiles.find((item) => item.id === binding.profileId && item.version === binding.profileVersion);
-      if (!profile) continue;
+      if (!profile) throw new Error(`bound profile ${binding.profileId}@${binding.profileVersion} is not declared by the target manifest`);
       await registerInstallationProfileEntitiesInTransaction(tx, installationId, profile.id, profile.version, profile.entities);
     }
     await deprecateUnboundInstallationProfilesInTransaction(tx, installationId);
@@ -168,7 +191,7 @@ export async function reconcilePluginInstallation(
     const profiles = new Map(bindings.map((binding) => [`${binding.profileId}\u0000${binding.profileVersion}`, binding]));
     for (const binding of profiles.values()) {
       const profile = manifest.profiles.find((item) => item.id === binding.profileId && item.version === binding.profileVersion);
-      if (!profile) continue;
+      if (!profile) throw new Error(`bound profile ${binding.profileId}@${binding.profileVersion} is not declared by the installation manifest`);
       await registerInstallationProfileEntitiesInTransaction(tx, installationId, profile.id, profile.version, profile.entities);
     }
     await deprecateUnboundInstallationProfilesInTransaction(tx, installationId);
