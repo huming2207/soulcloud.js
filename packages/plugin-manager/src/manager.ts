@@ -685,8 +685,11 @@ export class PluginManager {
         throw Object.assign(new Error(`INVALID_PLUGIN_OUTPUT: ${(error as Error).message}`), { code: "INVALID_PLUGIN_OUTPUT" });
       }
       await this.sealOperation(operationId);
-      const output = result as { updates?: readonly EntityUpdateInput[]; logs?: readonly { level: string; message: string }[] };
-      const updates = await Promise.all((output.updates ?? []).map(async (update) => ({
+      const output = result as {
+        updates?: readonly (Omit<EntityUpdateInput, "value"> & { value?: EntityUpdateInput["value"] | Blob })[];
+        logs?: readonly { level: string; message: string }[];
+      };
+      const updates: EntityUpdateInput[] = await Promise.all((output.updates ?? []).map(async (update) => ({
         ...update,
         value: update.value instanceof Blob
           ? new Uint8Array(await update.value.arrayBuffer())

@@ -15,7 +15,7 @@ export interface EntityDescriptorInput {
 
 export interface EntityUpdateInput {
   entityKey: string;
-  value?: unknown;
+  value?: string | number | boolean | Uint8Array | ArrayBuffer;
   quality?: "good" | "bad" | "uncertain" | "stale" | "unknown";
   sourceTimestamp?: string;
   sequence?: bigint | number;
