@@ -268,6 +268,18 @@ export class PluginManager {
 
   async setInstallationState(installationId: string, state: "enabled" | "disabled"): Promise<void> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    if (state === "enabled") {
+      const installation = await this.options.prisma.pluginInstallation.findUnique({
+        where: { id: installationId },
+        select: { pluginId: true, pluginVersion: true, manifestHash: true },
+      });
+      if (!installation) throw Object.assign(new Error("plugin installation not found"), { status: 404 });
+      this.requireConnectedManifest(
+        installation.pluginId,
+        installation.pluginVersion,
+        installation.manifestHash.trim(),
+      );
+    }
     return setPluginInstallationState(this.options.prisma, installationId, state);
   }
 

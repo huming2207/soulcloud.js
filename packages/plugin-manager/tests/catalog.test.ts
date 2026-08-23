@@ -72,6 +72,37 @@ describe("plugin catalog connection state", () => {
     expect(() => internals.registerOperation("second", { ...operation })).not.toThrow();
   });
 
+  test("does not enable an installation whose pinned plugin is offline", async () => {
+    const persisted = manifest("1.0.0");
+    const manifestHash = await sha256Hex(canonicalJson(persisted));
+    const prisma = {
+      pluginInstallation: {
+        findUnique: async () => ({
+          pluginId: persisted.id,
+          pluginVersion: persisted.version,
+          manifestHash,
+        }),
+      },
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000, prisma: prisma as never,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+    };
+    internals.catalog.set(`${persisted.id}@${persisted.version}`, {
+      pluginId: persisted.id,
+      pluginVersion: persisted.version,
+      manifestHash,
+      manifest: persisted,
+      connected: false,
+    });
+
+    await expect(manager.setInstallationState("installation", "enabled")).rejects.toThrow("unavailable");
+  });
+
   test("enforces reverse command operation scope and staged bytes before database work", async () => {
     let databaseReads = 0;
     const prisma = {
