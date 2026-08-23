@@ -121,6 +121,28 @@ describe("attachDispatch guards", () => {
     await prisma.pluginEvent.deleteMany({ where: { deviceId } });
   });
 
+  test("acknowledges but reports conflicting reuse of an event ID", async () => {
+    const log = makeLog();
+    const aedes = new Aedes();
+    attachDispatch(aedes, prisma, log);
+    const id = crypto.getRandomValues(new Uint8Array(16));
+    const authorize = async (value: number, messageId: number): Promise<void> => {
+      const payload = Buffer.from(encodeDeviceEvent({ id, seq: 1n, kind: "test", schema: 1, data: { value } }));
+      await new Promise<void>((resolve, reject) => {
+        aedes.authorizePublish({ id: deviceUid } as never, {
+          topic: `soulcloud/v1/devices/${deviceUid}/event`, payload, qos: 1, messageId,
+        } as never, (error) => error ? reject(error) : resolve());
+      });
+    };
+
+    await authorize(1, 1);
+    await authorize(2, 2);
+
+    expect(log.entries.some((entry) => entry.level === "warn" && entry.msg.includes("conflicting reuse"))).toBe(true);
+    expect(await prisma.pluginEvent.count({ where: { deviceId } })).toBe(1);
+    await prisma.pluginEvent.deleteMany({ where: { deviceId } });
+  });
+
   test("global work queue is bounded and serializes each device", async () => {
     const queue = new UplinkWorkQueue(2, 3, 1024);
     const order: string[] = [];

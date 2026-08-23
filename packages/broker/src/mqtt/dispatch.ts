@@ -371,6 +371,13 @@ async function persistDeviceEvent(
       log.warn("ignored event from unknown device", { deviceUid });
       return;
     }
+    if (outcome.status === "conflict") {
+      log.warn("ignored conflicting reuse of device event ID", {
+        deviceUid,
+        eventId: outcome.eventId,
+      });
+      return;
+    }
     log.debug("persisted device plugin event", {
       deviceUid,
       eventId: outcome.eventId,

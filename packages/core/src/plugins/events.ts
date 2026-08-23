@@ -8,6 +8,7 @@ import { applyEntityUpdates, type EntityUpdateInput } from "./entities";
 export type DeviceEventIngestStatus =
   | "inserted"
   | "duplicate"
+  | "conflict"
   | "unknown_device";
 
 export interface DeviceEventIngestResult {
@@ -52,6 +53,7 @@ export async function ingestDeviceEvent(
   payload: Uint8Array,
 ): Promise<DeviceEventIngestResult> {
   const eventId = bytesToHex(envelope.id);
+  const storedPayload = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
   return prisma.$transaction(async (tx) => {
     const device = await tx.device.findUnique({
       where: { deviceUid },
@@ -91,7 +93,7 @@ export async function ingestDeviceEvent(
         schema: envelope.schema,
         // Keep the original envelope so the manager can pass plugin-owned
         // data through without a broker-side decode/re-encode cycle.
-        payload: Buffer.from(payload),
+        payload: storedPayload,
         installationId: binding?.installationId,
         pluginId: binding?.installation.pluginId,
         pluginVersion: binding?.installation.pluginVersion,
@@ -115,7 +117,19 @@ export async function ingestDeviceEvent(
       skipDuplicates: true,
     });
 
-    if (inserted.count === 0) return { status: "duplicate", eventId };
+    if (inserted.count === 0) {
+      const rows = await tx.$queryRaw<Array<{ identical: boolean }>>`
+        SELECT (
+          seq = ${envelope.seq.toString()}::numeric
+          AND kind = ${envelope.kind}
+          AND schema = ${envelope.schema}
+          AND payload = ${storedPayload}
+        ) AS identical
+        FROM plugin_events
+        WHERE device_id = ${device.id}::uuid AND event_id = ${eventId}
+      `;
+      return { status: rows[0]?.identical ? "duplicate" : "conflict", eventId };
+    }
     await tx.$executeRaw`SELECT pg_notify(${PLUGIN_EVENTS_CHANNEL}, ${eventId})`;
     return { status: "inserted", eventId };
   });
