@@ -156,7 +156,10 @@ export async function applyEntityUpdates(
   options: ApplyEntityUpdatesOptions,
 ): Promise<void> {
   if (options.updates.length > 4096) throw new Error("too many entity updates");
-  const keys = options.updates.map((update) => update.entityKey);
+  const updates = [...options.updates].sort((left, right) =>
+    left.entityKey < right.entityKey ? -1 : left.entityKey > right.entityKey ? 1 : 0,
+  );
+  const keys = updates.map((update) => update.entityKey);
   if (new Set(keys).size !== keys.length) throw new Error("duplicate entity updates are not allowed");
   const descriptors = await tx.pluginEntityDescriptor.findMany({
     where: {
@@ -178,7 +181,7 @@ export async function applyEntityUpdates(
   const stateRows: Array<Record<string, unknown>> = [];
   const historyRows: Array<Record<string, unknown>> = [];
 
-  for (const update of options.updates) {
+  for (const update of updates) {
     const descriptor = byKey.get(update.entityKey);
     if (!descriptor) throw new Error(`unknown or deprecated entity ${update.entityKey}`);
     if (update.value !== undefined && !valueMatches(descriptor.valueType, descriptor.enumValues, update.value)) {
@@ -189,7 +192,9 @@ export async function applyEntityUpdates(
     if (previous?.sequence !== null && previous?.sequence !== undefined && sequence !== undefined && sequence <= previous.sequence) continue;
     const value = update.value === undefined ? previous?.value ?? null : toJsonValue(update.value);
     const quality = update.quality ?? previous?.quality ?? "unknown";
-    const sourceTimestamp = parseTimestamp(update.sourceTimestamp);
+    const sourceTimestamp = update.sourceTimestamp === undefined
+      ? previous?.sourceTimestamp ?? undefined
+      : parseTimestamp(update.sourceTimestamp);
     const alarmLevel = update.alarm?.level ?? (update.alarm === null ? null : previous?.alarmLevel ?? null);
     const alarmCode = update.alarm?.code ?? (update.alarm === null ? null : previous?.alarmCode ?? null);
     const row = {
@@ -205,18 +210,16 @@ export async function applyEntityUpdates(
       alarm_code: alarmCode,
     };
     stateRows.push(row);
-    const changed = !previous || !sameStoredValue(previous.value, value) || previous.quality !== quality;
+    const changed =
+      !previous ||
+      !sameStoredValue(previous.value, value) ||
+      previous.quality !== quality ||
+      previous.descriptorRevision !== descriptor.revision ||
+      previous.alarmLevel !== alarmLevel ||
+      previous.alarmCode !== alarmCode;
     if (descriptor.history === "all" || (descriptor.history === "changes" && changed) || descriptor.history === "sampled") {
       historyRows.push(row);
     }
-    currentByKey.set(update.entityKey, {
-      ...previous,
-      value: value === null ? null : value,
-      quality,
-      sequence: sequence ?? previous?.sequence ?? null,
-      alarmLevel,
-      alarmCode,
-    } as (typeof current)[number]);
   }
 
   if (stateRows.length > 0) await upsertStateRows(tx, stateRows);
@@ -313,11 +316,14 @@ async function upsertStateRows(tx: TransactionClient, rows: Array<Record<string,
       descriptor_revision = EXCLUDED.descriptor_revision,
       value = EXCLUDED.value,
       quality = EXCLUDED.quality,
-      source_timestamp = EXCLUDED.source_timestamp,
-      sequence = EXCLUDED.sequence,
+      source_timestamp = COALESCE(EXCLUDED.source_timestamp, plugin_entity_states.source_timestamp),
+      sequence = COALESCE(EXCLUDED.sequence, plugin_entity_states.sequence),
       alarm_level = EXCLUDED.alarm_level,
       alarm_code = EXCLUDED.alarm_code,
       ingested_at = CURRENT_TIMESTAMP
+    WHERE EXCLUDED.sequence IS NULL
+       OR plugin_entity_states.sequence IS NULL
+       OR EXCLUDED.sequence > plugin_entity_states.sequence
   `;
 }
 

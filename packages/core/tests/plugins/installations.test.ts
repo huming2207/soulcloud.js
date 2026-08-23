@@ -144,6 +144,37 @@ describe("plugin installation lifecycle", () => {
     })).toBe(1);
   });
 
+  test("preserves sequence and source time when a partial Entity update omits them", async () => {
+    const sourceTimestamp = "2026-08-23T00:00:00.000Z";
+    await prisma.$transaction((tx) => applyEntityUpdates(tx, {
+      installationId: installationA,
+      deviceId: deviceIds[1]!,
+      profileId: "profile-b",
+      profileVersion: 1,
+      updates: [{ entityKey: "temperature", value: 31, sequence: 2n, sourceTimestamp }],
+    }));
+    await prisma.$transaction((tx) => applyEntityUpdates(tx, {
+      installationId: installationA,
+      deviceId: deviceIds[1]!,
+      profileId: "profile-b",
+      profileVersion: 1,
+      updates: [{ entityKey: "temperature", quality: "bad" }],
+    }));
+    const state = await prisma.pluginEntityState.findUniqueOrThrow({
+      where: {
+        installationId_deviceId_entityKey: {
+          installationId: installationA,
+          deviceId: deviceIds[1]!,
+          entityKey: "temperature",
+        },
+      },
+    });
+    expect(state.value).toBe(31);
+    expect(state.quality).toBe("bad");
+    expect(state.sequence).toBe(2n);
+    expect(state.sourceTimestamp?.toISOString()).toBe(sourceTimestamp);
+  });
+
   test("reconcile reports a binding that is not in the pinned manifest", async () => {
     await prisma.pluginDeviceBinding.update({ where: { deviceId: deviceIds[1]! }, data: { profileId: "missing-profile" } });
     await expect(reconcilePluginInstallation(prisma, installationA))
