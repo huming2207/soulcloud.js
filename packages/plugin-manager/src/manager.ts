@@ -33,6 +33,9 @@ export interface PluginManagerOptions {
   authToken: string;
   maxFrameBytes: number;
   maxPendingRequests: number;
+  maxOperations?: number;
+  maxOperationsPerPlugin?: number;
+  maxOperationsPerInstallation?: number;
   maxReverseCallsPerOperation?: number;
   maxReverseConcurrency?: number;
   maxReverseConcurrencyPerPlugin?: number;
@@ -161,6 +164,8 @@ export class PluginManager {
   private readonly catalog = new Map<string, CatalogEntry>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly operations = new Map<string, ActiveOperation>();
+  private readonly operationsByPlugin = new Map<string, number>();
+  private readonly operationsByInstallation = new Map<string, number>();
   private reverseInFlight = 0;
   private readonly reverseInFlightByPlugin = new Map<string, number>();
   private readonly reverseInFlightByInstallation = new Map<string, number>();
@@ -284,7 +289,7 @@ export class PluginManager {
     const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-    this.operations.set(operationId, {
+    this.registerOperation(operationId, {
       operationTokenHash: hashOperationToken(operationToken),
       connectionId: connection.id,
       installationId: installation.id,
@@ -342,7 +347,7 @@ export class PluginManager {
       });
       return { batchId: batch.id, deviceCount: batch.deviceCount };
     } finally {
-      this.operations.delete(operationId);
+      this.finishOperation(operationId);
     }
   }
 
@@ -363,7 +368,7 @@ export class PluginManager {
     const { connection } = this.requireConnectedManifest(session.pluginId, session.pluginVersion, session.manifestHash);
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-    this.operations.set(operationId, {
+    this.registerOperation(operationId, {
       operationTokenHash: hashOperationToken(operationToken),
       connectionId: connection.id,
       installationId: session.installationId,
@@ -398,7 +403,7 @@ export class PluginManager {
       await this.sealOperation(operationId);
       return result;
     } finally {
-      this.operations.delete(operationId);
+      this.finishOperation(operationId);
     }
   }
 
@@ -424,7 +429,7 @@ export class PluginManager {
       reverseHandlers: handlers,
       onDisconnect: (connectionId) => {
         for (const [operationId, operation] of this.operations) {
-          if (operation.connectionId === connectionId) this.operations.delete(operationId);
+          if (operation.connectionId === connectionId) this.finishOperation(operationId);
         }
         this.scheduleReconnect(pluginId);
       },
@@ -569,9 +574,8 @@ export class PluginManager {
       }
       const envelope = decodeDeviceEvent(event.payload);
       const operationId = crypto.randomUUID();
-      activeOperationId = operationId;
       const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-      this.operations.set(operationId, {
+      this.registerOperation(operationId, {
         operationTokenHash: hashOperationToken(operationToken),
         connectionId: connection.id,
         installationId: event.installation_id,
@@ -587,6 +591,7 @@ export class PluginManager {
         inFlightReverseCalls: 0,
         reverseSettledWaiters: new Set(),
       });
+      activeOperationId = operationId;
       const result = await connection.request("plugin.handleEvent", {
         operationId,
         operationToken,
@@ -647,11 +652,11 @@ export class PluginManager {
         : "";
       const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT" || /INVALID_(EVENT_INPUT|PLUGIN_OUTPUT)/.test(message);
       const attemptsExhausted = !permanent && event.attempt_count >= (this.options.eventMaxAttempts ?? 5);
-      if (!permanent && !pluginCallCompleted) this.circuitFailure(circuitKey);
+      if (!permanent && !pluginCallCompleted && code !== "MANAGER_OVERLOADED") this.circuitFailure(circuitKey);
       await this.releaseEvent(event, permanent || attemptsExhausted, attemptsExhausted ? `${message}; retry limit exhausted` : message);
     } finally {
       // Operation capabilities are valid only while the parent RPC is live.
-      if (activeOperationId) this.operations.delete(activeOperationId);
+      if (activeOperationId) this.finishOperation(activeOperationId);
     }
   }
 
@@ -678,6 +683,33 @@ export class PluginManager {
     this.reverseInFlightByPlugin.set(operation.pluginId, pluginInFlight + 1);
     this.reverseInFlightByInstallation.set(operation.installationId, installationInFlight + 1);
     return operation;
+  }
+
+  private registerOperation(operationId: string, operation: ActiveOperation): void {
+    const pluginCount = this.operationsByPlugin.get(operation.pluginId) ?? 0;
+    const installationCount = this.operationsByInstallation.get(operation.installationId) ?? 0;
+    if (
+      this.operations.size >= (this.options.maxOperations ?? 256) ||
+      pluginCount >= (this.options.maxOperationsPerPlugin ?? 64) ||
+      installationCount >= (this.options.maxOperationsPerInstallation ?? 32)
+    ) {
+      throw Object.assign(new Error("plugin manager operation limit reached"), {
+        code: "MANAGER_OVERLOADED",
+        status: 503,
+        publicCode: "plugin_manager_overloaded",
+      });
+    }
+    this.operations.set(operationId, operation);
+    this.operationsByPlugin.set(operation.pluginId, pluginCount + 1);
+    this.operationsByInstallation.set(operation.installationId, installationCount + 1);
+  }
+
+  private finishOperation(operationId: string): void {
+    const operation = this.operations.get(operationId);
+    if (!operation) return;
+    this.operations.delete(operationId);
+    decrementCounter(this.operationsByPlugin, operation.pluginId);
+    decrementCounter(this.operationsByInstallation, operation.installationId);
   }
 
   private releaseOperation(operation: ActiveOperation): void {

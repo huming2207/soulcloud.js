@@ -83,7 +83,7 @@ function failure(error: unknown): Response {
           : message.includes("disabled") || message.includes("changed concurrently") || message.includes("changed while") ? 409
             : 500;
   const publicMessage = mapped >= 500 && mapped !== 502 ? "plugin manager operation failed" : message;
-  const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "plugin_ui_invalid_output"].includes(explicitCode)
+  const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "plugin_ui_invalid_output", "plugin_manager_overloaded"].includes(explicitCode)
     ? explicitCode
     : mapped === 400 ? "invalid_request" : mapped === 404 ? "not_found" : mapped === 409 ? "conflict" : mapped === 502 ? "plugin_output_invalid" : mapped === 503 ? "plugin_unavailable" : "plugin_manager_error";
   return json(mapped, { error: code, message: publicMessage });

@@ -10,6 +10,9 @@ const envSchema = z.object({
   PLUGIN_RPC_AUTH_TOKEN: z.string().min(32),
   PLUGIN_RPC_MAX_FRAME_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
   PLUGIN_RPC_MAX_PENDING_REQUESTS: z.coerce.number().int().positive().default(128),
+  PLUGIN_MANAGER_MAX_OPERATIONS: z.coerce.number().int().positive().max(4096).default(256),
+  PLUGIN_MANAGER_MAX_OPERATIONS_PER_PLUGIN: z.coerce.number().int().positive().max(1024).default(64),
+  PLUGIN_MANAGER_MAX_OPERATIONS_PER_INSTALLATION: z.coerce.number().int().positive().max(256).default(32),
   PLUGIN_RPC_MAX_REVERSE_CALLS: z.coerce.number().int().positive().max(1024).default(64),
   PLUGIN_RPC_MAX_REVERSE_CONCURRENCY: z.coerce.number().int().positive().max(4096).default(256),
   PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_PLUGIN: z.coerce.number().int().positive().max(1024).default(64),
@@ -39,6 +42,12 @@ export function loadPluginManagerConfig(): PluginManagerConfig {
   const config = loadEnv(envSchema);
   if (config.PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_PLUGIN > config.PLUGIN_RPC_MAX_REVERSE_CONCURRENCY) {
     throw new Error("per-plugin reverse concurrency cannot exceed the global limit");
+  }
+  if (config.PLUGIN_MANAGER_MAX_OPERATIONS_PER_PLUGIN > config.PLUGIN_MANAGER_MAX_OPERATIONS) {
+    throw new Error("per-plugin operation limit cannot exceed the global limit");
+  }
+  if (config.PLUGIN_MANAGER_MAX_OPERATIONS_PER_INSTALLATION > config.PLUGIN_MANAGER_MAX_OPERATIONS_PER_PLUGIN) {
+    throw new Error("per-installation operation limit cannot exceed the per-plugin limit");
   }
   if (config.PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_INSTALLATION > config.PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_PLUGIN) {
     throw new Error("per-installation reverse concurrency cannot exceed the per-plugin limit");
