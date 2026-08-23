@@ -27,7 +27,7 @@ beforeAll(async () => {
       actions: [{ id: "reboot", inputSchema: {}, wire: { command: "reboot", schemaVersion: 1 } }],
       events: [{ kind: "reading", schemaVersion: 1 }],
     },
-    encodeAction: { reboot: () => [] },
+    encodeAction: { reboot: () => [{ delay: 3n }] },
     onEvent: async (context) => {
       await context.getEntity("temperature");
       await context.enqueueCommand("acknowledge");
@@ -73,8 +73,9 @@ describe("plugin oRPC WebSocket transport", () => {
       operationToken: `${randomUUID()}${randomUUID()}`,
       actionId: "reboot",
       input: {},
-    }, 1_000) as { command: string };
+    }, 1_000) as { command: string; args: Array<{ name: string; value: bigint }> };
     expect(output.command).toBe("reboot");
+    expect(output.args).toEqual([{ name: "delay", value: 3n }]);
   });
 
   test("routes reverse calls on the same socket", async () => {

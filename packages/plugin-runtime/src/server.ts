@@ -62,7 +62,7 @@ function rpcError(code: string, message: string): never {
   throw new ORPCError("BAD_REQUEST", { message: `${code}: ${message}` });
 }
 
-function commandWire(args: CommandArgument[]): Array<{ name: string; value: string | number | boolean | null | Blob }> {
+function commandWire(args: CommandArgument[]): Array<{ name: string; value: string | number | bigint | boolean | null | Blob }> {
   return args.map((argument) => {
     const keys = Object.keys(argument);
     if (keys.length !== 1) rpcError("INVALID_PLUGIN_OUTPUT", "command argument must contain one key");
@@ -70,7 +70,7 @@ function commandWire(args: CommandArgument[]): Array<{ name: string; value: stri
     const value = argument[name];
     if (value === undefined || (typeof value === "number" && !Number.isFinite(value))) rpcError("INVALID_PLUGIN_OUTPUT", "invalid command argument value");
     if (value instanceof Uint8Array) return { name, value: new Blob([value]) };
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) return { name, value };
+    if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean" || value === null) return { name, value };
     rpcError("INVALID_PLUGIN_OUTPUT", "command argument must be scalar");
   });
 }

@@ -25,7 +25,7 @@ export function hasRpcPrefix(data: string | ArrayBuffer | ArrayBufferView, prefi
   return true;
 }
 
-const scalar = z.union([z.string(), z.number().finite(), z.boolean(), z.null(), z.instanceof(Blob)]);
+const scalar = z.union([z.string(), z.number().finite(), z.bigint(), z.boolean(), z.null(), z.instanceof(Blob)]);
 const operation = z.object({ operationId: z.string().min(16).max(128), operationToken: z.string().min(32).max(256), deadlineMs: z.number().int().positive().max(600_000) });
 const commandArgument = z.object({ name: z.string().min(1).max(256), value: scalar }).strict();
 const uiUser = z.object({ id: z.string().min(1).max(128), locale: z.string().min(2).max(32), permissions: z.array(z.string().min(1).max(128)).max(256) }).strict();
