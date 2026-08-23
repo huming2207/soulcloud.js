@@ -19,6 +19,9 @@ describe("validateEntityUpdates", () => {
       { entityKey: "temperature", value: 20, sequence: -1n },
     ])).toThrow("invalid sequence");
     expect(() => validateEntityUpdates(descriptors, [
+      { entityKey: "temperature", value: 20, sequence: 1n << 64n },
+    ])).toThrow("invalid sequence");
+    expect(() => validateEntityUpdates(descriptors, [
       { entityKey: "temperature", value: 20, sourceTimestamp: "not-a-date" },
     ])).toThrow("invalid source timestamp");
   });

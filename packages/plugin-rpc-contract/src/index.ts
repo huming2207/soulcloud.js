@@ -28,6 +28,10 @@ export function hasRpcPrefix(data: string | ArrayBuffer | ArrayBufferView, prefi
 const scalar = z.union([z.string(), z.number().finite(), z.bigint(), z.boolean(), z.null(), z.instanceof(Blob)]);
 const entityValue = z.union([z.string(), z.number().finite(), z.boolean(), z.null(), z.instanceof(Blob)]);
 const entityUpdateValue = z.union([z.string(), z.number().finite(), z.boolean(), z.instanceof(Blob)]);
+const uint64 = z.union([z.bigint(), z.number().safe().int()]).refine((value) => {
+  const bigint = typeof value === "bigint" ? value : BigInt(value);
+  return bigint >= 0n && bigint <= (1n << 64n) - 1n;
+}, "expected an unsigned 64-bit integer");
 const operation = z.object({ operationId: z.string().min(16).max(128), operationToken: z.string().min(32).max(256), deadlineMs: z.number().int().positive().max(600_000) });
 const commandArgument = z.object({ name: z.string().min(1).max(256), value: scalar }).strict();
 const uiUser = z.object({ id: z.string().min(1).max(128), locale: z.string().min(2).max(32), permissions: z.array(z.string().min(1).max(128)).max(256) }).strict();
@@ -48,13 +52,13 @@ export const handshakeOutput = z.object({
 }).strict();
 
 export const eventInput = operation.extend({
-  event: z.object({ id: z.string().min(1).max(128), seq: z.union([z.bigint(), z.number().safe()]), kind: z.string().min(1).max(256), schema: z.number().int().positive(), receivedAt: z.string().datetime({ offset: true }), payload: z.unknown() }).strict(),
+  event: z.object({ id: z.string().min(1).max(128), seq: uint64, kind: z.string().min(1).max(256), schema: z.number().int().positive(), receivedAt: z.string().datetime({ offset: true }), payload: z.unknown() }).strict(),
   installation: z.object({ id: z.string().min(1).max(128), projectId: z.string().uuid(), pluginId: z.string().min(1).max(128), pluginVersion: z.string().min(1).max(128), config: z.unknown() }).strict(),
   device: z.object({ id: z.string().uuid(), uid: z.string().min(1).max(256), profileId: z.string().min(1).max(128), profileVersion: z.number().int().positive() }).strict(),
 }).strict();
 
 export const eventOutput = z.object({
-  updates: z.array(z.object({ entityKey: z.string().min(1).max(128), value: entityUpdateValue.optional(), quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]).optional(), sourceTimestamp: z.string().datetime({ offset: true }).optional(), sequence: z.union([z.number().safe(), z.bigint()]).optional(), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string().min(1).max(256) }).strict().nullable().optional() }).strict()).max(4096).default([]),
+  updates: z.array(z.object({ entityKey: z.string().min(1).max(128), value: entityUpdateValue.optional(), quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]).optional(), sourceTimestamp: z.string().datetime({ offset: true }).optional(), sequence: uint64.optional(), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string().min(1).max(256) }).strict().nullable().optional() }).strict()).max(4096).default([]),
   logs: z.array(z.object({ level: z.enum(["debug", "info", "warn", "error"]), message: z.string().min(1).max(4096) }).strict()).max(64).default([]),
 }).strict();
 

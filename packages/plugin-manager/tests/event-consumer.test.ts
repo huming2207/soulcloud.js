@@ -9,7 +9,7 @@ function leasedEvent(id: string, installationId = "installation-id"): LeasedPlug
     device_id: "device-id",
     device_uid: "device-uid",
     project_id: "project-id",
-    seq: 1n,
+    seq: "1",
     kind: "fixture.result",
     schema: 1,
     payload: Buffer.alloc(0),

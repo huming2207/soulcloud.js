@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "../db";
 
 type TransactionClient = Prisma.TransactionClient;
+const UINT64_MAX = (1n << 64n) - 1n;
 
 export interface EntityDescriptorInput {
   key: string;
@@ -189,7 +190,12 @@ export async function applyEntityUpdates(
     }
     const previous = currentByKey.get(update.entityKey);
     const sequence = normalizeSequence(update.sequence);
-    if (previous?.sequence !== null && previous?.sequence !== undefined && sequence !== undefined && sequence <= previous.sequence) continue;
+    if (
+      previous?.sequence !== null &&
+      previous?.sequence !== undefined &&
+      sequence !== undefined &&
+      sequence <= BigInt(previous.sequence.toString())
+    ) continue;
     const value = update.value === undefined ? previous?.value ?? null : toJsonValue(update.value);
     const quality = update.quality ?? previous?.quality ?? "unknown";
     const sourceTimestamp = update.sourceTimestamp === undefined
@@ -268,7 +274,7 @@ function normalizeSequence(sequence: bigint | number | undefined): bigint | unde
     if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error("invalid entity sequence");
     return BigInt(sequence);
   }
-  if (sequence < 0n) throw new Error("invalid entity sequence");
+  if (sequence < 0n || sequence > UINT64_MAX) throw new Error("invalid entity sequence");
   return sequence;
 }
 
@@ -303,7 +309,7 @@ async function upsertStateRows(tx: TransactionClient, rows: Array<Record<string,
       SELECT * FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb)
       AS x(installation_id uuid, device_id uuid, entity_key text,
            descriptor_revision integer, value jsonb, quality text,
-           source_timestamp timestamptz, sequence bigint,
+           source_timestamp timestamptz, sequence numeric(20, 0),
            alarm_level text, alarm_code text)
     )
     INSERT INTO plugin_entity_states
@@ -333,7 +339,7 @@ async function insertHistoryRows(tx: TransactionClient, rows: Array<Record<strin
       SELECT * FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb)
       AS x(installation_id uuid, device_id uuid, entity_key text,
            descriptor_revision integer, value jsonb, quality text,
-           source_timestamp timestamptz, sequence bigint,
+           source_timestamp timestamptz, sequence numeric(20, 0),
            alarm_level text, alarm_code text)
     )
     INSERT INTO plugin_entity_history

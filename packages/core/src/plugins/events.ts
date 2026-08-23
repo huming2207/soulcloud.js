@@ -21,7 +21,7 @@ export interface LeasedPluginEvent {
   device_id: string;
   device_uid: string;
   project_id: string;
-  seq: bigint;
+  seq: string;
   kind: string;
   schema: number;
   payload: Buffer;
@@ -86,7 +86,7 @@ export async function ingestDeviceEvent(
       data: {
         eventId,
         deviceId: device.id,
-        seq: envelope.seq,
+        seq: envelope.seq.toString(),
         kind: envelope.kind,
         schema: envelope.schema,
         // Keep the original envelope so the manager can pass plugin-owned
@@ -150,7 +150,7 @@ export async function leasePluginEvents(
     JOIN devices d ON d.id = c.device_id
     WHERE e.id = c.id
     RETURNING e.id, e.event_id, e.device_id, d.device_uid, d.project_id,
-      e.seq, e.kind, e.schema, e.payload, e.received_at,
+      e.seq::text AS seq, e.kind, e.schema, e.payload, e.received_at,
       e.installation_id, e.plugin_id, e.plugin_version, e.manifest_hash,
       e.profile_id, e.profile_version, e.installation_config,
       e.attempt_count, e.lease_token

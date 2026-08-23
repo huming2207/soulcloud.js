@@ -1,4 +1,4 @@
-import { validateActionInput, validateManifest, type PluginManifest } from "@soulcloud/plugin-sdk";
+import { validateActionInput, validateEntityUpdates, validateManifest, type PluginManifest } from "@soulcloud/plugin-sdk";
 import {
   DEFAULT_RPC_VALUE_BUDGET,
   assertRpcValueBudget,
@@ -613,6 +613,14 @@ export class PluginManager {
         await this.releaseEvent(event, true, error);
         return;
       }
+      const profile = manifestEntry.manifest.profiles.find((item) =>
+        item.id === event.profile_id && item.version === event.profile_version,
+      );
+      if (!profile) {
+        throw Object.assign(new Error(`persisted profile ${event.profile_id}@${event.profile_version} is not in the manifest snapshot`), {
+          code: "MANAGER_DATA_CORRUPTION",
+        });
+      }
       const envelope = (() => {
         try {
           return decodeDeviceEvent(event.payload);
@@ -651,7 +659,7 @@ export class PluginManager {
         operationToken,
         event: {
           id: event.event_id.trim(),
-          seq: event.seq,
+          seq: BigInt(event.seq),
           kind: envelope.kind,
           schema: envelope.schema,
           receivedAt: event.received_at.toISOString(),
@@ -677,22 +685,27 @@ export class PluginManager {
         throw Object.assign(new Error(`INVALID_PLUGIN_OUTPUT: ${(error as Error).message}`), { code: "INVALID_PLUGIN_OUTPUT" });
       }
       await this.sealOperation(operationId);
+      const output = result as { updates?: readonly EntityUpdateInput[]; logs?: readonly { level: string; message: string }[] };
+      const updates = await Promise.all((output.updates ?? []).map(async (update) => ({
+        ...update,
+        value: update.value instanceof Blob
+          ? new Uint8Array(await update.value.arrayBuffer())
+          : update.value,
+      })));
+      try {
+        validateEntityUpdates(profile.entities, updates);
+      } catch (error) {
+        throw Object.assign(new Error(`INVALID_PLUGIN_OUTPUT: ${(error as Error).message}`), { code: "INVALID_PLUGIN_OUTPUT" });
+      }
       pluginCallCompleted = true;
       // The breaker measures plugin/transport health, not the later database
       // commit. A responsive, valid plugin closes a half-open probe here.
       this.circuitSuccess(circuitKey);
-      const output = result as { updates?: readonly EntityUpdateInput[]; logs?: readonly { level: string; message: string }[] };
       for (const entry of output.logs ?? []) {
         this.log("plugin event log", { pluginId: event.plugin_id, eventId: event.event_id.trim(), level: entry.level, message: entry.message });
       }
       if (store.completeWithUpdates) {
         const operation = activeOperationId ? this.operations.get(activeOperationId) : undefined;
-        const updates = await Promise.all((output.updates ?? []).map(async (update) => ({
-          ...update,
-          value: update.value instanceof Blob
-            ? new Uint8Array(await update.value.arrayBuffer())
-            : update.value,
-        })));
         await store.completeWithUpdates(event.id, event.lease_token, {
           installationId: event.installation_id,
           deviceId: event.device_id,

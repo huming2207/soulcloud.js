@@ -171,7 +171,7 @@ export function validateEntityUpdates(descriptors: EntityDescriptor[], updates: 
     if (update.quality && !["good", "bad", "uncertain", "stale", "unknown"].includes(update.quality)) throw new Error(`invalid quality for entity ${update.entityKey}`);
     if (update.sequence !== undefined) {
       const validSequence = typeof update.sequence === "bigint"
-        ? update.sequence >= 0n
+        ? update.sequence >= 0n && update.sequence <= (1n << 64n) - 1n
         : Number.isSafeInteger(update.sequence) && update.sequence >= 0;
       if (!validSequence) throw new Error(`invalid sequence for entity ${update.entityKey}`);
     }

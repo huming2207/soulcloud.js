@@ -146,12 +146,13 @@ describe("plugin installation lifecycle", () => {
 
   test("preserves sequence and source time when a partial Entity update omits them", async () => {
     const sourceTimestamp = "2026-08-23T00:00:00.000Z";
+    const sequence = (1n << 64n) - 1n;
     await prisma.$transaction((tx) => applyEntityUpdates(tx, {
       installationId: installationA,
       deviceId: deviceIds[1]!,
       profileId: "profile-b",
       profileVersion: 1,
-      updates: [{ entityKey: "temperature", value: 31, sequence: 2n, sourceTimestamp }],
+      updates: [{ entityKey: "temperature", value: 31, sequence, sourceTimestamp }],
     }));
     await prisma.$transaction((tx) => applyEntityUpdates(tx, {
       installationId: installationA,
@@ -171,7 +172,7 @@ describe("plugin installation lifecycle", () => {
     });
     expect(state.value).toBe(31);
     expect(state.quality).toBe("bad");
-    expect(state.sequence).toBe(2n);
+    expect(state.sequence?.toString()).toBe(sequence.toString());
     expect(state.sourceTimestamp?.toISOString()).toBe(sourceTimestamp);
   });
 

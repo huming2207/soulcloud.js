@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, canonicalJson, sha256Hex } from "../src";
+import { assertRpcValueBudget, canonicalJson, eventOutput, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
   test("sorts object keys without changing array order", async () => {
@@ -22,5 +22,13 @@ describe("manifest canonicalization", () => {
       maxBlobBytes: 8_192,
       maxTotalBlobBytes: 8_192,
     })).not.toThrow();
+  });
+});
+
+describe("RPC integer bounds", () => {
+  test("accepts uint64 Entity sequences without accepting larger values", () => {
+    const update = (sequence: bigint) => ({ updates: [{ entityKey: "counter", sequence }], logs: [] });
+    expect(eventOutput.safeParse(update((1n << 64n) - 1n)).success).toBe(true);
+    expect(eventOutput.safeParse(update(1n << 64n)).success).toBe(false);
   });
 });

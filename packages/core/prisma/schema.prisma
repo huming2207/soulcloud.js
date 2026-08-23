@@ -480,7 +480,7 @@ model PluginEvent {
   eventId        String             @map("event_id") @db.Char(32)
   deviceId       String             @map("device_id") @db.Uuid
   device         Device             @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  seq            BigInt
+  seq            Decimal            @db.Decimal(20, 0)
   kind           String             @db.VarChar(128)
   schema         Int
   payload        Bytes
@@ -545,7 +545,7 @@ model PluginEntityState {
   quality         String             @db.VarChar(16)
   sourceTimestamp DateTime?          @map("source_timestamp") @db.Timestamptz()
   ingestedAt      DateTime           @default(now()) @map("ingested_at") @db.Timestamptz()
-  sequence        BigInt?
+  sequence        Decimal?           @db.Decimal(20, 0)
   alarmLevel      String?            @map("alarm_level") @db.VarChar(16)
   alarmCode       String?            @map("alarm_code") @db.VarChar(256)
 
@@ -567,7 +567,7 @@ model PluginEntityHistory {
   quality         String             @db.VarChar(16)
   sourceTimestamp DateTime?          @map("source_timestamp") @db.Timestamptz()
   ingestedAt      DateTime           @default(now()) @map("ingested_at") @db.Timestamptz()
-  sequence        BigInt?
+  sequence        Decimal?           @db.Decimal(20, 0)
   alarmLevel      String?            @map("alarm_level") @db.VarChar(16)
   alarmCode       String?            @map("alarm_code") @db.VarChar(256)
 

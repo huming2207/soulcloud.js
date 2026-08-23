@@ -105,14 +105,17 @@ describe("attachDispatch guards", () => {
     const aedes = new Aedes();
     attachDispatch(aedes, prisma, log);
     const id = crypto.getRandomValues(new Uint8Array(16));
-    const payload = Buffer.from(encodeDeviceEvent({ id, seq: 1n, kind: "test", schema: 1, data: { value: 1 } }));
+    const sequence = (1n << 64n) - 1n;
+    const payload = Buffer.from(encodeDeviceEvent({ id, seq: sequence, kind: "test", schema: 1, data: { value: 1 } }));
     const packet = { topic: `soulcloud/v1/devices/${deviceUid}/event`, payload, qos: 1, messageId: 1 };
 
     await new Promise<void>((resolve, reject) => {
       aedes.authorizePublish({ id: deviceUid } as never, packet as never, (error) => {
         if (error) { reject(error); return; }
         void prisma.pluginEvent.findFirst({ where: { deviceId, eventId: Buffer.from(id).toString("hex") } })
-          .then((row) => row ? resolve() : reject(new Error("event was acknowledged before persistence")), reject);
+          .then((row) => row?.seq.toString() === sequence.toString()
+            ? resolve()
+            : reject(new Error("event was acknowledged before its uint64 sequence was persisted")), reject);
       });
     });
     await prisma.pluginEvent.deleteMany({ where: { deviceId } });
