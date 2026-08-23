@@ -435,30 +435,30 @@ export class PluginManager {
 
   private async dispatchEvent(event: LeasedPluginEvent): Promise<void> {
     const store = this.options.eventStore!;
-    if (!this.circuitAllows(event.plugin_id)) {
+    const circuitKey = `${event.plugin_id}\u0000${event.installation_id}`;
+    if (!this.circuitAllows(circuitKey)) {
       await this.releaseEvent(event, false, "plugin circuit is open");
       return;
     }
     const connection = this.connections.get(event.plugin_id);
     if (!connection?.isOpen) {
-      this.circuitFailure(event.plugin_id);
+      this.circuitFailure(circuitKey);
       await this.releaseEvent(event, false, "plugin is unavailable");
       return;
     }
     let activeOperationId: string | undefined;
+    let pluginCallCompleted = false;
     try {
       const manifestEntry = this.catalog.get(`${event.plugin_id}@${event.plugin_version}`);
       if (!manifestEntry) throw new Error("plugin manifest snapshot is unavailable");
       if (manifestEntry.manifestHash !== event.manifest_hash.trim()) {
         const error = `plugin manifest hash drift for ${event.plugin_id}@${event.plugin_version}`;
-        this.circuitSuccess(event.plugin_id);
         await this.releaseEvent(event, true, error);
         return;
       }
       const eventDescriptor = manifestEntry.manifest.events.find((item) => item.kind === event.kind && item.schemaVersion === event.schema);
       if (!eventDescriptor) {
         const error = `event ${event.kind}@${event.schema} is not declared by the plugin manifest`;
-        this.circuitSuccess(event.plugin_id);
         await this.releaseEvent(event, true, error);
         return;
       }
@@ -508,6 +508,7 @@ export class PluginManager {
         },
       }, this.options.eventTimeoutMs ?? 30_000);
       await this.sealOperation(operationId);
+      pluginCallCompleted = true;
       const output = result as { updates?: readonly EntityUpdateInput[]; logs?: readonly { level: string; message: string }[] };
       for (const entry of output.logs ?? []) {
         this.log("plugin event log", { pluginId: event.plugin_id, eventId: event.event_id.trim(), level: entry.level, message: entry.message });
@@ -527,7 +528,7 @@ export class PluginManager {
         if (operation?.stagedCommands?.length) throw new Error("event command intents require transactional completion");
         await store.complete(event.id, event.lease_token);
       }
-      this.circuitSuccess(event.plugin_id);
+      this.circuitSuccess(circuitKey);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = typeof error === "object" && error !== null && "code" in error
@@ -535,8 +536,7 @@ export class PluginManager {
         : "";
       const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT" || /INVALID_(EVENT_INPUT|PLUGIN_OUTPUT)/.test(message);
       const attemptsExhausted = !permanent && event.attempt_count >= (this.options.eventMaxAttempts ?? 5);
-      if (permanent) this.circuitSuccess(event.plugin_id);
-      else this.circuitFailure(event.plugin_id);
+      if (!permanent && !pluginCallCompleted) this.circuitFailure(circuitKey);
       await this.releaseEvent(event, permanent || attemptsExhausted, attemptsExhausted ? `${message}; retry limit exhausted` : message);
     } finally {
       // Operation capabilities are valid only while the parent RPC is live.
@@ -635,8 +635,8 @@ export class PluginManager {
     }
   }
 
-  private circuitAllows(pluginId: string): boolean {
-    const circuit = this.circuits.get(pluginId);
+  private circuitAllows(key: string): boolean {
+    const circuit = this.circuits.get(key);
     if (!circuit || circuit.failures < 5) return true;
     if (Date.now() - circuit.openedAt < 30_000) return false;
     if (circuit.probeInProgress) return false;
@@ -644,16 +644,16 @@ export class PluginManager {
     return true;
   }
 
-  private circuitFailure(pluginId: string): void {
-    const circuit = this.circuits.get(pluginId) ?? { failures: 0, openedAt: 0, probeInProgress: false };
+  private circuitFailure(key: string): void {
+    const circuit = this.circuits.get(key) ?? { failures: 0, openedAt: 0, probeInProgress: false };
     circuit.failures += 1;
     circuit.probeInProgress = false;
     if (circuit.failures >= 5) circuit.openedAt = Date.now();
-    this.circuits.set(pluginId, circuit);
+    this.circuits.set(key, circuit);
   }
 
-  private circuitSuccess(pluginId: string): void {
-    this.circuits.delete(pluginId);
+  private circuitSuccess(key: string): void {
+    this.circuits.delete(key);
   }
 
   listCatalog(): CatalogEntry[] { return [...this.catalog.values()].map((entry) => ({ ...entry, connected: this.connections.get(entry.pluginId)?.isOpen ?? false })); }
