@@ -39,6 +39,42 @@ describe("plugin UI manifest validation", () => {
   });
 });
 
+describe("plugin manifest descriptor validation", () => {
+  const base = { id: "example.plugin", version: "1", apiVersion: 1 as const, actions: [], events: [] };
+
+  test("requires a non-empty unique value set only for enum Entities", () => {
+    const profile = {
+      id: "fixture",
+      version: 1,
+      manufacturer: "Soulcloud",
+      model: "Fixture",
+      capabilities: [],
+      entities: [{ key: "mode", valueType: "enum", category: "primary" }],
+    };
+    expect(() => validateManifest({ ...base, profiles: [profile] })).toThrow("requires enumValues");
+    expect(() => validateManifest({
+      ...base,
+      profiles: [{ ...profile, entities: [{ ...profile.entities[0], enumValues: ["run", "run"] }] }],
+    })).toThrow("duplicate enum value");
+    expect(() => validateManifest({
+      ...base,
+      profiles: [{ ...profile, entities: [{ key: "name", valueType: "string", category: "primary", enumValues: ["x"] }] }],
+    })).toThrow("non-enum entity");
+  });
+
+  test("rejects contradictory Action field constraints and defaults", () => {
+    const manifest = (field: Record<string, unknown>) => ({
+      ...base,
+      profiles: [],
+      actions: [{ id: "run", inputSchema: { value: field }, wire: { command: "run", schemaVersion: 1 } }],
+    });
+    expect(() => validateManifest(manifest({ type: "string", min: 1 }))).toThrow("min/max for numeric types");
+    expect(() => validateManifest(manifest({ type: "number", min: 2, max: 1 }))).toThrow("min cannot exceed max");
+    expect(() => validateManifest(manifest({ type: "boolean", enum: ["true"] }))).toThrow("enum for string fields");
+    expect(() => validateManifest(manifest({ type: "integer", default: 1.5 }))).toThrow("invalid default");
+  });
+});
+
 describe("plugin implementation validation", () => {
   test("fails startup when a declared operation has no implementation", () => {
     const base = { id: "example.plugin", version: "1", apiVersion: 1 as const, profiles: [], actions: [], events: [] };

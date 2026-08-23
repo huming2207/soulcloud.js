@@ -5,7 +5,7 @@ const scalar = z.union([z.string(), z.number().finite(), z.boolean(), z.bigint()
 const field = z.object({
   type: z.enum(["string", "number", "integer", "boolean"]),
   required: z.boolean().optional(),
-  enum: z.array(z.string()).max(128).optional(),
+  enum: z.array(z.string().max(1024)).min(1).max(128).optional(),
   min: z.number().finite().optional(),
   max: z.number().finite().optional(),
   title: z.string().max(256).optional(),
@@ -70,8 +70,48 @@ export function validateManifest(value: unknown): PluginManifest {
   unique(manifest.ui?.routes.map((item) => item.id) ?? [], "UI route ID");
   unique(manifest.ui?.routes.map((item) => item.path) ?? [], "UI route path");
   for (const route of manifest.ui?.routes ?? []) unique(route.methods ?? ["GET"], `method in UI route ${route.id}`);
-  for (const profile of manifest.profiles) unique(profile.entities.map((item) => item.key), `entity in ${profile.id}`);
+  for (const profile of manifest.profiles) {
+    unique(profile.capabilities, `capability in ${profile.id}`);
+    unique(profile.entities.map((item) => item.key), `entity in ${profile.id}`);
+    for (const entity of profile.entities) {
+      if (entity.valueType === "enum") {
+        if (!entity.enumValues || entity.enumValues.length === 0) {
+          throw new Error(`enum entity ${profile.id}.${entity.key} requires enumValues`);
+        }
+        unique(entity.enumValues, `enum value in ${profile.id}.${entity.key}`);
+      } else if (entity.enumValues !== undefined) {
+        throw new Error(`non-enum entity ${profile.id}.${entity.key} cannot declare enumValues`);
+      }
+    }
+  }
+  for (const action of manifest.actions) validateActionSchemaDeclaration(action.id, action.inputSchema);
+  for (const route of manifest.ui?.routes ?? []) {
+    if (route.querySchema) validateActionSchemaDeclaration(`UI route ${route.id} query`, route.querySchema);
+    if (route.actionSchema) validateActionSchemaDeclaration(`UI route ${route.id} action`, route.actionSchema);
+  }
   return manifest;
+}
+
+function validateActionSchemaDeclaration(label: string, schema: ActionInputSchema): void {
+  for (const [key, rule] of Object.entries(schema)) {
+    const numeric = rule.type === "number" || rule.type === "integer";
+    if (!numeric && (rule.min !== undefined || rule.max !== undefined)) {
+      throw new Error(`${label}.${key} can only declare min/max for numeric types`);
+    }
+    if (rule.min !== undefined && rule.max !== undefined && rule.min > rule.max) {
+      throw new Error(`${label}.${key} min cannot exceed max`);
+    }
+    if (rule.enum !== undefined && rule.type !== "string") {
+      throw new Error(`${label}.${key} can only declare enum for string fields`);
+    }
+    if (rule.enum && new Set(rule.enum).size !== rule.enum.length) {
+      throw new Error(`${label}.${key} contains duplicate enum values`);
+    }
+    if (rule.default !== undefined) {
+      const result = validateActionInput({ [key]: { ...rule, required: true } }, { [key]: rule.default });
+      if (!result.ok) throw new Error(`${label}.${key} has an invalid default: ${result.failures[0]?.error ?? "invalid value"}`);
+    }
+  }
 }
 
 export interface ValidationFailure { field: string; error: string }
