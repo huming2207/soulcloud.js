@@ -265,15 +265,14 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
     bridge,
     handler,
     receive(data, context) {
+      if (hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
+        // A reverse response may be needed by the currently running forward
+        // handler. Dispatch it immediately; putting it on receiveTail would
+        // deadlock handleEvent -> reverse call -> response.
+        bridge.dispatch("message", { data });
+        return;
+      }
       receiveTail = receiveTail.then(async () => {
-        if (hasPrefix(data, PLUGIN_TO_MANAGER_PREFIX)) {
-          // Responses to plugin -> manager reverse calls use the reverse
-          // direction prefix even though they arrive on this socket from the
-          // manager. Feed them to the reverse RPC client; the server handler
-          // must not consume them as manager -> plugin requests.
-          bridge.dispatch("message", { data });
-          return;
-        }
         await handler.message(bridge, data as string | ArrayBuffer | Pick<Uint8Array<ArrayBuffer>, "buffer" | "byteLength" | "byteOffset">, { context });
       }).catch(() => ws.close(1011, "RPC handler error"));
     },
