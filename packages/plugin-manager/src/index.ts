@@ -22,6 +22,7 @@ const manager = new PluginManager({
   eventPollIntervalMs: config.PLUGIN_EVENT_POLL_INTERVAL_MS,
   eventLeaseMs: config.PLUGIN_EVENT_LEASE_MS,
   eventBatchSize: config.PLUGIN_EVENT_BATCH_SIZE,
+  eventMaxConcurrency: config.PLUGIN_EVENT_MAX_CONCURRENCY,
   eventTimeoutMs: config.PLUGIN_EVENT_TIMEOUT_MS,
   eventMaxAttempts: config.PLUGIN_EVENT_MAX_ATTEMPTS,
   eventRetentionDays: config.PLUGIN_EVENT_RETENTION_DAYS,

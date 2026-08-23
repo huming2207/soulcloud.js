@@ -20,6 +20,7 @@ const envSchema = z.object({
   PLUGIN_EVENT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   PLUGIN_EVENT_LEASE_MS: z.coerce.number().int().min(1_000).default(60_000),
   PLUGIN_EVENT_BATCH_SIZE: z.coerce.number().int().positive().max(256).default(32),
+  PLUGIN_EVENT_MAX_CONCURRENCY: z.coerce.number().int().positive().max(64).default(4),
   PLUGIN_EVENT_TIMEOUT_MS: z.coerce.number().int().positive().max(600_000).default(30_000),
   PLUGIN_EVENT_MAX_ATTEMPTS: z.coerce.number().int().positive().max(100).default(5),
   PLUGIN_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(30),

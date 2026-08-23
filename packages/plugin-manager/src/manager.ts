@@ -47,6 +47,7 @@ export interface PluginManagerOptions {
   eventPollIntervalMs?: number;
   eventLeaseMs?: number;
   eventBatchSize?: number;
+  eventMaxConcurrency?: number;
   eventTimeoutMs?: number;
   eventMaxAttempts?: number;
   eventRetentionDays?: number;
@@ -456,14 +457,29 @@ export class PluginManager {
         : null;
       renewTimer?.unref?.();
       try {
+        const groups = new Map<string, LeasedPluginEvent[]>();
         for (const event of events) {
-          try {
-            if (this.stopping) await this.releaseEvent(event, false, "plugin manager is shutting down");
-            else await this.dispatchEvent(event);
-          } finally {
-            pending.delete(event.id);
-          }
+          const group = groups.get(event.installation_id);
+          if (group) group.push(event);
+          else groups.set(event.installation_id, [event]);
         }
+        const queue = [...groups.values()];
+        let nextGroup = 0;
+        const consumeGroup = async (): Promise<void> => {
+          while (nextGroup < queue.length) {
+            const group = queue[nextGroup++]!;
+            for (const event of group) {
+              try {
+                if (this.stopping) await this.releaseEvent(event, false, "plugin manager is shutting down");
+                else await this.dispatchEvent(event);
+              } finally {
+                pending.delete(event.id);
+              }
+            }
+          }
+        };
+        const concurrency = Math.min(queue.length, this.options.eventMaxConcurrency ?? 4);
+        await Promise.all(Array.from({ length: concurrency }, consumeGroup));
       } finally {
         if (renewTimer) clearInterval(renewTimer);
         if (renewal) await renewal;
