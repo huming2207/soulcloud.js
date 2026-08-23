@@ -84,7 +84,7 @@ describe("plugin installation lifecycle", () => {
       .rejects.toThrow("bound profile profile-a@1");
     const installation = await prisma.pluginInstallation.findUniqueOrThrow({ where: { id: installationA } });
     expect(installation.pluginVersion).toBe("1.0.0");
-    expect(installation.manifestHash.trim()).toBe(hashes[0]);
+    expect(installation.manifestHash.trim()).toBe(hashes[0]!);
   });
 
   test("reconcile reports a binding that is not in the pinned manifest", async () => {
