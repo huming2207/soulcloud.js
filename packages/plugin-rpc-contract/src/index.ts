@@ -26,6 +26,7 @@ export function hasRpcPrefix(data: string | ArrayBuffer | ArrayBufferView, prefi
 }
 
 const scalar = z.union([z.string(), z.number().finite(), z.bigint(), z.boolean(), z.null(), z.instanceof(Blob)]);
+const entityValue = z.union([z.string(), z.number().finite(), z.boolean(), z.null(), z.instanceof(Blob)]);
 const operation = z.object({ operationId: z.string().min(16).max(128), operationToken: z.string().min(32).max(256), deadlineMs: z.number().int().positive().max(600_000) });
 const commandArgument = z.object({ name: z.string().min(1).max(256), value: scalar }).strict();
 const uiUser = z.object({ id: z.string().min(1).max(128), locale: z.string().min(2).max(32), permissions: z.array(z.string().min(1).max(128)).max(256) }).strict();
@@ -52,7 +53,7 @@ export const eventInput = operation.extend({
 }).strict();
 
 export const eventOutput = z.object({
-  updates: z.array(z.object({ entityKey: z.string().min(1).max(128), value: z.unknown().optional(), quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]).optional(), sourceTimestamp: z.string().datetime({ offset: true }).optional(), sequence: z.union([z.number().safe(), z.bigint()]).optional(), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string().min(1).max(256) }).strict().nullable().optional() }).strict()).max(4096).default([]),
+  updates: z.array(z.object({ entityKey: z.string().min(1).max(128), value: entityValue.optional(), quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]).optional(), sourceTimestamp: z.string().datetime({ offset: true }).optional(), sequence: z.union([z.number().safe(), z.bigint()]).optional(), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string().min(1).max(256) }).strict().nullable().optional() }).strict()).max(4096).default([]),
   logs: z.array(z.object({ level: z.enum(["debug", "info", "warn", "error"]), message: z.string().min(1).max(4096) }).strict()).max(64).default([]),
 }).strict();
 
@@ -65,7 +66,7 @@ export const uiActionInput = uiRenderInput.extend({ action: z.unknown() }).stric
 export const uiActionOutput = z.object({ redirect: z.string().max(2048).optional(), errors: z.array(z.object({ field: z.string().max(128), message: z.string().max(2048) }).strict()).max(64).optional() }).strict();
 
 export const entityGetInput = operation.extend({ entityKey: z.string().min(1).max(128) }).strict();
-export const entityGetOutput = z.object({ entityKey: z.string(), value: z.unknown(), quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]), sourceTimestamp: z.string().datetime({ offset: true }).nullable(), ingestedAt: z.string().datetime({ offset: true }), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string() }).strict().nullable() }).strict().nullable();
+export const entityGetOutput = z.object({ entityKey: z.string(), value: entityValue, quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]), sourceTimestamp: z.string().datetime({ offset: true }).nullable(), ingestedAt: z.string().datetime({ offset: true }), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string() }).strict().nullable() }).strict().nullable();
 export const commandEnqueueInput = operation.extend({ command: z.string().min(1).max(256), args: z.array(commandArgument).max(256) }).strict();
 export const commandEnqueueOutput = z.object({ accepted: z.literal(true) }).strict();
 export const pluginCallInput = operation.extend({ pluginId: z.string().min(1).max(128), procedure: z.string().min(1).max(256), input: z.unknown() }).strict();

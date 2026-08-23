@@ -103,12 +103,21 @@ export interface PluginEventOutput {
   logs?: { level: "debug" | "info" | "warn" | "error"; message: string }[];
 }
 
+export interface PluginEntityState {
+  entityKey: string;
+  value: string | number | boolean | null | Uint8Array;
+  quality: EntityQuality;
+  sourceTimestamp: string | null;
+  ingestedAt: string;
+  alarm: { level: "info" | "warning" | "critical"; code: string } | null;
+}
+
 export interface PluginContext {
   readonly operationId: string;
   readonly signal: AbortSignal;
   readonly installation: PluginEventInput["installation"];
   readonly device: PluginEventInput["device"];
-  getEntity(entityKey: string): Promise<unknown>;
+  getEntity(entityKey: string): Promise<PluginEntityState | null>;
   enqueueCommand(command: string, args?: CommandArgument[]): Promise<void>;
 }
 

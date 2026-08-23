@@ -560,12 +560,18 @@ export class PluginManager {
       }
       if (store.completeWithUpdates) {
         const operation = activeOperationId ? this.operations.get(activeOperationId) : undefined;
+        const updates = await Promise.all((output.updates ?? []).map(async (update) => ({
+          ...update,
+          value: update.value instanceof Blob
+            ? new Uint8Array(await update.value.arrayBuffer())
+            : update.value,
+        })));
         await store.completeWithUpdates(event.id, event.lease_token, {
           installationId: event.installation_id,
           deviceId: event.device_id,
           profileId: event.profile_id,
           profileVersion: event.profile_version,
-          updates: output.updates ?? [],
+          updates,
           commands: operation?.stagedCommands,
         });
       } else {
@@ -636,7 +642,10 @@ export class PluginManager {
     try {
       if (!operation.deviceId) throw new Error("entity read requires a device scope");
       if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
-      return await getPluginEntityState(this.options.prisma, operation.installationId, operation.deviceId, input.entityKey);
+      const state = await getPluginEntityState(this.options.prisma, operation.installationId, operation.deviceId, input.entityKey);
+      return state && state.value instanceof Uint8Array
+        ? { ...state, value: new Blob([state.value]) }
+        : state;
     } finally {
       this.releaseOperation(operation);
     }

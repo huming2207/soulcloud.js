@@ -22,6 +22,7 @@ import {
   validateManifest,
   type CommandArgument,
   type PluginDefinition,
+  type PluginEntityState,
   type PluginManifest,
 } from "@soulcloud/plugin-sdk";
 
@@ -73,6 +74,25 @@ function commandWire(args: CommandArgument[]): Array<{ name: string; value: stri
     if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean" || value === null) return { name, value };
     rpcError("INVALID_PLUGIN_OUTPUT", "command argument must be scalar");
   });
+}
+
+function entityValueToWire(value: unknown): unknown {
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer) return new Blob([value]);
+  return value;
+}
+
+async function entityStateFromWire(state: {
+  entityKey: string;
+  value: string | number | boolean | null | Blob;
+  quality: PluginEntityState["quality"];
+  sourceTimestamp: string | null;
+  ingestedAt: string;
+  alarm: PluginEntityState["alarm"];
+} | null): Promise<PluginEntityState | null> {
+  if (!state) return null;
+  const value = state.value;
+  if (!(value instanceof Blob)) return { ...state, value };
+  return { ...state, value: new Uint8Array(await value.arrayBuffer()) };
 }
 
 function createBridge(ws: Bun.ServerWebSocket<unknown>) {
@@ -213,7 +233,7 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
             signal: controller.signal,
             installation: input.installation,
             device: input.device,
-            getEntity: async (entityKey: string) => reverse.context.entities.get({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, entityKey }),
+            getEntity: async (entityKey: string) => entityStateFromWire(await reverse.context.entities.get({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, entityKey })),
             enqueueCommand: async (command: string, args: CommandArgument[] = []) => { const result = await reverse.context.commands.enqueue({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, command, args: commandWire(args) }); return result.accepted ? undefined : undefined; },
           };
           const result = await definition.onEvent(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload: input.event.payload, installation: input.installation, device: input.device });
@@ -224,7 +244,10 @@ function createRuntimeConnection(ws: Bun.ServerWebSocket<{ connection?: RuntimeC
           } catch (error) {
             rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
           }
-          return { updates, logs: result?.logs ?? [] };
+          return {
+            updates: updates.map((update) => ({ ...update, value: entityValueToWire(update.value) })),
+            logs: result?.logs ?? [],
+          };
         } finally { clearTimeout(timer); running -= 1; }
       }),
     },

@@ -200,7 +200,7 @@ export async function reconcilePluginInstallation(
 
 export interface EntityStateResult {
   entityKey: string;
-  value: unknown;
+  value: string | number | boolean | null | Uint8Array;
   quality: "good" | "bad" | "uncertain" | "stale" | "unknown";
   sourceTimestamp: string | null;
   ingestedAt: string;
@@ -216,13 +216,14 @@ export async function getPluginEntityState(
   const rows = await prisma.$queryRaw<Array<{
     entity_key: string;
     value: unknown;
+    value_type: string;
     quality: string;
     source_timestamp: Date | null;
     ingested_at: Date;
     alarm_level: "info" | "warning" | "critical" | null;
     alarm_code: string | null;
   }>>`
-    SELECT s.entity_key, s.value,
+    SELECT s.entity_key, s.value, d.value_type,
       CASE WHEN d.stale_after_seconds IS NOT NULL
              AND s.quality = 'good'
              AND s.ingested_at < CURRENT_TIMESTAMP - (d.stale_after_seconds * INTERVAL '1 second')
@@ -249,12 +250,24 @@ export async function getPluginEntityState(
   if (!row) return null;
   return {
     entityKey: row.entity_key,
-    value: row.value,
+    value: entityValueFromStorage(row.value, row.value_type),
     quality: row.quality as EntityStateResult["quality"],
     sourceTimestamp: row.source_timestamp?.toISOString() ?? null,
     ingestedAt: row.ingested_at.toISOString(),
     alarm: row.alarm_level && row.alarm_code ? { level: row.alarm_level, code: row.alarm_code } : null,
   };
+}
+
+function entityValueFromStorage(value: unknown, valueType: string): EntityStateResult["value"] {
+  if (valueType === "binary") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("stored binary entity value is invalid");
+    const encoded = (value as { $binary?: unknown }).$binary;
+    if (typeof encoded !== "string") throw new Error("stored binary entity value is invalid");
+    return new Uint8Array(Buffer.from(encoded, "base64"));
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  throw new Error("stored entity value is invalid");
 }
 
 async function getSnapshot(
