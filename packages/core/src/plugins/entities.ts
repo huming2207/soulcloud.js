@@ -34,9 +34,24 @@ export async function registerInstallationProfileEntities(
   profileVersion: number,
   descriptors: readonly EntityDescriptorInput[],
 ): Promise<void> {
-  await prisma.$transaction(async (tx) => registerInstallationProfileEntitiesInTransaction(tx, installationId, profileId, profileVersion, descriptors));
+  await prisma.$transaction(async (tx) => {
+    const installation = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM plugin_installations
+      WHERE id = ${installationId}::uuid
+      FOR UPDATE
+    `;
+    if (installation.length === 0) throw new Error("plugin installation not found");
+    await registerInstallationProfileEntitiesInTransaction(
+      tx,
+      installationId,
+      profileId,
+      profileVersion,
+      descriptors,
+    );
+  });
 }
 
+/** Caller must already hold the installation row lock. */
 export async function registerInstallationProfileEntitiesInTransaction(
   tx: TransactionClient,
   installationId: string,
@@ -44,7 +59,6 @@ export async function registerInstallationProfileEntitiesInTransaction(
   profileVersion: number,
   descriptors: readonly EntityDescriptorInput[],
 ): Promise<void> {
-    await tx.$executeRaw`SELECT id FROM plugin_installations WHERE id = ${installationId}::uuid FOR UPDATE`;
     const existing = await tx.pluginEntityDescriptor.findMany({
       where: { installationId, profileId, profileVersion },
       orderBy: { revision: "asc" },

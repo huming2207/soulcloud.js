@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../src/db";
 import { completePluginEventWithUpdates } from "../../src/plugins/events";
+import { applyEntityUpdates } from "../../src/plugins/entities";
 import {
   bindDeviceToPluginInstallation,
   createPluginInstallation,
+  getPluginEntityState,
   migratePluginInstallation,
 } from "../../src/plugins/installations";
 
@@ -137,6 +139,25 @@ describe("plugin event completion lifecycle snapshots", () => {
       profileId: "profile-b",
       profileVersion: 1,
     });
+    await prisma.$transaction((tx) => applyEntityUpdates(tx, {
+      installationId: data.installationId,
+      deviceId: data.deviceId,
+      profileId: "profile-b",
+      profileVersion: 1,
+      updates: [{ entityKey: "temperature", value: 99, quality: "good", sequence: 3n }],
+    }));
+    await prisma.pluginEntityHistory.deleteMany({
+      where: { installationId: data.installationId, deviceId: data.deviceId },
+    });
+    expect(await getPluginEntityState(prisma, {
+      installationId: data.installationId,
+      deviceId: data.deviceId,
+      pluginId: data.pluginId,
+      pluginVersion: "1.0.0",
+      manifestHash: data.oldHash,
+      profileId: "profile-a",
+      profileVersion: 1,
+    }, "temperature")).toBeNull();
 
     expect(await completePluginEventWithUpdates(prisma, event.id, "lease-token", {
       installationId: data.installationId,
@@ -150,9 +171,14 @@ describe("plugin event completion lifecycle snapshots", () => {
       updates: [{ entityKey: "temperature", value: 21, quality: "good", sequence: 1n }],
     })).toBe(true);
 
-    expect(await prisma.pluginEntityState.count({
-      where: { installationId: data.installationId, deviceId: data.deviceId },
-    })).toBe(0);
+    const state = await prisma.pluginEntityState.findUniqueOrThrow({
+      where: { installationId_deviceId_entityKey: {
+        installationId: data.installationId,
+        deviceId: data.deviceId,
+        entityKey: "temperature",
+      } },
+    });
+    expect(state.value).toBe(99);
     const history = await prisma.pluginEntityHistory.findMany({
       where: { installationId: data.installationId, deviceId: data.deviceId },
     });
@@ -171,6 +197,25 @@ describe("plugin event completion lifecycle snapshots", () => {
       data.newHash,
       null,
     );
+    await prisma.$transaction((tx) => applyEntityUpdates(tx, {
+      installationId: data.installationId,
+      deviceId: data.deviceId,
+      profileId: "profile-a",
+      profileVersion: 1,
+      updates: [{ entityKey: "temperature", value: "new", quality: "good", sequence: 3n }],
+    }));
+    await prisma.pluginEntityHistory.deleteMany({
+      where: { installationId: data.installationId, deviceId: data.deviceId },
+    });
+    expect(await getPluginEntityState(prisma, {
+      installationId: data.installationId,
+      deviceId: data.deviceId,
+      pluginId: data.pluginId,
+      pluginVersion: "1.0.0",
+      manifestHash: data.oldHash,
+      profileId: "profile-a",
+      profileVersion: 1,
+    }, "temperature")).toBeNull();
 
     expect(await completePluginEventWithUpdates(prisma, event.id, "lease-token", {
       installationId: data.installationId,
@@ -185,9 +230,14 @@ describe("plugin event completion lifecycle snapshots", () => {
       commands: [{ deviceId: data.deviceId, command: { cmd: "record_result" } }],
     })).toBe(true);
 
-    expect(await prisma.pluginEntityState.count({
-      where: { installationId: data.installationId, deviceId: data.deviceId },
-    })).toBe(0);
+    const state = await prisma.pluginEntityState.findUniqueOrThrow({
+      where: { installationId_deviceId_entityKey: {
+        installationId: data.installationId,
+        deviceId: data.deviceId,
+        entityKey: "temperature",
+      } },
+    });
+    expect(state.value).toBe("new");
     const history = await prisma.pluginEntityHistory.findMany({
       where: { installationId: data.installationId, deviceId: data.deviceId },
     });

@@ -169,6 +169,7 @@ interface ActiveOperation {
   projectId: string;
   pluginId: string;
   pluginVersion: string;
+  manifestHash?: string;
   deviceId?: string;
   profileId?: string;
   profileVersion?: number;
@@ -707,6 +708,7 @@ export class PluginManager {
         projectId: event.project_id,
         pluginId: event.plugin_id,
         pluginVersion: event.plugin_version,
+        manifestHash: event.manifest_hash.trim(),
         deviceId: event.device_id,
         profileId: event.profile_id,
         profileVersion: event.profile_version,
@@ -908,8 +910,19 @@ export class PluginManager {
     try {
       if (operation.kind !== "event") throw new Error("entity read is not allowed for this operation");
       if (!operation.deviceId) throw new Error("entity read requires a device scope");
+      if (!operation.profileId || operation.profileVersion === undefined || !operation.manifestHash) {
+        throw new Error("entity read requires an event snapshot");
+      }
       if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
-      const state = await getPluginEntityState(this.options.prisma, operation.installationId, operation.deviceId, input.entityKey);
+      const state = await getPluginEntityState(this.options.prisma, {
+        installationId: operation.installationId,
+        deviceId: operation.deviceId,
+        pluginId: operation.pluginId,
+        pluginVersion: operation.pluginVersion,
+        manifestHash: operation.manifestHash,
+        profileId: operation.profileId,
+        profileVersion: operation.profileVersion,
+      }, input.entityKey);
       if (!state) return null;
       const value = state.value instanceof Uint8Array ? new Blob([state.value]) : state.value;
       return { ...state, value };

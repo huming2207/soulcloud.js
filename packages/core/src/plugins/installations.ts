@@ -230,10 +230,19 @@ export interface EntityStateResult {
   alarm: { level: "info" | "warning" | "critical"; code: string } | null;
 }
 
+export interface EntityStateSnapshot {
+  installationId: string;
+  deviceId: string;
+  pluginId: string;
+  pluginVersion: string;
+  manifestHash: string;
+  profileId: string;
+  profileVersion: number;
+}
+
 export async function getPluginEntityState(
   prisma: PrismaClient,
-  installationId: string,
-  deviceId: string,
+  snapshot: EntityStateSnapshot,
   entityKey: string,
 ): Promise<EntityStateResult | null> {
   const rows = await prisma.$queryRaw<Array<{
@@ -262,10 +271,18 @@ export async function getPluginEntityState(
      AND b.installation_id = s.installation_id
      AND b.profile_id = d.profile_id
      AND b.profile_version = d.profile_version
-    WHERE s.installation_id = ${installationId}::uuid
-      AND s.device_id = ${deviceId}::uuid
+    JOIN plugin_installations i
+      ON i.id = s.installation_id
+    WHERE s.installation_id = ${snapshot.installationId}::uuid
+      AND s.device_id = ${snapshot.deviceId}::uuid
       AND s.entity_key = ${entityKey}
       AND d.deprecated = false
+      AND b.profile_id = ${snapshot.profileId}
+      AND b.profile_version = ${snapshot.profileVersion}
+      AND i.plugin_id = ${snapshot.pluginId}
+      AND i.plugin_version = ${snapshot.pluginVersion}
+      AND i.manifest_hash = ${snapshot.manifestHash}
+      AND i.state = 'enabled'
     ORDER BY d.created_at DESC
     LIMIT 1
   `;
