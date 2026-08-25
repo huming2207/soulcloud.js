@@ -99,7 +99,7 @@ function input(tokenHash: string, ttlMs = 60_000, allowedCapabilities: readonly 
   } as const;
 }
 
-describe("durable debug execution capability", () => {
+describe.serial("durable debug execution capability", () => {
   test("creates one device lease and normalizes capability names", async () => {
     const execution = await createDebugExecution(prisma, input(tokenHashA));
     expect(execution).toMatchObject({
