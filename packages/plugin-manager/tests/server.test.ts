@@ -109,6 +109,22 @@ const manager = {
     updatedAt: new Date(0).toISOString(),
     finishedAt: null,
   }),
+  getDebugExecutionForUiSession: async (_session: unknown, executionId: string) => ({
+    id: executionId,
+    installationId,
+    deviceId: randomUUID(),
+    initiatingUserId: randomUUID(),
+    pluginId: manifest.id,
+    pluginVersion: manifest.version,
+    manifestHash: "a".repeat(64),
+    allowedCapabilities: [],
+    state: "paused" as const,
+    deviceLeaseExpiresAt: null,
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date().toISOString(),
+    finishedAt: null,
+  }),
   pauseDebugExecutionForUser: async (input: unknown) => {
     executionPauseInput = input;
     return { id: (input as { executionId: string }).executionId, installationId, deviceId: randomUUID(), initiatingUserId: (input as { userId: string }).userId, pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: "a".repeat(64), allowedCapabilities: [], state: "paused" as const, deviceLeaseExpiresAt: null, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), createdAt: new Date(0).toISOString(), updatedAt: new Date().toISOString(), finishedAt: null };
@@ -257,6 +273,15 @@ describe("plugin SSR route", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ id: executionId, state: "active" });
     expect(uiExecutionRenewInput).toMatchObject({ executionId, leaseMs: 120_000, session: { installationId, projectId } });
+  });
+
+  test("reads debugger execution lifecycle state through the scoped plugin-origin session", async () => {
+    const executionId = randomUUID();
+    const response = await fetch(`${server.url}plugins/${installationId}/debugger/executions/${executionId}`, {
+      headers: { cookie: debuggerCookie },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: executionId, state: "paused", deviceLeaseExpiresAt: null });
   });
 
   test("cancels a debugger command through the scoped plugin-origin session", async () => {

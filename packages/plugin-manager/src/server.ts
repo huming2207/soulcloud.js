@@ -293,6 +293,14 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         }
         const uiCommandPathPrefix = `/plugins/${session.installationId}/debugger/executions/`;
         if (request.method === "GET" && url.pathname.startsWith(uiCommandPathPrefix) && session.routeId === "debugger") {
+          const executionPath = url.pathname.slice(uiCommandPathPrefix.length);
+          if (/^[0-9a-f-]{36}$/i.test(executionPath)) {
+            try {
+              return json(200, await options.manager.getDebugExecutionForUiSession(session, parseInstallationId(executionPath)));
+            } catch (error) { return failure(error); }
+          }
+        }
+        if (request.method === "GET" && url.pathname.startsWith(uiCommandPathPrefix) && session.routeId === "debugger") {
           try {
             const executionId = parseInstallationId(url.pathname.slice(uiCommandPathPrefix.length).replace(/\/commands$/, ""));
             if (!url.pathname.endsWith("/commands")) return json(404, { error: "not_found" });
