@@ -849,6 +849,14 @@ export class PluginManager {
         if (!binding || binding.installationId !== installation.id) throw new Error("device is not bound to the plugin installation");
         let executionId: string | undefined;
         if (input.executionId !== undefined) {
+          const membershipRows = await tx.$queryRaw<Array<{ user_id: string }>>`
+            SELECT user_id
+            FROM user_projects
+            WHERE user_id = ${input.userId}::uuid
+              AND project_id = ${lockedInstallation.project_id}::uuid
+            FOR SHARE
+          `;
+          if (!membershipRows[0]) throw publicError("project membership is no longer valid", 403, "forbidden");
           const executionRows = await tx.$queryRaw<Array<{ id: string }>>`
             SELECT id
             FROM debug_executions
