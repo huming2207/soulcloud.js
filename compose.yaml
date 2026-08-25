@@ -185,6 +185,20 @@ services:
       PLUGIN_RPC_MAX_BLOBS: ${PLUGIN_RPC_MAX_BLOBS:-16}
       PLUGIN_RPC_MAX_BLOB_BYTES: ${PLUGIN_RPC_MAX_BLOB_BYTES:-65536}
       PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES: ${PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES:-262144}
+    # Keep plugin faults contained at the deployment boundary.  These limits
+    # are deliberately configurable because the artifact/debug workload varies
+    # by deployment, but the defaults prevent an accidental plugin allocation
+    # or process fan-out from competing unboundedly with the core services.
+    mem_limit: ${SOULINJECTOR_PLUGIN_MEMORY_LIMIT:-512m}
+    cpus: ${SOULINJECTOR_PLUGIN_CPU_LIMIT:-1.0}
+    pids_limit: ${SOULINJECTOR_PLUGIN_PIDS_LIMIT:-128}
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     depends_on:
       soulinjector-plugin-postgres:
