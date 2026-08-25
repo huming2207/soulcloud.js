@@ -87,7 +87,7 @@ describe("SoulInjector observation scope", () => {
       source: "device",
       kind: "debug.status",
       structuredData: { state: "running" },
-    })).rejects.toThrow("debug session is not available to this project");
+    })).rejects.toThrow("debug session is not available to this installation/project/device");
   });
 
   test("requires observation artifacts to belong to the same installation", async () => {

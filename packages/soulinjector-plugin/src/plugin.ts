@@ -1,4 +1,5 @@
-import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginManifest } from "@soulcloud/plugin-sdk";
+import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginEventOutput, type PluginManifest } from "@soulcloud/plugin-sdk";
+import { DebugSessionNotAvailableError } from "./repository";
 import type { AppendDebugObservationInput, CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, DebugObservationRecord, DebugSessionRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary, UpdateDebugSessionStateInput } from "./repository";
 import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 import { targetSelectionArgs } from "./target-selection";
@@ -205,18 +206,43 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
         const parsed = debugStatusSchema.safeParse(event.payload);
         if (!parsed.success) return { logs: [{ level: "warn", message: "ignored malformed SoulInjector debug.status event" }] };
         if (parsed.data.sessionId && isUuid(parsed.data.sessionId)) {
+          const logs: NonNullable<PluginEventOutput["logs"]> = [];
+          let sessionAvailable = true;
           if (repository.updateDebugSessionState) {
             const state = sessionStateForDeviceState(parsed.data.state);
-            if (state) await repository.updateDebugSessionState({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, state });
+            if (state) {
+              try {
+                await repository.updateDebugSessionState({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, state });
+              } catch (error) {
+                if (!(error instanceof DebugSessionNotAvailableError)) throw error;
+                sessionAvailable = false;
+                logs.push({ level: "warn", message: "ignored SoulInjector event for an unavailable debug session" });
+              }
+            }
           }
-          if (repository.appendDebugObservation) await repository.appendDebugObservation({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
+          if (sessionAvailable && repository.appendDebugObservation) {
+            try {
+              await repository.appendDebugObservation({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
+            } catch (error) {
+              if (!(error instanceof DebugSessionNotAvailableError)) throw error;
+              logs.push({ level: "warn", message: "ignored SoulInjector event for an unavailable debug session" });
+            }
+          }
+          return { updates: eventUpdates(parsed.data), ...(logs.length > 0 ? { logs } : {}) };
         }
         return { updates: eventUpdates(parsed.data) };
       }
       const parsed = debugLogSchema.safeParse(event.payload);
       if (!parsed.success) return { logs: [{ level: "warn", message: "ignored malformed SoulInjector debug.log event" }] };
       if (parsed.data.sessionId && isUuid(parsed.data.sessionId)) {
-        if (repository.appendDebugObservation) await repository.appendDebugObservation({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
+        if (repository.appendDebugObservation) {
+          try {
+            await repository.appendDebugObservation({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
+          } catch (error) {
+            if (!(error instanceof DebugSessionNotAvailableError)) throw error;
+            return { updates: [{ entityKey: "debug.last_message", value: parsed.data.message }], logs: [{ level: "warn", message: "ignored SoulInjector log for an unavailable debug session" }] };
+          }
+        }
       }
       return { updates: [{ entityKey: "debug.last_message", value: parsed.data.message }], logs: [{ level: parsed.data.level, message: parsed.data.message }] };
     },

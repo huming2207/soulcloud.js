@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createSoulInjectorPlugin } from "../src/plugin";
+import { DebugSessionNotAvailableError } from "../src/repository";
 import { definePlugin } from "@soulcloud/plugin-sdk";
 
 const saved = {
@@ -262,6 +263,36 @@ describe("SoulInjector plugin", () => {
     expect(result.updates).toEqual([{ entityKey: "debug.state", value: "running" }, { entityKey: "debug.session_id", value: sessionId }]);
     expect(sessionStates).toEqual([{ installationId: saved.installationId, projectId: saved.projectId, sessionId, soulcloudDeviceRef: saved.installationId, state: "active" }]);
     expect(observations).toEqual([{ installationId: saved.installationId, projectId: saved.projectId, sessionId, soulcloudDeviceRef: saved.installationId, eventRef: "broker-event-1", source: "device", kind: "debug.status", structuredData: { state: "running", sessionId } }]);
+  });
+
+  test("acknowledges a stale device event when its private session is gone", async () => {
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      updateDebugSessionState: async () => { throw new DebugSessionNotAvailableError(); },
+      appendDebugObservation: async () => { throw new Error("observation must not be attempted after a missing session"); },
+    });
+    const result = await plugin.onEvent!({
+      operationId: "operation",
+      signal: AbortSignal.timeout(1000),
+      installation: { id: saved.installationId, projectId: saved.projectId, pluginId: "debugger", pluginVersion: "1.0.0", config: null },
+      device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
+      execution: null,
+      getEntity: async () => null,
+      enqueueCommand: async () => undefined,
+      callPlugin: async () => undefined,
+      devices: null,
+    }, {
+      id: "broker-event-stale",
+      seq: 2n,
+      kind: "debug.status",
+      schema: 1,
+      receivedAt: new Date(0).toISOString(),
+      payload: { state: "completed", sessionId: "00000000-0000-4000-8000-000000000005" },
+      installation: { id: saved.installationId, projectId: saved.projectId, pluginId: "debugger", pluginVersion: "1.0.0", config: null },
+      device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
+    });
+    expect(result.logs).toEqual([{ level: "warn", message: "ignored SoulInjector event for an unavailable debug session" }]);
+    expect(result.updates).toEqual([{ entityKey: "debug.state", value: "completed" }, { entityKey: "debug.session_id", value: "00000000-0000-4000-8000-000000000005" }]);
   });
 
   test("lists target configuration revision metadata without exposing YAML", async () => {

@@ -91,6 +91,13 @@ export class DebugSessionConflictError extends Error {
   }
 }
 
+export class DebugSessionNotAvailableError extends Error {
+  constructor() {
+    super("debug session is not available to this installation/project/device");
+    this.name = "DebugSessionNotAvailableError";
+  }
+}
+
 export interface DebugCaseRecord {
   id: string;
   projectId: string;
@@ -963,7 +970,7 @@ export class SoulInjectorRepository {
         [input.sessionId, input.installationId, input.projectId, input.soulcloudDeviceRef],
       );
       const current = currentResult.rows[0];
-      if (!current) throw new Error("debug session is not available to this project/device");
+      if (!current) throw new DebugSessionNotAvailableError();
       const currentState = asSessionState(current.state);
       if (currentState === "completed" || currentState === "failed" || currentState === "cancelled") {
         await client.query("COMMIT");
@@ -1033,7 +1040,7 @@ export class SoulInjectorRepository {
          FOR UPDATE`,
         [input.sessionId, input.installationId, input.projectId, soulcloudDeviceRef],
       );
-      if (!sessionResult.rows[0]) throw new Error("debug session is not available to this project");
+      if (!sessionResult.rows[0]) throw new DebugSessionNotAvailableError();
       if (input.artifactId !== null && input.artifactId !== undefined) {
         const artifactResult = await client.query(
           `SELECT id FROM ${schema}.debug_artifacts WHERE id = $1 AND installation_id = $2 AND project_id = $3`,
