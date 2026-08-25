@@ -35,6 +35,7 @@ let uiExecutionReleaseInput: unknown;
 let uiExecutionRenewInput: unknown;
 let uiCommandCancelInput: unknown;
 let executionPauseInput: unknown;
+let executionCommandCancelInput: unknown;
 let uiActionError: unknown;
 let sessionStartInput: unknown;
 let uiSessionStartInput: unknown;
@@ -111,6 +112,10 @@ const manager = {
   pauseDebugExecutionForUser: async (input: unknown) => {
     executionPauseInput = input;
     return { id: (input as { executionId: string }).executionId, installationId, deviceId: randomUUID(), initiatingUserId: (input as { userId: string }).userId, pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: "a".repeat(64), allowedCapabilities: [], state: "paused" as const, deviceLeaseExpiresAt: null, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), createdAt: new Date(0).toISOString(), updatedAt: new Date().toISOString(), finishedAt: null };
+  },
+  cancelDebugCommandForUser: async (input: unknown) => {
+    executionCommandCancelInput = input;
+    return { id: (input as { commandId: string }).commandId, batchId: randomUUID(), deviceId: randomUUID(), sequence: 1n, state: "delivery_failed" as const, resultCode: null, cancelRequestedAt: new Date().toISOString(), brokerAcceptedAt: null, deviceCompletedAt: null, createdAt: new Date().toISOString() };
   },
   consumePluginUiGrant: async (nonce: string) => {
     if (consumedGrants.has(nonce)) return false;
@@ -327,6 +332,20 @@ describe("plugin SSR route", () => {
       body: JSON.stringify({ executionId, installationId, projectId, userId }),
     });
     expect(unauthorized.status).toBe(401);
+  });
+
+  test("cancels one scoped debug command only through the authenticated internal API", async () => {
+    const executionId = randomUUID();
+    const commandId = randomUUID();
+    const userId = randomUUID();
+    const response = await fetch(`${server.url}internal/plugins/debugger/executions/commands/cancel`, {
+      method: "POST",
+      headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+      body: JSON.stringify({ executionId, commandId, installationId, projectId, userId }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: commandId, state: "delivery_failed" });
+    expect(executionCommandCancelInput).toEqual({ executionId, commandId, installationId, projectId, userId });
   });
 
   test("reports invalid plugin UI output as a 502 plugin error", async () => {

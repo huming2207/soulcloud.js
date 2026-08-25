@@ -713,6 +713,36 @@ export class PluginManager {
     return requestDebugCommandCancellation(this.options.prisma, execution.id, hashCapabilityToken(cached.token), commandId);
   }
 
+  /** Request one device-command cancellation from the Human API user scope. */
+  async cancelDebugCommandForUser(input: {
+    executionId: string;
+    commandId: string;
+    installationId: string;
+    projectId: string;
+    userId: string;
+  }): Promise<ReturnType<typeof requestDebugCommandCancellation>> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    if (!UUID.test(input.executionId) || !UUID.test(input.commandId) || !UUID.test(input.installationId) || !UUID.test(input.projectId) || !UUID.test(input.userId)) {
+      throw publicError("debug command scope must contain UUIDs", 400, "invalid_request");
+    }
+    const execution = await this.getDebugExecutionForScope({
+      executionId: input.executionId,
+      installationId: input.installationId,
+      projectId: input.projectId,
+      userId: input.userId,
+    });
+    if (!execution) throw publicError("debug execution is not available to this user", 404, "not_found");
+    if (execution.initiatingUserId !== input.userId) {
+      throw publicError("only the execution initiating user can cancel its commands", 403, "forbidden");
+    }
+    const cached = this.executionTokens.get(execution.id);
+    if (!cached || cached.installationId !== execution.installationId || cached.deviceId !== execution.deviceId || cached.expiresAt <= Date.now()) {
+      this.forgetExecutionCapability(execution.id);
+      throw publicError("debug execution capability is no longer available", 409, "conflict");
+    }
+    return requestDebugCommandCancellation(this.options.prisma, execution.id, hashCapabilityToken(cached.token), input.commandId);
+  }
+
   /**
    * Release a debugger device lease from the authenticated plugin-origin UI.
    * The raw execution token is intentionally only available in this Manager

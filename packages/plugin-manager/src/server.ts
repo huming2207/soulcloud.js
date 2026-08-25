@@ -105,6 +105,7 @@ const listTargetConfigsSchema = z.object({ installationId: z.string().uuid(), pr
 const listArtifactsSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const getDebugExecutionSchema = z.object({ executionId: z.string().uuid(), installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid() }).strict();
 const pauseDebugExecutionSchema = z.object({ executionId: z.string().uuid(), installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid() }).strict();
+const cancelDebugCommandSchema = z.object({ executionId: z.string().uuid(), commandId: z.string().uuid(), installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid() }).strict();
 const startDebugSessionSchema = z.object({
   installationId: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -465,6 +466,10 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         if (url.pathname === "/internal/plugins/debugger/executions/pause") {
           const input = parseBody(pauseDebugExecutionSchema, body);
           return json(200, await options.manager.pauseDebugExecutionForUser(input));
+        }
+        if (url.pathname === "/internal/plugins/debugger/executions/commands/cancel") {
+          const input = parseBody(cancelDebugCommandSchema, body);
+          return json(200, await options.manager.cancelDebugCommandForUser(input));
         }
         if (url.pathname === "/internal/plugins/debugger/sessions") {
           const input = parseBody(startDebugSessionSchema, body);
