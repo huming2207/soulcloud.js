@@ -66,6 +66,9 @@ const manifest = {
       id: "debugger",
       path: "/debugger",
       methods: ["GET", "POST"] as ("GET" | "POST")[],
+      querySchema: {
+        session_id: { type: "string" as const, maxLength: 64, title: "Debugger session" },
+      },
       actionSchema: {
         intent: { type: "string" as const, required: true, enum: ["save_target", "create_case"], title: "Action" },
         yaml: { type: "string" as const, maxLength: 65_536, title: "Target YAML", description: "Target architecture, chip and required debugger primitives" },
@@ -168,14 +171,29 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }
 
-function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[] }): string {
+function observationData(value: unknown): string {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value) ?? "";
+  } catch {
+    serialized = "[unserializable]";
+  }
+  return escapeHtml(serialized.length > 8_192 ? `${serialized.slice(0, 8_192)}…` : serialized);
+}
+
+function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[]; selectedSession: DebugSessionRecord | null; observations: DebugObservationRecord[] }): string {
   const cases = input.cases.length === 0
     ? "<p>No debugger cases yet.</p>"
     : `<ul>${input.cases.map((item) => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(item.state)}${item.targetUnitRef ? ` — ${escapeHtml(item.targetUnitRef)}` : ""}</li>`).join("")}</ul>`;
   const sessions = input.sessions.length === 0
     ? "<p>No debugger sessions yet.</p>"
-    : `<ul>${input.sessions.map((item) => `<li><code>${escapeHtml(item.id)}</code> — ${escapeHtml(item.state)} — device <code>${escapeHtml(item.soulcloudDeviceRef)}</code> — started ${escapeHtml(item.startedAt)}</li>`).join("")}</ul>`;
-  return `<main><h1>SoulInjector debugger</h1><section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section><section><h2>Sessions</h2>${sessions}</section><section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
+    : `<ul>${input.sessions.map((item) => `<li><a href="?session_id=${encodeURIComponent(item.id)}"><code>${escapeHtml(item.id)}</code></a> — ${escapeHtml(item.state)} — device <code>${escapeHtml(item.soulcloudDeviceRef)}</code> — started ${escapeHtml(item.startedAt)}</li>`).join("")}</ul>`;
+  const timeline = !input.selectedSession
+    ? "<p>Select a debugger session to view its timeline.</p>"
+    : input.observations.length === 0
+      ? `<p>No observations recorded for session <code>${escapeHtml(input.selectedSession.id)}</code>.</p>`
+      : `<ol>${input.observations.map((item) => `<li><time datetime="${escapeHtml(item.createdAt)}">${escapeHtml(item.createdAt)}</time> — <strong>${escapeHtml(item.source)}:${escapeHtml(item.kind)}</strong><pre>${observationData(item.structuredData)}</pre></li>`).join("")}</ol>`;
+  return `<main><h1>SoulInjector debugger</h1><section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section><section><h2>Sessions</h2>${sessions}</section><section><h2>Session timeline</h2>${timeline}</section><section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
 }
 
 export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {
@@ -246,7 +264,14 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
         const saved = await repository.getLatestTargetConfig(input.installationId);
         const cases = repository.listDebugCases ? await repository.listDebugCases(input.projectId, 64) : [];
         const sessions = repository.listDebugSessions ? await repository.listDebugSessions(input.installationId, input.projectId, 64) : [];
-        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions }), title: "SoulInjector debugger", cache: "no-store" };
+        const selectedId = typeof input.params.session_id === "string" && isUuid(input.params.session_id) ? input.params.session_id : null;
+        const selectedSession = selectedId && repository.getDebugSession
+          ? await repository.getDebugSession(selectedId, input.installationId, input.projectId)
+          : null;
+        const observations = selectedSession && repository.listDebugObservations
+          ? await repository.listDebugObservations(selectedSession.id, input.installationId, input.projectId, 128)
+          : [];
+        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions, selectedSession, observations }), title: "SoulInjector debugger", cache: "no-store" };
       },
     },
     handleAction: {

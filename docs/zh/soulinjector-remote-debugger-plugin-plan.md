@@ -77,6 +77,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   写入 observation。
 - session 创建时会校验并保存同一 installation/project 下的 target-config revision、target ID
   和可选 ELF/firmware artifact 引用；后续配置或上传新 artifact 不会改变已有 session 的输入快照。
+- 私有 session、设备状态更新和 observation 查询均带 `installation_id` scope；SSR 页面可按查询参数选择
+  session，并显示有界的 observation timeline，不会把同一 project 下其他 installation 的会话混入页面。
 - `DeviceCommand` 已保存平台侧 provenance：`origin_type`、发起用户、plugin installation、
   plugin version/manifest hash、execution/correlation/idempotency 字段和取消请求时间；这些
   字段不进入设备下发的 MessagePack payload。插件/LLM 来源在入队前必须带 installation、版本
@@ -609,8 +611,8 @@ MQTT/oRPC 热路径。
 
 1. case 创建、device/target/artifact 关联；**已完成私有 case 创建、artifact→case、target-config
    revision 存储，以及 execution→session 输入快照关联基础**；
-2. SSR case/debugger 页面；**已完成最小 case 列表/创建、session 摘要和 target 配置页面；完整
-   timeline、session 控制 UI 仍待实现**；
+2. SSR case/debugger 页面；**已完成最小 case 列表/创建、session 摘要、installation-scoped
+   observation timeline 和 target 配置页面；session 控制 UI 仍待实现**；
 3. 人工执行 identify/halt/read/reset/capture/close；
 4. command timeline、observation、错误与报告草稿；
 5. overseas guided view 和国内工程师 take-over；

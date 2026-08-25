@@ -180,6 +180,56 @@ describe("SoulInjector plugin", () => {
     expect(result.html).not.toContain("executionToken");
   });
 
+  test("renders an installation-scoped session observation timeline", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000006";
+    const session = {
+      id: sessionId,
+      caseId: saved.id,
+      installationId: saved.installationId,
+      soulcloudDeviceRef: "soulinjector-device-1",
+      executionRef: null,
+      state: "active" as const,
+      pluginVersion: "0.1.0",
+      manifestHash: saved.sha256,
+      deviceFirmwareVersion: null,
+      targetConfigId: null,
+      targetConfigRevision: null,
+      targetId: null,
+      artifactId: null,
+      startedBy: saved.createdBy,
+      controller: saved.createdBy,
+      startedAt: saved.createdAt,
+      endedAt: null,
+    };
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      listDebugSessions: async () => [session],
+      getDebugSession: async (id, installationId, projectId) => id === sessionId && installationId === saved.installationId && projectId === saved.projectId ? session : null,
+      listDebugObservations: async (id, installationId, projectId) => id === sessionId && installationId === saved.installationId && projectId === saved.projectId ? [{
+        id: "00000000-0000-4000-8000-000000000007",
+        sessionId,
+        eventRef: "broker-event-1",
+        source: "device",
+        kind: "debug.log",
+        structuredData: { message: "<target halted>" },
+        artifactId: null,
+        createdAt: saved.createdAt,
+      }] : [],
+    });
+    const result = await plugin.render!["debugger"]!({
+      requestId: "request",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      user: { id: saved.createdBy, locale: "en", permissions: [] },
+      routeId: "debugger",
+      params: { session_id: sessionId },
+    });
+    expect(result.html).toContain("Session timeline");
+    expect(result.html).toContain("debug.log");
+    expect(result.html).toContain("&lt;target halted&gt;");
+    expect(result.html).not.toContain("<target halted>");
+  });
+
   test("persists device observations idempotently by broker event id", async () => {
     const observations: unknown[] = [];
     const sessionStates: unknown[] = [];
