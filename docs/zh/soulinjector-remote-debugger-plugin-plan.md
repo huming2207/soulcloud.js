@@ -148,8 +148,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   installation/project scope 和当前 user membership；pause 与 plugin-origin UI 的 release/renew
   还会在 installation → device → execution 的同一事务中再次锁定并复核 membership，避免撤权与
   lease mutation 之间出现授权竞态。它们只返回 execution 摘要，不返回 token。
-  整个 execution 的 cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成；这里的
-  单条 command cancellation 与 pause 都不是整个 execution 的硬件取消。
+  Human API 还提供由 execution 发起人调用的单条 command cancellation；queued command 会进入
+  `delivery_failed`，已经被 broker 接受的 command 只记录 cancellation request。整个 execution
+  的 cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成；单条 command cancellation
+  与 pause 都不是整个 execution 的硬件取消。
 - oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`，以及
   受 execution capability 约束的 `context.devices.enqueueCommand`、`getCommand`、`cancelCommand`；
   Manager 会绑定父 operation、plugin/version、installation、device、token hash 和 capability
@@ -699,8 +701,9 @@ command intent。
 2. 实现 device control lease、renew/release/expiry；**已完成基础版本**；
 3. 增加 command origin/execution/plugin/user correlation；**已完成基础版本**；
 4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle 与 device command RPC；**基础版本、同进程设备事件 capability 传递，以及已绑定 session 终态事件关闭平台 execution 已完成**；
-5. Human API 实现 start/pause/cancel/take-over 权限入口；**start/session bootstrap 和由发起人
-   触发的 pause（释放 device lease）已完成，cancel/take-over 及重启恢复仍未完成**；
+5. Human API 实现 start/pause/cancel/take-over 权限入口；**start/session bootstrap、由发起人
+   触发的 pause（释放 device lease）和单条 command cancellation 已完成，整个 execution 的
+   cancel/take-over 及重启恢复仍未完成**；
 6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试；**数据库
    集成测试以及 malformed bootstrap cleanup/并发冲突的边界测试已写入 CI，command cancellation
    的 membership race 也已覆盖；跨进程/真实 plugin
