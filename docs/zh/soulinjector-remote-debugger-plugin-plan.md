@@ -128,7 +128,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   `delivery_failed` 并释放队列；已经被 broker 接受的 command 只记录取消请求，不能伪装成设备已停止。
 - debugger UI 现在可以通过 installation/project/plugin snapshot 保护的 execution 状态 endpoint
   读取 `active/paused/terminal` 生命周期；bundle 会在 lease 已释放、execution 过期或终止时立即
-  禁用设备操作按钮，不再等下一次 heartbeat 失败才反映状态。
+  禁用设备操作按钮和终态 command cancellation，不再等下一次 heartbeat 失败才反映状态；后端
+  仍是最终授权边界。
 - `DebugExecution` 已保存平台侧长时 capability：不可变 plugin/version/manifest snapshot、
   initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
   device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
