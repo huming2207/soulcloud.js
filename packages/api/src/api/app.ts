@@ -75,6 +75,7 @@ export interface PluginManagerOptions {
   internalUrl: string;
   serviceToken?: string;
   requestTimeoutMs?: number;
+  uploadTimeoutMs?: number;
   uiSessionSecret?: string;
   uiSessionTtlSeconds?: number;
 }

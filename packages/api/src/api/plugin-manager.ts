@@ -44,7 +44,7 @@ async function callManager(options: PluginManagerOptions, path: string, body: un
 async function callManagerBinary(options: PluginManagerOptions, path: string, request: Request, headers: Record<string, string>): Promise<{ status: number; value: unknown }> {
   if (!options.serviceToken) throw new PluginManagerUnavailableError("plugin manager service credential is not configured");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(options.requestTimeoutMs ?? 5_000, 60_000));
+  const timer = setTimeout(() => controller.abort(), options.uploadTimeoutMs ?? Math.max(options.requestTimeoutMs ?? 5_000, 60_000));
   try {
     const response = await fetch(`${options.internalUrl.replace(/\/$/, "")}${path}`, {
       method: "POST",
