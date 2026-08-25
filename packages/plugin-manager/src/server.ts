@@ -83,7 +83,7 @@ function failure(error: unknown): Response {
           : message.includes("disabled") || message.includes("changed concurrently") || message.includes("changed while") ? 409
             : 500;
   const publicMessage = mapped >= 500 && mapped !== 502 ? "plugin manager operation failed" : message;
-  const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "plugin_ui_invalid_input", "plugin_ui_invalid_output", "plugin_ui_session_invalid", "plugin_manager_overloaded"].includes(explicitCode)
+  const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "human_approval_required", "invalid_plugin_output", "plugin_ui_invalid_input", "plugin_ui_invalid_output", "plugin_ui_session_invalid", "plugin_manager_overloaded"].includes(explicitCode)
     ? explicitCode
     : mapped === 400 ? "invalid_request" : mapped === 404 ? "not_found" : mapped === 409 ? "conflict" : mapped === 502 ? "plugin_output_invalid" : mapped === 503 ? "plugin_unavailable" : "plugin_manager_error";
   return json(mapped, { error: code, message: publicMessage });
@@ -93,7 +93,7 @@ const createInstallationSchema = z.object({ projectId: z.string().uuid(), plugin
 const bindingSchema = z.object({ deviceId: z.string().uuid(), profileId: z.string().min(1).max(128), profileVersion: z.number().int().positive() }).strict();
 const stateSchema = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
 const migrateSchema = z.object({ pluginVersion: z.string().min(1).max(128), manifestHash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown() }).strict();
-const encodeActionSchema = z.object({ installationId: z.string().uuid(), deviceId: z.string().uuid(), actionId: z.string().min(1).max(128), input: z.unknown(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
+const encodeActionSchema = z.object({ installationId: z.string().uuid(), deviceId: z.string().uuid(), actionId: z.string().min(1).max(128), input: z.unknown(), humanApproved: z.boolean().optional().default(false), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const configureTargetSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), yaml: z.string().min(1).max(262_144), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 
 function parseBody<T>(schema: ZodType<T>, value: unknown): T {
@@ -199,7 +199,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         }
         if (url.pathname === "/internal/plugins/actions/encode") {
           const input = parseBody(encodeActionSchema, body);
-          return json(200, await options.manager.encodeAction({ installationId: input.installationId, deviceId: input.deviceId, actionId: input.actionId, actionInput: input.input, timeoutMs: input.timeoutMs }));
+          return json(200, await options.manager.encodeAction({ installationId: input.installationId, deviceId: input.deviceId, actionId: input.actionId, actionInput: input.input, humanApproved: input.humanApproved, timeoutMs: input.timeoutMs }));
         }
         if (url.pathname === "/internal/plugins/debugger/target-config") {
           const input = parseBody(configureTargetSchema, body);

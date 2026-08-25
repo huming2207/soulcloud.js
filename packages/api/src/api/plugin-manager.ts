@@ -110,6 +110,7 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       try {
         const result = await callManager(options, "/internal/plugins/actions/encode", {
           installationId: params.id, deviceId: parsed.data.device_id, actionId: params.actionId, input: parsed.data.input,
+          humanApproved: true,
           timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
         });
         set.status = result.status;

@@ -42,6 +42,8 @@ export interface ActionDescriptor {
   id: string;
   inputSchema: ActionInputSchema;
   wire: { command: string; schemaVersion: number };
+  /** Destructive device operations must be initiated by an explicit human API request. */
+  requiresHumanApproval?: boolean;
 }
 
 export interface EventDescriptor {

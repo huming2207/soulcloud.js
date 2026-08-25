@@ -43,6 +43,7 @@ export const manifestSchema = z.object({
     id: z.string().min(1).max(128),
     inputSchema: actionInputSchema,
     wire: z.object({ command: z.string().min(1).max(256), schemaVersion: z.number().int().positive() }).strict(),
+    requiresHumanApproval: z.boolean().optional(),
   }).strict()).max(256),
   events: z.array(z.object({ kind: z.string().min(1).max(256), schemaVersion: z.number().int().positive(), description: z.string().max(2048).optional() }).strict()).max(256),
   ui: z.object({ routes: z.array(z.object({

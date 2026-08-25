@@ -318,6 +318,7 @@ export class PluginManager {
     deviceId: string;
     actionId: string;
     actionInput: unknown;
+    humanApproved?: boolean;
     timeoutMs?: number;
   }): Promise<{ batchId: string; deviceCount: number }> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
@@ -331,6 +332,9 @@ export class PluginManager {
     if (!manifest || manifest.version !== installation.pluginVersion) throw new Error("plugin manifest is unavailable");
     const action = manifest.actions.find((item) => item.id === input.actionId);
     if (!action) throw publicError("action is not declared by the plugin manifest", 404, "action_not_found");
+    if (action.requiresHumanApproval && input.humanApproved !== true) {
+      throw publicError("this device operation requires explicit human approval", 403, "human_approval_required");
+    }
     const validInput = validateActionInput(action.inputSchema, input.actionInput);
     if (!validInput.ok) throw publicError(`invalid action input: ${validInput.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; ")}`, 400, "invalid_action_input");
     try {
