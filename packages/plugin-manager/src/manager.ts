@@ -901,12 +901,28 @@ export class PluginManager {
         if (message.includes("INVALID_TARGET_CONFIG")) throw publicError(message, 400, "invalid_request");
         throw error;
       }
+      let output: ReturnType<typeof configureTargetOutput.parse>;
       try {
         assertRpcValueBudget(result, this.valueBudget);
-        return configureTargetOutput.parse(result);
+        output = configureTargetOutput.parse(result);
       } catch (error) {
         throw publicError(`plugin target configuration output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
       }
+      const current = await this.options.prisma!.pluginInstallation.findUnique({
+        where: { id: installation.id },
+        select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
+      });
+      if (
+        !current ||
+        current.projectId !== installation.projectId ||
+        current.pluginId !== installation.pluginId ||
+        current.pluginVersion !== installation.pluginVersion ||
+        current.manifestHash.trim().toLowerCase() !== installation.manifestHash.trim().toLowerCase() ||
+        current.state !== "enabled"
+      ) {
+        throw publicError("plugin installation changed while configuring target", 409, "conflict");
+      }
+      return output;
     } finally {
       this.finishOperation(operationId);
     }
