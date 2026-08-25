@@ -216,6 +216,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - Plugin Manager 的跨插件调用仍统一经过 scoped reverse RPC；目标 peer plugin 暂时不可用或其
   manifest snapshot 不可用时，事件消费会作为 Manager dependency deferral 重试，不把源 plugin
   installation 错误地计入 circuit breaker 或消耗 delivery attempt。
+- Plugin Manager 自身的 send queue、pending request 或本地容量达到上限时，事件只会延后重试，
+  不消耗 delivery attempt，也不把健康 plugin 计入 installation circuit breaker；只有 plugin
+  transport timeout、disconnect 或 crash 才按瞬时 plugin 故障处理。
 - circuit breaker 条目带有最近触达时间；maintenance 会清理超过 10 分钟且不在 half-open
   probe 中的 installation 状态，避免长期运行时因历史 installation 数量增长导致 Manager 内存持续累积。
   half-open probe 也带有 35 秒有限租约；即使事件租约在 probe 放行后丢失，后续事件仍能重新探测，

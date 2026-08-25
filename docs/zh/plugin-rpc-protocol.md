@@ -434,7 +434,8 @@ DeviceCommand、scope、大小和 installation state 均由 Manager 最终校验
 | 用户输入错误 | Action/UI form schema 不合法 | 不适用/400 | 不计入 |
 | 永久 plugin 输出错误 | 未知 Entity、坏 command、坏 SSR metadata | dead/502 | 不计入 infrastructure breaker |
 | 永久设备数据错误 | 未声明 event/schema、payload 不合法 | dead | 不计入 |
-| 瞬时 plugin/transport | timeout、disconnect、overload、crash | retry | 计入对应 plugin |
+| 瞬时 plugin/transport | timeout、disconnect、crash | retry | 计入对应 plugin |
+| Manager 本地容量 | Manager send queue、pending request 或 reverse concurrency 达上限 | 延后重试 | 不计入 plugin |
 | 外部依赖失败 | weather/map/vendor API timeout | 按 plugin 声明类别 | 不影响其他 plugin |
 | Manager 内部错误 | DB unavailable、transaction failure | retry | 不归咎 plugin |
 

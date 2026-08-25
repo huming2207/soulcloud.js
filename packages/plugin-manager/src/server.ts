@@ -8,6 +8,10 @@ function jsonValueReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
 }
 function json(status: number, value: unknown): Response { return new Response(JSON.stringify(value, jsonValueReplacer), { status, headers: { "content-type": "application/json" } }); }
+
+function hasHeaderControlCharacters(value: string): boolean {
+  return /[\r\n]/.test(value);
+}
 function authorized(request: Request, token: string): boolean { return request.headers.get("authorization") === `Bearer ${token}`; }
 
 function cookie(request: Request, name: string): string | undefined {
@@ -373,7 +377,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
           if (!relative || relative.includes("..")) return json(404, { error: "plugin_ui_asset_not_found" });
           try {
             const output = await options.manager.getPluginUiAsset(session, crypto.randomUUID(), assetPath) as { body?: unknown; contentType?: unknown; cache?: unknown };
-            if (!(output.body instanceof Blob) || typeof output.contentType !== "string") return json(502, { error: "plugin_ui_invalid_output" });
+            if (!(output.body instanceof Blob) || typeof output.contentType !== "string" || hasHeaderControlCharacters(output.contentType)) return json(502, { error: "plugin_ui_invalid_output" });
             const maxAge = output.cache && typeof output.cache === "object" ? Number((output.cache as { maxAgeSeconds?: unknown }).maxAgeSeconds) : undefined;
             const cache = output.cache === "no-store"
               ? "private, no-store"
@@ -399,7 +403,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
           const actionResult = await options.manager.handlePluginUiAction(session, crypto.randomUUID(), params, await parseUiAction(request, route.actionSchema!));
           if (actionResult && typeof actionResult === "object" && "redirect" in actionResult && typeof (actionResult as { redirect?: unknown }).redirect === "string") {
             const redirect = (actionResult as { redirect: string }).redirect;
-            if (!redirect.startsWith(`/plugins/${session.installationId}/`)) return json(502, { error: "plugin_ui_invalid_redirect" });
+            if (hasHeaderControlCharacters(redirect) || !redirect.startsWith(`/plugins/${session.installationId}/`)) return json(502, { error: "plugin_ui_invalid_redirect" });
             return new Response(null, { status: 303, headers: { location: redirect } });
           }
           const output = await options.manager.renderPluginUi(session, crypto.randomUUID(), params) as { html?: unknown; title?: string; status?: number };

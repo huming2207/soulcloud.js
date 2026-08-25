@@ -35,6 +35,7 @@ let uiDeviceActionInput: unknown;
 let uiExecutionReleaseInput: unknown;
 let uiExecutionRenewInput: unknown;
 let uiCommandCancelInput: unknown;
+let uiActionResult: unknown = {};
 let executionPauseInput: unknown;
 let executionCommandCancelInput: unknown;
 let uiActionError: unknown;
@@ -51,7 +52,7 @@ const manager = {
   },
   handlePluginUiAction: async (_session: unknown, _requestId: string, _params: unknown, action: unknown) => {
     submittedAction = action;
-    return {};
+    return uiActionResult;
   },
   encodeAction: async (input: { timeoutMs?: number }) => {
     actionTimeout = input.timeoutMs;
@@ -197,6 +198,21 @@ describe("plugin SSR route", () => {
     });
     expect(response.status).toBe(200);
     expect(submittedAction).toEqual({ enabled: true });
+  });
+
+  test("rejects a plugin redirect containing header control characters", async () => {
+    uiActionResult = { redirect: `/plugins/${installationId}/overview\r\nX-Injected: true` };
+    try {
+      const response = await fetch(`${server.url}plugins/${installationId}/overview?count=3`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+        body: "enabled=true",
+      });
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ error: "plugin_ui_invalid_redirect" });
+    } finally {
+      uiActionResult = {};
+    }
   });
 
   test("streams an artifact from a plugin-origin session using the browser length header", async () => {

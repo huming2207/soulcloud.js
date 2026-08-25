@@ -368,7 +368,8 @@ Plugin Manager background consumer
 
 Broker、Device 和 plugin 永不互相同步等待。Manager/plugin unavailable 时 event 留在 durable
 queue，按错误类型 retry 或 dead-letter。永久 schema/data error 不计入 infrastructure circuit
-breaker；网络、deadline、overload 和 plugin crash 才计入。
+breaker；plugin 网络、deadline、transport overload 和 crash 才计入；Plugin Manager 自身的
+send queue/pending request/reverse concurrency overload 只延后事件，不计入 plugin breaker。
 
 ## 10. Plugin RPC
 
