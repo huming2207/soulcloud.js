@@ -154,7 +154,18 @@ function mapExecution(row: RawExecutionRow): DebugExecutionRecord {
 }
 
 function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === "23505";
+  if (typeof error !== "object" || error === null) return false;
+  const record = error as { code?: unknown; message?: unknown; meta?: unknown; cause?: unknown };
+  if (record.code === "23505" || record.code === "P2002") return true;
+  const message = typeof record.message === "string" ? record.message : "";
+  if (message.includes("23505") || /unique constraint/i.test(message)) return true;
+  if (record.cause && record.cause !== error) return isUniqueViolation(record.cause);
+  if (record.meta && typeof record.meta === "object" && record.meta !== null) {
+    const meta = record.meta as { code?: unknown; message?: unknown };
+    if (meta.code === "23505") return true;
+    if (typeof meta.message === "string" && (meta.message.includes("23505") || /unique constraint/i.test(meta.message))) return true;
+  }
+  return false;
 }
 
 /**
