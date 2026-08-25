@@ -144,7 +144,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   无限重试或反复触发 installation circuit breaker。
 - 同一 Manager 进程内，设备事件分发会按 installation/device 找到当前 active 且仍持有 lease 的
   execution，并只从进程内 token cache 取出原始 capability 传给插件；Manager 每次事件都会再用
-  数据库中的 token hash、lease、installation、device、plugin/version/hash 复核。原始 token 不写入
+  数据库中的 token hash、lease、installation、device、plugin/version/hash 和 initiating user 的
+  project membership 复核。原始 token 不写入
   Soulcloud 或 plugin 数据库，Manager 重启后不会伪造恢复能力；跨重启 re-issue/resume 仍待实现。
 - plugin 私有 `debug_sessions.execution_ref` 已建立非空唯一约束；同一个 execution 的重试会
   返回原 session，若 case、设备、plugin manifest 或发起人等快照不一致则明确拒绝，避免重试
