@@ -235,7 +235,7 @@ debug_sessions
   started_by_ref, controller_ref, started_at, ended_at
 
 debug_artifacts
-  id, case_id, kind, sha256, size, storage_ref, metadata
+  id, case_id, kind, sha256, size, content bytea, metadata
 
 debug_observations
   id, session_id, source, kind, structured_data, artifact_ref, created_at
