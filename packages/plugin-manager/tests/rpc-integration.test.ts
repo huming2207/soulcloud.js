@@ -14,6 +14,7 @@ let uiInputHasOperationProof = false;
 let eventPayloadValue: unknown;
 let executionRpcCalls = 0;
 let deviceRpcCalls = 0;
+let sessionStartInput: { executionToken?: string; executionId: string } | undefined;
 
 function executionRecord(state: "active" | "paused" | "completed") {
   return {
@@ -110,6 +111,10 @@ beforeAll(async () => {
     listTargetConfigs: async () => [{ configId: randomUUID(), revision: 1, sha256: "a".repeat(64), targetCount: 1, createdAt: new Date(0).toISOString() }],
     listArtifacts: async () => [{ artifactId: randomUUID(), kind: "elf" as const, filename: "fixture.elf", contentType: "application/octet-stream", size: 4, sha256: "c".repeat(64), createdAt: new Date(0).toISOString() }],
     storeArtifactChunk: async (input) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? randomUUID() : null, sha256: input.final ? "b".repeat(64) : null }),
+    startDebugSession: async (input) => {
+      sessionStartInput = { executionId: input.executionId, executionToken: input.executionToken };
+      return { sessionId: randomUUID(), executionId: input.executionId };
+    },
   }), { hostname: "127.0.0.1", port: 0, authToken });
 
   connection = new PluginConnection({
@@ -256,6 +261,27 @@ describe("plugin oRPC WebSocket transport", () => {
     }, 1_000) as Array<{ revision: number; targetCount: number }>;
     expect(output).toHaveLength(1);
     expect(output[0]).toMatchObject({ revision: 1, targetCount: 1 });
+  });
+
+  test("routes the manager-only session bootstrap without changing the returned shape", async () => {
+    const executionId = randomUUID();
+    const executionToken = `${randomUUID()}${randomUUID()}`;
+    const output = await connection.request("debugger.startSession", {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      installationId: randomUUID(),
+      projectId: randomUUID(),
+      deviceId: randomUUID(),
+      userId: randomUUID(),
+      pluginVersion: "1.0.0",
+      manifestHash: connection.manifest?.manifestHash,
+      executionId,
+      executionToken,
+      caseId: randomUUID(),
+    }, 1_000) as { sessionId: string; executionId: string };
+    expect(output.executionId).toBe(executionId);
+    expect(output.sessionId).toBeString();
+    expect(sessionStartInput).toEqual({ executionId, executionToken });
   });
 
   test("routes artifact metadata without moving artifact bytes through the listing procedure", async () => {
