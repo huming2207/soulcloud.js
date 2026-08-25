@@ -24,6 +24,7 @@ import { createPluginInstallation } from "../../src/plugins/installations";
 
 const projectId = randomUUID();
 const userId = randomUUID();
+const membershipRevocationUserId = randomUUID();
 const deviceId = randomUUID();
 const membershipRevocationDeviceId = randomUUID();
 const pluginId = `test.debug.execution.${randomUUID()}`;
@@ -40,7 +41,9 @@ let installationId: string;
 beforeAll(async () => {
   await prisma.project.create({ data: { id: projectId, name: "debug execution test" } });
   await prisma.user.create({ data: { id: userId, username: `debug-execution-${randomUUID()}`, email: `${randomUUID()}@example.invalid`, passwordHash: "unused" } });
+  await prisma.user.create({ data: { id: membershipRevocationUserId, username: `debug-execution-revocation-${randomUUID()}`, email: `${randomUUID()}@example.invalid`, passwordHash: "unused" } });
   await prisma.userProject.create({ data: { userId, projectId } });
+  await prisma.userProject.create({ data: { userId: membershipRevocationUserId, projectId } });
   await prisma.device.create({ data: { id: deviceId, projectId, deviceUid: `debug-execution-${randomUUID()}`, assignedId: "debug-execution-device", passwordHash: "unused" } });
   await prisma.device.create({ data: { id: membershipRevocationDeviceId, projectId, deviceUid: `debug-execution-membership-${randomUUID()}`, assignedId: "debug-execution-membership-device", passwordHash: "unused" } });
   await prisma.pluginManifestSnapshot.create({
@@ -76,14 +79,16 @@ afterAll(async () => {
   await prisma.device.delete({ where: { id: membershipRevocationDeviceId } });
   await prisma.userProject.delete({ where: { userId_projectId: { userId, projectId } } });
   await prisma.user.delete({ where: { id: userId } });
+  await prisma.userProject.delete({ where: { userId_projectId: { userId: membershipRevocationUserId, projectId } } });
+  await prisma.user.delete({ where: { id: membershipRevocationUserId } });
   await prisma.project.delete({ where: { id: projectId } });
 });
 
-function input(tokenHash: string, ttlMs = 60_000, allowedCapabilities: readonly string[] = ["debug.read", "debug.read", "debug.observe"], targetDeviceId = deviceId) {
+function input(tokenHash: string, ttlMs = 60_000, allowedCapabilities: readonly string[] = ["debug.read", "debug.read", "debug.observe"], targetDeviceId = deviceId, targetUserId = userId) {
   return {
     installationId,
     deviceId: targetDeviceId,
-    initiatingUserId: userId,
+    initiatingUserId: targetUserId,
     pluginId,
     pluginVersion: "1.0.0",
     manifestHash,
@@ -120,8 +125,8 @@ describe("durable debug execution capability", () => {
   });
 
   test("rejects session bootstrap after the initiating user leaves the project", async () => {
-    const execution = await createDebugExecution(prisma, input(tokenHashG, 60_000, ["debug.read"], membershipRevocationDeviceId));
-    await prisma.userProject.delete({ where: { userId_projectId: { userId, projectId } } });
+    const execution = await createDebugExecution(prisma, input(tokenHashG, 60_000, ["debug.read"], membershipRevocationDeviceId, membershipRevocationUserId));
+    await prisma.userProject.delete({ where: { userId_projectId: { userId: membershipRevocationUserId, projectId } } });
     try {
       expect(await getDebugExecutionCapability(prisma, execution.id, tokenHashG)).toBeNull();
       await expect(revalidateDebugSessionExecution(prisma, {
@@ -135,7 +140,7 @@ describe("durable debug execution capability", () => {
         manifestHash,
       })).rejects.toBeInstanceOf(DebugExecutionCapabilityError);
     } finally {
-      await prisma.userProject.create({ data: { userId, projectId } });
+      await prisma.userProject.create({ data: { userId: membershipRevocationUserId, projectId } });
       await completeDebugExecution(prisma, execution.id, tokenHashG, "failed");
     }
   });
