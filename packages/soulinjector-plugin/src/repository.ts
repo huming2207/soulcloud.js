@@ -142,6 +142,8 @@ export interface DebugObservationRecord {
 export interface AppendDebugObservationInput {
   projectId: string;
   sessionId: string;
+  /** When present, the session must belong to this Soulcloud Device. */
+  soulcloudDeviceRef?: string | null;
   eventRef?: string | null;
   source: string;
   kind: string;
@@ -870,6 +872,9 @@ export class SoulInjectorRepository {
   async appendDebugObservation(input: AppendDebugObservationInput): Promise<DebugObservationRecord> {
     const source = boundedText(input.source, "observation source", 64);
     const kind = boundedText(input.kind, "observation kind", 128);
+    const soulcloudDeviceRef = input.soulcloudDeviceRef === null || input.soulcloudDeviceRef === undefined
+      ? null
+      : boundedText(input.soulcloudDeviceRef, "Soulcloud Device reference", 256);
     const eventRef = input.eventRef === null || input.eventRef === undefined ? null : boundedText(input.eventRef, "observation event reference", 128);
     const structuredData = jsonValue(input.structuredData, "observation data", 512 * 1024);
     const client = await this.pool.connect();
@@ -878,8 +883,10 @@ export class SoulInjectorRepository {
       const sessionResult = await client.query(
         `SELECT s.id FROM ${schema}.debug_sessions s
          JOIN ${schema}.debug_cases c ON c.id = s.case_id
-         WHERE s.id = $1 AND c.project_id = $2 FOR UPDATE`,
-        [input.sessionId, input.projectId],
+         WHERE s.id = $1 AND c.project_id = $2
+           AND ($3::text IS NULL OR s.soulcloud_device_ref = $3)
+         FOR UPDATE`,
+        [input.sessionId, input.projectId, soulcloudDeviceRef],
       );
       if (!sessionResult.rows[0]) throw new Error("debug session is not available to this project");
       if (input.artifactId !== null && input.artifactId !== undefined) {

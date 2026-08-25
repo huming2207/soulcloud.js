@@ -37,3 +37,54 @@ describe("SoulInjector private repository migration", () => {
     expect(fake.released).toBe(true);
   });
 });
+
+describe("SoulInjector observation scope", () => {
+  test("requires device observations to belong to the session device", async () => {
+    const client = {
+      query: async (query: string, params?: unknown[]) => {
+        if (query.includes("SELECT s.id FROM")) {
+          return {
+            rows: params?.[2] === "device-1" ? [{ id: "session-1" }] : [],
+            rowCount: params?.[2] === "device-1" ? 1 : 0,
+          };
+        }
+        if (query.includes("INSERT INTO soul_injector_plugin.debug_observations")) {
+          return {
+            rows: [{
+              id: "observation-1",
+              session_id: "session-1",
+              event_ref: "event-1",
+              source: "device",
+              kind: "debug.status",
+              structured_data: { state: "running" },
+              artifact_id: null,
+              created_at: new Date(0),
+            }],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    } as unknown as PoolClient;
+    const repository = new SoulInjectorRepository({ connect: async () => client } as unknown as Pool);
+    await expect(repository.appendDebugObservation({
+      projectId: "project-1",
+      sessionId: "session-1",
+      soulcloudDeviceRef: "device-1",
+      eventRef: "event-1",
+      source: "device",
+      kind: "debug.status",
+      structuredData: { state: "running" },
+    })).resolves.toMatchObject({ sessionId: "session-1" });
+    await expect(repository.appendDebugObservation({
+      projectId: "project-1",
+      sessionId: "session-1",
+      soulcloudDeviceRef: "device-2",
+      eventRef: "event-2",
+      source: "device",
+      kind: "debug.status",
+      structuredData: { state: "running" },
+    })).rejects.toThrow("debug session is not available to this project");
+  });
+});

@@ -153,7 +153,7 @@ describe("SoulInjector plugin", () => {
       device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
     });
     expect(result.updates).toEqual([{ entityKey: "debug.state", value: "running" }, { entityKey: "debug.session_id", value: sessionId }]);
-    expect(observations).toEqual([{ projectId: saved.projectId, sessionId, eventRef: "broker-event-1", source: "device", kind: "debug.status", structuredData: { state: "running", sessionId } }]);
+    expect(observations).toEqual([{ projectId: saved.projectId, sessionId, soulcloudDeviceRef: "soulinjector-1", eventRef: "broker-event-1", source: "device", kind: "debug.status", structuredData: { state: "running", sessionId } }]);
   });
 
   test("lists target configuration revision metadata without exposing YAML", async () => {
