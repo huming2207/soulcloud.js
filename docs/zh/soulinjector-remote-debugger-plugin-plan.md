@@ -60,7 +60,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   entry/header table 等固定头元数据解析；元数据与正文一起在私有 PostgreSQL `bytea`/JSONB 中保存，
   通过 artifact list RPC 暴露；64 KiB 分块上传不使用 S3/object storage；
   最终提交使用 PostgreSQL cursor 分批校验 chunk，并在数据库内组装 `bytea`，不会在 plugin 进程
-  同时保留完整 artifact 与所有 chunk 的第二份大内存副本；
+  同时保留完整 artifact 与所有 chunk 的第二份大内存副本；即使 ELF header 跨越多个小 chunk，
+  也只累积固定上限的 header 字节，不依赖首个 chunk 的大小；
 - `debugger.configureTarget`、`debugger.listTargetConfigs`、`debugger.listArtifacts`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
   路由和转发，不读取 plugin 私有业务表；SSR 配置页展示受限的 target-config revision 和 ELF/firmware artifact 元数据摘要，但不回显 YAML 或 artifact 正文；UI asset 已绑定 manifest SHA-256 并使用内容哈希路径；
   configure/list/read 返回前会复核 installation 的 project、plugin/version、manifest hash 和 enabled 状态，迁移或禁用竞态不会把旧 plugin 的只读结果当作当前安装数据返回；
