@@ -386,12 +386,11 @@ hash，并检查 connection/plugin/version/installation/device/expiry/allowed ca
 - 分块上传使用客户端提供的 `uploadId` 做幂等键；最终提交后在短期过期窗口内保留完成结果，
   响应丢失时重试同一 `uploadId` 必须返回同一个 artifact，而不能重新创建或破坏上传；
 - 弱网需要时支持 Range/resume，但在有真实大文件纵切后再实现；
-- MVP 可以使用 PostgreSQL/local spool，当前不强制对象存储，但接口不能要求一次把大文件读入
-  Bun 或 ESP32 heap。
+- MVP 的 plugin 私有 blob 固定使用独立 PostgreSQL `bytea`，不使用 local spool、S3 或其他对象存储；
+  接口仍不能要求一次把大文件读入 Bun 或 ESP32 heap。
 
-plugin 私有 blob 到 Soulcloud transfer gateway 是“push staging”还是“受控 pull proxy”，以及
-MVP 采用 DB bytea 还是本地 spool，会影响部署和失败语义，必须在 Artifact 阶段开始前确认，
-不能在本文替产品/运维决定。
+plugin 私有 blob 到 Soulcloud transfer gateway 是“push staging”还是“受控 pull proxy”，会影响部署
+和失败语义，必须在设备文件传输阶段开始前确认；当前不改变已确认的 PostgreSQL `bytea` 存储决定。
 
 ## 9. Command provenance、控制权和审批
 
