@@ -500,11 +500,18 @@ artifact reference。
 当前结果：target config 和 artifact 在 plugin 私有 DB 重启后可恢复；plugin runtime 的资源上限
 可由部署环境配置，未完成的 chunk upload 会自动过期清理；纯云端 case 尚未实现。
 
+对 `/home/hu/Projects/soul-injector` 的设备侧代码审查（2026-08-25）发现：当前源码仍有
+`/soulinjector/v1/cmd/*` 与 `/soulinjector/v1/report/*` 的历史自定义 MQTT topic，以及旧的
+`mq_cmd_pkt`/ArduinoJson 命令路径。这些只能作为迁移清单，不能作为新插件协议的兼容层；D2
+必须把设备软件/固件改为现有 Soulcloud Device Broker 的 `/cmd/exec`、`/cmd/result`、
+`/event`、`/log` 和 HTTPS 文件入口。当前工作树中 `components/esp-serial-flasher` 有未提交
+修改，未在本计划审查中改动。
+
 ### 阶段 D2：设备联网与确定性 Debug Primitive
 
 工作：
 
-1. 将 SoulInjector 作为普通 Soulcloud Device 完成注册、认证、MQTT/WSS 和 HTTPS；**设备侧未完成**；
+1. 将 SoulInjector 作为普通 Soulcloud Device 完成注册、认证、MQTT/WSS 和 HTTPS；**设备侧未完成**，且必须替换源码中历史 `/soulinjector/v1/*` topic，而不是保留双协议；
 2. 实现冻结的高层 debugger commands；**plugin contract 已完成，设备 handler 未完成**；
 3. 实现 target connected/progress/snapshot/finished events；**plugin status/log schema 已完成，设备 event producer 未完成**；
 4. 实现 command 幂等、取消、本地 timeout 和安全 transport release；
