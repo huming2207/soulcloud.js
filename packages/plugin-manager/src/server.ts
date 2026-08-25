@@ -127,6 +127,15 @@ export const pluginUiArtifactQuerySchema = z.object({
   case_id: z.string().uuid().optional(),
   content_type: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)).default("application/octet-stream"),
 }).strict();
+const readArtifactChunkSchema = z.object({
+  installationId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  userId: z.string().uuid(),
+  artifactId: z.string().uuid(),
+  offset: z.number().int().nonnegative().max(64 * 1024 * 1024),
+  length: z.number().int().positive().max(64 * 1024),
+  timeoutMs: z.number().int().min(100).max(30_000).optional(),
+}).strict();
 
 function parseBody<T>(schema: ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -272,6 +281,25 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
       if (!authorized(request, options.serviceToken)) return json(401, { error: "unauthorized" });
       if (request.method === "GET" && url.pathname === "/internal/plugins/catalog") return json(200, { plugins: options.manager.listCatalog() });
       if (request.method !== "POST") return json(404, { error: "not_found" });
+      if (url.pathname === "/internal/plugins/debugger/artifacts/read") {
+        try {
+          const input = parseBody(readArtifactChunkSchema, await requestJson(request));
+          const result = await options.manager.readArtifactChunk(input);
+          return new Response(result.chunk, {
+            status: 200,
+            headers: {
+              "content-type": "application/octet-stream",
+              "content-length": String(result.chunk.byteLength),
+              "cache-control": "no-store",
+              "x-soulcloud-artifact-id": result.artifactId,
+              "x-soulcloud-artifact-offset": String(result.offset),
+              "x-soulcloud-artifact-total-size": String(result.totalSize),
+              "x-soulcloud-artifact-sha256": result.sha256,
+              "x-soulcloud-artifact-final": String(result.final),
+            },
+          });
+        } catch (error) { return failure(error); }
+      }
       const artifact = url.pathname.match(/^\/internal\/plugins\/debugger\/installations\/([^/]+)\/artifacts$/);
       if (artifact) {
         try {

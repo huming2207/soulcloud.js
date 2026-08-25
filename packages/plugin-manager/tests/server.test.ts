@@ -56,6 +56,14 @@ const manager = {
     uploadedArtifactInput = { input, bytes: new Uint8Array(await new Response(input.body).arrayBuffer()) };
     return { artifactId: randomUUID(), size: uploadedArtifactInput.bytes.byteLength };
   },
+  readArtifactChunk: async (input: { artifactId: string; offset: number }) => ({
+    artifactId: input.artifactId,
+    offset: input.offset,
+    totalSize: 7,
+    sha256: "a".repeat(64),
+    chunk: Uint8Array.of(4, 5, 6),
+    final: true,
+  }),
   consumePluginUiGrant: async (nonce: string) => {
     if (consumedGrants.has(nonce)) return false;
     consumedGrants.add(nonce);
@@ -142,6 +150,25 @@ describe("plugin SSR route", () => {
       uploadId,
       totalSize: 3,
     });
+  });
+
+  test("serves a bounded artifact chunk only to an authorized internal caller", async () => {
+    const artifactId = randomUUID();
+    const response = await fetch(`${server.url}internal/plugins/debugger/artifacts/read`, {
+      method: "POST",
+      headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+      body: JSON.stringify({ installationId, projectId, userId: randomUUID(), artifactId, offset: 4, length: 8 }),
+    });
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(Uint8Array.of(4, 5, 6));
+    expect(response.headers.get("x-soulcloud-artifact-id")).toBe(artifactId);
+    expect(response.headers.get("x-soulcloud-artifact-final")).toBe("true");
+    const unauthorized = await fetch(`${server.url}internal/plugins/debugger/artifacts/read`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ installationId, projectId, userId: randomUUID(), artifactId, offset: 4, length: 8 }),
+    });
+    expect(unauthorized.status).toBe(401);
   });
 
   test("reports invalid plugin UI output as a 502 plugin error", async () => {
