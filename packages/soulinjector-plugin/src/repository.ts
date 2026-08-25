@@ -258,6 +258,8 @@ CREATE TABLE IF NOT EXISTS ${schema}.target_config_revisions (
 );
 CREATE INDEX IF NOT EXISTS target_config_revisions_installation_created_idx
   ON ${schema}.target_config_revisions (installation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS target_config_revisions_scope_revision_idx
+  ON ${schema}.target_config_revisions (installation_id, project_id, revision DESC);
 
 CREATE TABLE IF NOT EXISTS ${schema}.debug_artifacts (
   id uuid PRIMARY KEY,
