@@ -155,6 +155,28 @@ export interface TargetConfigOutput {
   targetCount: number;
 }
 export type TargetConfigHandler = (input: TargetConfigInput, context: { signal: AbortSignal }) => Promise<TargetConfigOutput>;
+export interface ArtifactChunkInput {
+  operationId: string;
+  installationId: string;
+  projectId: string;
+  userId: string;
+  uploadId: string;
+  kind: "elf" | "firmware";
+  filename: string;
+  contentType: string;
+  totalSize: number;
+  offset: number;
+  final: boolean;
+  chunk: Uint8Array;
+}
+export interface ArtifactChunkOutput {
+  uploadId: string;
+  receivedBytes: number;
+  complete: boolean;
+  artifactId: string | null;
+  sha256: string | null;
+}
+export type ArtifactChunkHandler = (input: ArtifactChunkInput, context: { signal: AbortSignal }) => Promise<ArtifactChunkOutput>;
 
 export interface PluginDefinition {
   manifest: PluginManifest;
@@ -164,6 +186,7 @@ export interface PluginDefinition {
   handleAction?: Record<string, UiActionHandler>;
   /** Optional product-specific configuration hook used by the SoulInjector plugin. */
   configureTarget?: TargetConfigHandler;
+  storeArtifactChunk?: ArtifactChunkHandler;
 }
 
 export type InputSchema = z.ZodTypeAny;

@@ -53,6 +53,7 @@ beforeAll(async () => {
       },
     },
     configureTarget: async () => ({ configId: randomUUID(), revision: 1, sha256: "a".repeat(64), targetCount: 1 }),
+    storeArtifactChunk: async (input) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? randomUUID() : null, sha256: input.final ? "b".repeat(64) : null }),
   }), { hostname: "127.0.0.1", port: 0, authToken });
 
   connection = new PluginConnection({
@@ -139,6 +140,29 @@ describe("plugin oRPC WebSocket transport", () => {
       yaml: "version: 1\ntargets:\n  - id: fixture\n    displayName: Fixture\n    architecture: cortex-m\n    chip: fixture\n    transport: swd\n    requiredPrimitives: [identify]",
     }, 1_000);
     expect(output).toMatchObject({ revision: 1, targetCount: 1 });
+  });
+
+  test("keeps artifact chunks binary and bounded", async () => {
+    const uploadId = randomUUID();
+    const output = await connection.request("debugger.storeArtifactChunk", {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      installationId: randomUUID(),
+      projectId: randomUUID(),
+      userId: randomUUID(),
+      uploadId,
+      kind: "firmware",
+      filename: "image.bin",
+      contentType: "application/octet-stream",
+      totalSize: 3,
+      offset: 0,
+      final: true,
+      chunk: Uint8Array.of(1, 2, 3),
+    }, 1_000) as { uploadId: string; receivedBytes: number; complete: boolean; artifactId: string | null };
+    expect(output.uploadId).toBe(uploadId);
+    expect(output.receivedBytes).toBe(3);
+    expect(output.complete).toBe(true);
+    expect(output.artifactId).toBeString();
   });
 
   test("routes reverse calls on the same socket", async () => {

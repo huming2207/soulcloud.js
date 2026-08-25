@@ -13,6 +13,7 @@ import {
   assertRpcValueBudget,
   canonicalJson,
   configureTargetOutput as configureTargetOutputSchema,
+  artifactChunkOutput as artifactChunkOutputSchema,
   eventOutput as eventOutputSchema,
   hasRpcPrefix,
   managerToPluginContract,
@@ -338,6 +339,26 @@ function createRuntimeConnection(
           const result = await definition.configureTarget({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, yaml: input.yaml }, { signal: controller.signal });
           assertRpcValueBudget(result, budget);
           const parsed = configureTargetOutputSchema.safeParse(result);
+          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+          return parsed.data;
+        } finally {
+          clearTimeout(timer);
+          operations.running -= 1;
+        }
+      }),
+      storeArtifactChunk: implemented.debugger.storeArtifactChunk.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        if (!definition.storeArtifactChunk) rpcError("NOT_FOUND", "artifact upload is not supported by this plugin");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), input.deadlineMs);
+        try {
+          const chunk = await rpcBinaryFromBlob(input.chunk);
+          if (!(chunk instanceof Uint8Array)) rpcError("INVALID_EVENT_INPUT", "artifact chunk is not binary");
+          const result = await definition.storeArtifactChunk({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, uploadId: input.uploadId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset: input.offset, final: input.final, chunk }, { signal: controller.signal });
+          assertRpcValueBudget(result, budget);
+          const parsed = artifactChunkOutputSchema.safeParse(result);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
         } finally {
