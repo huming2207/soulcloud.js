@@ -58,7 +58,9 @@ export interface PluginConnectionOptions {
   onDisconnect?: (connectionId: string) => void;
 }
 
-export class PluginConnectionError extends Error {}
+export class PluginConnectionError extends Error {
+  readonly status: number = 503;
+}
 export class PluginConnectionTimeout extends PluginConnectionError {
   readonly status = 504;
   readonly publicCode = "plugin_timeout" as const;

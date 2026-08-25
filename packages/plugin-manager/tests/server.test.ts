@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { pluginUiSessionCookieName, signPluginUiSession } from "@soulcloud/core";
 import type { PluginManifest } from "@soulcloud/plugin-sdk";
 import type { PluginManager } from "../src/manager";
-import { PluginConnectionTimeout } from "../src/connection";
+import { PluginConnectionError, PluginConnectionTimeout } from "../src/connection";
 import { startPluginManagerServer } from "../src/server";
 
 const installationId = randomUUID();
@@ -425,6 +425,30 @@ describe("plugin SSR route", () => {
       expect(await response.json()).toMatchObject({ error: "plugin_timeout" });
     } finally {
       await timeoutServer.stop();
+    }
+  });
+
+  test("maps an in-flight plugin disconnect to a 503 unavailable response", async () => {
+    const unavailableManager = {
+      ...manager,
+      listTargetConfigs: async () => { throw new PluginConnectionError("plugin WebSocket closed"); },
+    } as unknown as PluginManager;
+    const unavailableServer = startPluginManagerServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      serviceToken: "internal-service-token",
+      manager: unavailableManager,
+    });
+    try {
+      const response = await fetch(`${unavailableServer.url}internal/plugins/debugger/target-configs`, {
+        method: "POST",
+        headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+        body: JSON.stringify({ installationId, projectId, userId: randomUUID() }),
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: "plugin_unavailable" });
+    } finally {
+      await unavailableServer.stop();
     }
   });
 
