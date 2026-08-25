@@ -79,6 +79,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   和可选 ELF/firmware artifact 引用；后续配置或上传新 artifact 不会改变已有 session 的输入快照。
 - 私有 session、设备状态更新和 observation 查询均带 `installation_id` scope；SSR 页面可按查询参数选择
   session，并显示有界的 observation timeline，不会把同一 project 下其他 installation 的会话混入页面。
+- 已知 session 已删除、installation 不匹配或设备不匹配的陈旧设备事件会记录 warning 并正常 ACK，避免
+  durable event queue 因不可恢复的 scope miss 无限重试；其他私有数据库错误仍按可恢复故障抛出重试。
 - `DeviceCommand` 已保存平台侧 provenance：`origin_type`、发起用户、plugin installation、
   plugin version/manifest hash、execution/correlation/idempotency 字段和取消请求时间；这些
   字段不进入设备下发的 MessagePack payload。插件/LLM 来源在入队前必须带 installation、版本
