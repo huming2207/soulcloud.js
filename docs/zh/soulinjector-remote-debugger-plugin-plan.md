@@ -1,6 +1,6 @@
 # SoulInjector 远程 Debugger Plugin 实施计划
 
-**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease、事件侧 execution capability 传递、受限 execution reverse RPC 和已绑定 session 终态关闭平台 execution 的同步；私有 case/session/observation/report 数据层已落地；Human API start/session/bootstrap 已有基础版本；设备固件、LLM、pause/cancel/take-over、重启恢复和完整设备 command 闭环尚未实现）
+**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease、事件侧 execution capability 传递、受限 execution reverse RPC 和已绑定 session 终态关闭平台 execution 的同步；私有 case/session/observation/report 数据层已落地；Human API start/session/bootstrap，以及由 execution 发起人触发的显式 pause（释放 device lease）已有基础版本；设备固件、LLM、整个 execution 的 cancel/take-over、重启恢复和完整设备 command 闭环尚未实现）
 **日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
 
@@ -141,11 +141,13 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   已提交后丢失，Manager 会通过有界、仅 Manager 可调用的 `debugger.abortSession` 按 session ID
   或唯一 execution scope 将该私有 session 标为 failed；该清理不发送设备 command，也不替代人工
   批准。相同设备已有 active execution 时，Human API 得到明确的 409 conflict，而不是内部错误。
-  Human API 也提供只读的 `GET .../debugger/executions/:executionId` 状态查询；它先执行项目权限
-  检查，再由 Manager 重新校验 installation/project scope 和当前 user membership，只返回 execution
-  摘要，不返回 token。
-  整个 execution 的 pause/cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成；这里的
-  单条 command cancellation 不是整个 execution 的取消，也不等价于硬件已经停止。
+  Human API 也提供只读的 `GET .../debugger/executions/:executionId` 状态查询，以及由当前
+  execution 发起人调用的 `POST .../debugger/executions/:executionId/pause`；后者只释放云端
+  device lease 并把 execution 置为 `paused`，不发送额外 MQTT topic，也不声称已经停止设备上
+  已被 broker 接受的 command。两条入口都会先执行项目权限检查，再由 Manager 重新校验
+  installation/project scope 和当前 user membership，只返回 execution 摘要，不返回 token。
+  整个 execution 的 cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成；这里的
+  单条 command cancellation 与 pause 都不是整个 execution 的硬件取消。
 - oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`，以及
   受 execution capability 约束的 `context.devices.enqueueCommand`、`getCommand`、`cancelCommand`；
   Manager 会绑定父 operation、plugin/version、installation、device、token hash 和 capability
@@ -695,8 +697,8 @@ command intent。
 2. 实现 device control lease、renew/release/expiry；**已完成基础版本**；
 3. 增加 command origin/execution/plugin/user correlation；**已完成基础版本**；
 4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle 与 device command RPC；**基础版本、同进程设备事件 capability 传递，以及已绑定 session 终态事件关闭平台 execution 已完成**；
-5. Human API 实现 start/pause/cancel/take-over 权限入口；**start/session bootstrap 基础已完成，
-   pause/cancel/take-over 及重启恢复仍未完成**；
+5. Human API 实现 start/pause/cancel/take-over 权限入口；**start/session bootstrap 和由发起人
+   触发的 pause（释放 device lease）已完成，cancel/take-over 及重启恢复仍未完成**；
 6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试；**数据库
    集成测试以及 malformed bootstrap cleanup/并发冲突的边界测试已写入 CI，command cancellation
    的 membership race 也已覆盖；跨进程/真实 plugin
@@ -726,7 +728,7 @@ MQTT/oRPC 热路径。
    revision 存储，以及 execution→session 输入快照关联基础**；
 2. SSR case/debugger 页面；**已完成最小 case 列表/创建、plugin-origin session 创建入口、session
    摘要、installation-scoped observation timeline、target 配置页面和基于 plugin-origin session
-   的人工 action 控件、execution 发起人触发的 lease release/heartbeat 续租，以及受限的单条
+   的人工 action 控件、execution 发起人触发的 lease release/heartbeat 续租、Human API pause，以及受限的单条
    command cancellation；session
    控制闭环和实时状态 UI 仍待实现**；
 3. 人工执行 identify/halt/read/reset/capture/close，并能在需要时释放当前 device lease；
