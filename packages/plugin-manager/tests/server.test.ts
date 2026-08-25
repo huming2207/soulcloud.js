@@ -21,12 +21,17 @@ const manifest: PluginManifest = {
     methods: ["GET", "POST"],
     querySchema: { count: { type: "integer", required: true } },
     actionSchema: { enabled: { type: "boolean", required: true } },
+  }, {
+    id: "debugger",
+    path: "/debugger",
+    methods: ["GET"],
   }] },
 };
 let renderedParams: unknown;
 let submittedAction: unknown;
 let actionTimeout: number | undefined;
 let sessionStartInput: unknown;
+let uploadedArtifactInput: { input: unknown; bytes: Uint8Array } | undefined;
 const consumedGrants = new Set<string>();
 const manager = {
   ready: async () => true,
@@ -46,6 +51,10 @@ const manager = {
   startDebugSession: async (input: unknown) => {
     sessionStartInput = input;
     return { execution: { id: randomUUID() }, sessionId: randomUUID() };
+  },
+  uploadArtifact: async (input: { body: ReadableStream<Uint8Array> }) => {
+    uploadedArtifactInput = { input, bytes: new Uint8Array(await new Response(input.body).arrayBuffer()) };
+    return { artifactId: randomUUID(), size: uploadedArtifactInput.bytes.byteLength };
   },
   consumePluginUiGrant: async (nonce: string) => {
     if (consumedGrants.has(nonce)) return false;
@@ -105,6 +114,34 @@ describe("plugin SSR route", () => {
     });
     expect(response.status).toBe(200);
     expect(submittedAction).toEqual({ enabled: true });
+  });
+
+  test("streams an artifact from a plugin-origin session using the browser length header", async () => {
+    const debuggerToken = signPluginUiSession({ secret, ttlSeconds: 300 }, {
+      sub: randomUUID(), projectId, installationId, pluginId: manifest.id, pluginVersion: manifest.version,
+      manifestHash: "a".repeat(64), routeId: "debugger", permissions: [], locale: "en",
+    });
+    const debuggerCookie = `${pluginUiSessionCookieName(installationId)}=${debuggerToken}`;
+    const caseId = randomUUID();
+    const uploadId = randomUUID();
+    const response = await fetch(`${server.url}plugins/${installationId}/debugger/artifacts?kind=elf&filename=fixture.elf&case_id=${caseId}&content_type=application%2Fx-elf`, {
+      method: "POST",
+      headers: { cookie: debuggerCookie, "idempotency-key": uploadId, "x-soulcloud-content-length": "3" },
+      body: Uint8Array.of(1, 2, 3),
+    });
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ size: 3 });
+    expect(uploadedArtifactInput?.bytes).toEqual(Uint8Array.of(1, 2, 3));
+    expect(uploadedArtifactInput?.input).toMatchObject({
+      installationId,
+      projectId,
+      caseId,
+      kind: "elf",
+      filename: "fixture.elf",
+      contentType: "application/x-elf",
+      uploadId,
+      totalSize: 3,
+    });
   });
 
   test("reports invalid plugin UI output as a 502 plugin error", async () => {
