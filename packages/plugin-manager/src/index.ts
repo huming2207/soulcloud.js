@@ -49,6 +49,7 @@ const manager = new PluginManager({
   maintenanceIntervalMs: config.PLUGIN_MAINTENANCE_INTERVAL_MS,
   retentionBatchSize: config.PLUGIN_RETENTION_BATCH_SIZE,
   retentionMaxBatches: config.PLUGIN_RETENTION_MAX_BATCHES,
+  artifactUploadTimeoutMs: config.PLUGIN_ARTIFACT_UPLOAD_TIMEOUT_MS,
 });
 await manager.start();
 const server = startPluginManagerServer({ hostname: config.PLUGIN_MANAGER_INTERNAL_BIND, port: config.PLUGIN_MANAGER_INTERNAL_PORT, serviceToken: config.PLUGIN_MANAGER_SERVICE_TOKEN, manager, uiSessionSecret: config.PLUGIN_MANAGER_UI_SESSION_SECRET, uiSessionTtlSeconds: config.PLUGIN_UI_SESSION_TTL_SECONDS, maxArtifactBytes: config.PLUGIN_ARTIFACT_MAX_BYTES });

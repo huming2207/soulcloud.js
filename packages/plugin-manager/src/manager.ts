@@ -111,6 +111,8 @@ export interface PluginManagerOptions {
   maintenanceIntervalMs?: number;
   retentionBatchSize?: number;
   retentionMaxBatches?: number;
+  /** Absolute wall-clock budget for reading and forwarding one artifact body. */
+  artifactUploadTimeoutMs?: number;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -988,15 +990,16 @@ export class PluginManager {
     if (installation.state !== "enabled") throw Object.assign(new Error("plugin installation is disabled"), { status: 409 });
     const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
     const uploadId = crypto.randomUUID();
-    const timeoutMs = input.timeoutMs ?? 30_000;
+    const chunkTimeoutMs = input.timeoutMs ?? 30_000;
+    const uploadDeadline = performance.now() + (this.options.artifactUploadTimeoutMs ?? 600_000);
     let offset = 0;
     let bodyBytes = 0;
     let previous: Uint8Array | null = null;
-    for await (const chunk of splitArtifactBody(input.body)) {
+    for await (const chunk of splitArtifactBody(input.body, uploadDeadline)) {
       bodyBytes += chunk.byteLength;
       if (bodyBytes > input.totalSize) throw publicError("artifact body exceeds the declared content length", 400, "invalid_request");
       if (previous) {
-        const progress = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: false, chunk: previous }, timeoutMs);
+        const progress = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: false, chunk: previous }, artifactChunkTimeout(chunkTimeoutMs, uploadDeadline));
         if (typeof progress !== "number") throw publicError("plugin completed an artifact before the final chunk", 502, "invalid_plugin_output");
         offset = progress;
       }
@@ -1004,7 +1007,7 @@ export class PluginManager {
     }
     if (!previous) throw Object.assign(new Error("artifact body is empty"), { status: 400 });
     if (bodyBytes !== input.totalSize) throw publicError("artifact body is shorter than the declared content length", 400, "invalid_request");
-    const result = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: true, chunk: previous }, timeoutMs, true);
+    const result = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: true, chunk: previous }, artifactChunkTimeout(chunkTimeoutMs, uploadDeadline), true);
     if (typeof result === "number") throw publicError("plugin did not complete artifact upload", 502, "invalid_plugin_output");
     return { uploadId, artifactId: result.artifactId, sha256: result.sha256, size: input.totalSize, kind: input.kind, filename: input.filename };
   }
@@ -2070,13 +2073,13 @@ function commandIntentBytes(command: string, args: CommandEnqueueInput["args"]):
   return bytes;
 }
 
-async function* splitArtifactBody(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+export async function* splitArtifactBody(body: ReadableStream<Uint8Array>, deadline = performance.now() + 600_000): AsyncGenerator<Uint8Array> {
   const reader = body.getReader();
   let carry: Uint8Array | null = null;
   let completed = false;
   try {
     for (;;) {
-      const next = await reader.read();
+      const next = await readArtifactChunk(reader, deadline);
       if (next.done) break;
       const value = next.value;
       if (!value || value.byteLength === 0) continue;
@@ -2102,6 +2105,28 @@ async function* splitArtifactBody(body: ReadableStream<Uint8Array>): AsyncGenera
   } finally {
     if (!completed) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
+  }
+}
+
+function artifactChunkTimeout(chunkTimeoutMs: number, deadline: number): number {
+  const remaining = Math.ceil(deadline - performance.now());
+  if (remaining <= 0) throw publicError("artifact upload timed out", 504, "plugin_timeout");
+  return Math.max(1, Math.min(chunkTimeoutMs, remaining));
+}
+
+async function readArtifactChunk(reader: { read(): Promise<{ done: boolean; value?: Uint8Array }> }, deadline: number): Promise<{ done: boolean; value?: Uint8Array }> {
+  const remaining = Math.ceil(deadline - performance.now());
+  if (remaining <= 0) throw publicError("artifact upload timed out", 504, "plugin_timeout");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(publicError("artifact upload timed out", 504, "plugin_timeout")), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
