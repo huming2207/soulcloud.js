@@ -69,6 +69,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   不把用户提交的原文拼进 redirect 或页面错误信息；
 - 高层 SoulInjector command/event schema 和 `requiresHumanApproval` action 元数据；动作编码
   会读取指定 installation/project 下的不可变 target-config revision，并把目标快照传给设备。
+  `debugger.configureTarget` 在 plugin RPC 返回后也会重新校验 installation 的
+  project、plugin version、manifest hash 和 enabled 状态；如果配置期间发生迁移、升级或禁用，
+  Manager 丢弃旧结果并返回冲突，而不把旧 plugin 的配置报告为当前安装的成功结果。
   Manager 在 plugin encoder 返回后再次将 args 还原为 action input 并校验 manifest schema；
   encoder 即使返回了结构正确但越界/未知字段的参数，也会以 `invalid_action_output`（502）拒绝，
   不会把 plugin bug 伪装成用户输入错误。
