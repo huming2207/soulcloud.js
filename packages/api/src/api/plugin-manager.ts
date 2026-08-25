@@ -69,6 +69,23 @@ const actionBody = z.object({ device_id: z.string().uuid(), input: z.unknown() }
 const stateBody = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
 const migrateBody = z.object({ plugin_version: z.string().min(1).max(128), manifest_hash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown().optional() }).strict();
 const targetConfigBody = z.object({ yaml: z.string().min(1).max(65_536) }).strict();
+const debuggerSessionBody = z.object({
+  device_id: z.string().uuid(),
+  case_id: z.string().uuid(),
+  target_config_id: z.string().uuid().nullable().optional(),
+  target_config_revision: z.number().int().positive().nullable().optional(),
+  target_id: z.string().min(1).max(64).nullable().optional(),
+  artifact_id: z.string().uuid().nullable().optional(),
+  device_firmware_version: z.string().max(256).nullable().optional(),
+  lease_ms: z.number().int().min(1_000).max(900_000).optional(),
+  ttl_ms: z.number().int().min(2_000).max(7 * 24 * 60 * 60_000).optional(),
+  timeout_ms: z.number().int().min(100).max(30_000).optional(),
+}).strict().refine((value) => {
+  const hasId = value.target_config_id !== null && value.target_config_id !== undefined;
+  const hasRevision = value.target_config_revision !== null && value.target_config_revision !== undefined;
+  const hasTarget = value.target_id !== null && value.target_id !== undefined;
+  return hasId === hasRevision && hasRevision === hasTarget;
+}, "target configuration id, revision and target id must be provided together");
 const debuggerArtifactQuery = z.object({ kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), case_id: z.string().uuid().optional(), content_type: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)).default("application/octet-stream") }).strict();
 
 /** Human API is the only browser-facing authority for plugin metadata. */
@@ -188,6 +205,36 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
           projectId: installation.projectId,
           userId: user.user.id,
           timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
+        });
+        set.status = result.status;
+        return result.value;
+      } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
+    })
+    .post("/v1/plugin-installations/:id/debugger/sessions", async ({ request, body, params, set }) => {
+      const user = await authenticateRequest(prisma, jwt, request);
+      if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const parsed = debuggerSessionBody.safeParse(body);
+      if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const device = await prisma.device.findUnique({ where: { id: parsed.data.device_id }, select: { projectId: true } });
+      if (!installation || !device) { set.status = 404; return { error: "not_found", message: "installation or device not found" }; }
+      if (installation.projectId !== device.projectId || !(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
+      if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
+      try {
+        const result = await callManager(options, "/internal/plugins/debugger/sessions", {
+          installationId: params.id,
+          projectId: installation.projectId,
+          deviceId: parsed.data.device_id,
+          userId: user.user.id,
+          caseId: parsed.data.case_id,
+          ...(parsed.data.target_config_id !== undefined ? { targetConfigId: parsed.data.target_config_id } : {}),
+          ...(parsed.data.target_config_revision !== undefined ? { targetConfigRevision: parsed.data.target_config_revision } : {}),
+          ...(parsed.data.target_id !== undefined ? { targetId: parsed.data.target_id } : {}),
+          ...(parsed.data.artifact_id !== undefined ? { artifactId: parsed.data.artifact_id } : {}),
+          ...(parsed.data.device_firmware_version !== undefined ? { deviceFirmwareVersion: parsed.data.device_firmware_version } : {}),
+          ...(parsed.data.lease_ms !== undefined ? { leaseMs: parsed.data.lease_ms } : {}),
+          ...(parsed.data.ttl_ms !== undefined ? { ttlMs: parsed.data.ttl_ms } : {}),
+          ...(parsed.data.timeout_ms !== undefined ? { timeoutMs: parsed.data.timeout_ms } : {}),
         });
         set.status = result.status;
         return result.value;

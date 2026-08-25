@@ -13,6 +13,7 @@ import {
   assertRpcValueBudget,
   canonicalJson,
   configureTargetOutput as configureTargetOutputSchema,
+  debugSessionStartOutput as debugSessionStartOutputSchema,
   listTargetConfigsOutput as listTargetConfigsOutputSchema,
   artifactChunkOutput as artifactChunkOutputSchema,
   eventOutput as eventOutputSchema,
@@ -497,6 +498,38 @@ function createRuntimeConnection(
           const result = await runWithDeadline(input.deadlineMs, (signal) => definition.listArtifacts!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId }, { signal }));
           assertRpcValueBudget(result, budget);
           return listArtifactsOutputSchema.parse(result);
+        } finally {
+          operations.running -= 1;
+        }
+      }),
+      startSession: implemented.debugger.startSession.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        if (!definition.startDebugSession) rpcError("NOT_FOUND", "debug session bootstrap is not supported by this plugin");
+        if (input.pluginVersion !== definition.manifest.version || input.manifestHash !== manifestHash) rpcError("HANDSHAKE_MISMATCH", "plugin manifest snapshot mismatch");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
+        try {
+          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.startDebugSession!({
+            operationId: input.operationId,
+            installationId: input.installationId,
+            projectId: input.projectId,
+            deviceId: input.deviceId,
+            userId: input.userId,
+            pluginVersion: input.pluginVersion,
+            manifestHash: input.manifestHash,
+            executionId: input.executionId,
+            executionToken: input.executionToken,
+            caseId: input.caseId,
+            targetConfigId: input.targetConfigId,
+            targetConfigRevision: input.targetConfigRevision,
+            targetId: input.targetId,
+            artifactId: input.artifactId,
+            deviceFirmwareVersion: input.deviceFirmwareVersion,
+          }, { signal }));
+          assertRpcValueBudget(result, budget);
+          const parsed = debugSessionStartOutputSchema.safeParse(result);
+          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+          return parsed.data;
         } finally {
           operations.running -= 1;
         }

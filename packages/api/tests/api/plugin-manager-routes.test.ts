@@ -15,6 +15,7 @@ let manager: { url: URL; stop(): Promise<void> };
 let receivedBindingRequests: unknown[] = [];
 let receivedTargetConfigListRequests: unknown[] = [];
 let receivedArtifactListRequests: unknown[] = [];
+let receivedSessionStartRequests: unknown[] = [];
 let projectId: string;
 let installationId: string;
 let deviceId: string;
@@ -41,6 +42,10 @@ beforeAll(async () => {
       if (request.method === "POST" && url.pathname.endsWith("/artifacts") && request.headers.get("content-type") === "application/json") {
         receivedArtifactListRequests.push(await request.json());
         return new Response(JSON.stringify([{ artifactId: randomUUID(), kind: "elf", filename: "fixture.elf", contentType: "application/octet-stream", size: 4, sha256: "c".repeat(64), createdAt: new Date(0).toISOString() }]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (request.method === "POST" && url.pathname.endsWith("/sessions")) {
+        receivedSessionStartRequests.push(await request.json());
+        return new Response(JSON.stringify({ execution: { id: randomUUID() }, sessionId: randomUUID() }), { status: 201, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ error: "not_found" }), {
         status: 404,
@@ -180,5 +185,33 @@ describe("GET /v1/plugin-installations/:id/debugger/artifacts", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toHaveLength(1);
     expect(receivedArtifactListRequests).toEqual([{ installationId, projectId, userId: expect.any(String), timeoutMs: 4_000 }]);
+  });
+});
+
+describe("POST /v1/plugin-installations/:id/debugger/sessions", () => {
+  test("forwards the authenticated user and immutable input snapshot", async () => {
+    const caseId = randomUUID();
+    const targetConfigId = randomUUID();
+    const artifactId = randomUUID();
+    const res = await app.handle(
+      new Request(`http://localhost/v1/plugin-installations/${installationId}/debugger/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ device_id: deviceId, case_id: caseId, target_config_id: targetConfigId, target_config_revision: 2, target_id: "fixture", artifact_id: artifactId }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect(await res.json()).not.toHaveProperty("executionToken");
+    expect(receivedSessionStartRequests).toEqual([{
+      installationId,
+      projectId,
+      deviceId,
+      userId: expect.any(String),
+      caseId,
+      targetConfigId,
+      targetConfigRevision: 2,
+      targetId: "fixture",
+      artifactId,
+    }]);
   });
 });

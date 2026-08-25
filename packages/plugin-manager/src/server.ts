@@ -97,6 +97,26 @@ const encodeActionSchema = z.object({ installationId: z.string().uuid(), userId:
 const configureTargetSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), yaml: z.string().min(1).max(65_536), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const listTargetConfigsSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const listArtifactsSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
+const startDebugSessionSchema = z.object({
+  installationId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  deviceId: z.string().uuid(),
+  userId: z.string().uuid(),
+  caseId: z.string().uuid(),
+  targetConfigId: z.string().uuid().nullable().optional(),
+  targetConfigRevision: z.number().int().positive().nullable().optional(),
+  targetId: z.string().min(1).max(64).nullable().optional(),
+  artifactId: z.string().uuid().nullable().optional(),
+  deviceFirmwareVersion: z.string().max(256).nullable().optional(),
+  leaseMs: z.number().int().min(1_000).max(900_000).default(60_000),
+  ttlMs: z.number().int().min(2_000).max(7 * 24 * 60 * 60_000).default(24 * 60 * 60_000),
+  timeoutMs: z.number().int().min(100).max(30_000).optional(),
+}).strict().refine((value) => {
+  const hasId = value.targetConfigId !== null && value.targetConfigId !== undefined;
+  const hasRevision = value.targetConfigRevision !== null && value.targetConfigRevision !== undefined;
+  const hasTarget = value.targetId !== null && value.targetId !== undefined;
+  return hasId === hasRevision && hasRevision === hasTarget;
+}, "target configuration id, revision and target id must be provided together");
 const pluginUiBootstrapSchema = z.object({ bootstrap_token: z.string().min(32).max(4096) }).strict();
 
 function parseBody<T>(schema: ZodType<T>, value: unknown): T {
@@ -286,6 +306,10 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         if (url.pathname === "/internal/plugins/debugger/artifacts") {
           const input = parseBody(listArtifactsSchema, body);
           return json(200, await options.manager.listArtifacts(input));
+        }
+        if (url.pathname === "/internal/plugins/debugger/sessions") {
+          const input = parseBody(startDebugSessionSchema, body);
+          return json(201, await options.manager.startDebugSession(input));
         }
       } catch (error) { return failure(error); }
       return json(404, { error: "not_found" });

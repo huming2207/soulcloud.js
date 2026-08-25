@@ -83,6 +83,29 @@ export const artifactChunkOutput = z.object({ uploadId: z.string().uuid(), recei
 export const listArtifactsInput = operation.extend({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid() }).strict();
 export const listArtifactsOutput = z.array(z.object({ artifactId: z.string().uuid(), kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), contentType: z.string().min(1).max(128), size: z.number().int().positive().max(64 * 1024 * 1024), sha256: z.string().regex(/^[0-9a-f]{64}$/), createdAt: z.string().datetime({ offset: true }) }).strict()).max(64);
 
+export const debugSessionStartInput = operation.extend({
+  installationId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  deviceId: z.string().uuid(),
+  userId: z.string().uuid(),
+  pluginVersion: z.string().min(1).max(128),
+  manifestHash: z.string().regex(/^[0-9a-f]{64}$/),
+  executionId: z.string().uuid(),
+  executionToken: z.string().min(32).max(256),
+  caseId: z.string().uuid(),
+  targetConfigId: z.string().uuid().nullable().optional(),
+  targetConfigRevision: z.number().int().positive().nullable().optional(),
+  targetId: z.string().min(1).max(64).nullable().optional(),
+  artifactId: z.string().uuid().nullable().optional(),
+  deviceFirmwareVersion: z.string().max(256).nullable().optional(),
+}).strict().refine((value) => {
+  const hasId = value.targetConfigId !== null && value.targetConfigId !== undefined;
+  const hasRevision = value.targetConfigRevision !== null && value.targetConfigRevision !== undefined;
+  const hasTarget = value.targetId !== null && value.targetId !== undefined;
+  return hasId === hasRevision && hasRevision === hasTarget;
+}, "target configuration id, revision and target id must be provided together");
+export const debugSessionStartOutput = z.object({ sessionId: z.string().uuid(), executionId: z.string().uuid() }).strict();
+
 export const entityGetInput = operation.extend({ entityKey: z.string().min(1).max(128) }).strict();
 export const entityGetOutput = z.object({ entityKey: z.string(), value: entityValue, quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]), sourceTimestamp: z.string().datetime({ offset: true }).nullable(), ingestedAt: z.string().datetime({ offset: true }), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string() }).strict().nullable() }).strict().nullable();
 export const commandEnqueueInput = operation.extend({ command: z.string().min(1).max(256), args: z.array(commandArgument).max(256) }).strict();
@@ -167,6 +190,7 @@ export const managerToPluginContract = {
     listTargetConfigs: procedure(listTargetConfigsInput, listTargetConfigsOutput, ["debugger", "listTargetConfigs"]),
     storeArtifactChunk: procedure(artifactChunkInput, artifactChunkOutput, ["debugger", "storeArtifactChunk"]),
     listArtifacts: procedure(listArtifactsInput, listArtifactsOutput, ["debugger", "listArtifacts"]),
+    startSession: procedure(debugSessionStartInput, debugSessionStartOutput, ["debugger", "startSession"]),
   },
 };
 
@@ -220,6 +244,8 @@ export type ArtifactChunkInput = z.infer<typeof artifactChunkInput>;
 export type ArtifactChunkOutput = z.infer<typeof artifactChunkOutput>;
 export type ListArtifactsInput = z.infer<typeof listArtifactsInput>;
 export type ListArtifactsOutput = z.infer<typeof listArtifactsOutput>;
+export type DebugSessionStartInput = z.infer<typeof debugSessionStartInput>;
+export type DebugSessionStartOutput = z.infer<typeof debugSessionStartOutput>;
 export type UiDataInput = z.infer<typeof uiDataInput>;
 export type EntityGetOutput = z.infer<typeof entityGetOutput>;
 export type EntityGetInput = z.infer<typeof entityGetInput>;

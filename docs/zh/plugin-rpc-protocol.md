@@ -329,6 +329,13 @@ expiry 或 plugin disable 后立即拒绝新调用。
 这不是通用 workflow 或永久 plugin service token。具体 procedure 与 schema 在第一个远程
 debugger 纵切中冻结，详见 `soulinjector-remote-debugger-plugin-plan.md`。
 
+远程 debugger 的第一版启动链路使用专用的 Manager→plugin `debugger.startSession` RPC：Human
+API 只把已认证的 project/user/device/case 和输入快照交给 Manager；Manager 创建 execution，
+再把原始 execution token 作为一次性字段传给同一 installation/version 的 plugin。plugin 只把
+`execution_ref` 写入自己的 session，不得持久化原始 token；Human API、Browser、通用
+`context.plugins.callScoped` 和 plugin-to-plugin procedure 都不能获得该 token。该 bootstrap
+成功后只返回 execution/session 摘要，长时 pause/cancel/take-over 仍需单独的受权入口。
+
 ## 8. 用户上下文与 `/plugins/*`
 
 Human API 是用户权限权威：

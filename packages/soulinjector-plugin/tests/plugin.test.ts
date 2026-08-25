@@ -93,6 +93,55 @@ describe("SoulInjector plugin", () => {
     expect(created).toEqual([{ projectId: saved.projectId, targetUnitRef: "unit-42", title: "Overheating probe", createdBy: saved.createdBy }]);
   });
 
+  test("creates a private session from a manager-only execution handoff without persisting the token", async () => {
+    const created: unknown[] = [];
+    const sessionId = "00000000-0000-4000-8000-000000000006";
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      createDebugSession: async (input) => {
+        created.push(input);
+        return {
+          id: sessionId,
+          caseId: input.caseId,
+          soulcloudDeviceRef: input.soulcloudDeviceRef,
+          executionRef: input.executionRef ?? null,
+          state: "active",
+          pluginVersion: input.pluginVersion,
+          manifestHash: input.manifestHash,
+          deviceFirmwareVersion: input.deviceFirmwareVersion ?? null,
+          targetConfigId: input.targetConfigId ?? null,
+          targetConfigRevision: input.targetConfigRevision ?? null,
+          targetId: input.targetId ?? null,
+          artifactId: input.artifactId ?? null,
+          startedBy: input.startedBy,
+          controller: null,
+          startedAt: saved.createdAt,
+          endedAt: null,
+        };
+      },
+    });
+    const result = await plugin.startDebugSession!({
+      operationId: "operation",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      deviceId: saved.installationId,
+      userId: saved.createdBy,
+      pluginVersion: "0.1.0",
+      manifestHash: saved.sha256,
+      executionId: "00000000-0000-4000-8000-000000000007",
+      executionToken: "execution-token-that-must-not-be-persisted-1234567890",
+      caseId: saved.id,
+      targetConfigId: saved.id,
+      targetConfigRevision: saved.revision,
+      targetId: "fixture",
+      artifactId: null,
+      deviceFirmwareVersion: null,
+    }, { signal: AbortSignal.timeout(1000) });
+    expect(result).toEqual({ sessionId, executionId: "00000000-0000-4000-8000-000000000007" });
+    expect(created[0]).not.toHaveProperty("executionToken");
+    expect(created[0]).toMatchObject({ executionRef: "00000000-0000-4000-8000-000000000007", targetConfigId: saved.id, targetConfigRevision: 1, targetId: "fixture" });
+  });
+
   test("renders private debugger session summaries without exposing execution credentials", async () => {
     const sessionId = "00000000-0000-4000-8000-000000000006";
     const plugin = createSoulInjectorPlugin({

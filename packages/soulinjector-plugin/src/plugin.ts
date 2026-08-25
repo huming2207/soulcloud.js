@@ -84,6 +84,7 @@ interface SoulInjectorPluginStore {
   listDebugSessions?(projectId: string, limit?: number): Promise<DebugSessionRecord[]>;
   appendDebugObservation?(input: AppendDebugObservationInput): Promise<unknown>;
   updateDebugSessionState?(input: UpdateDebugSessionStateInput): Promise<DebugSessionRecord>;
+  createDebugSession?(input: Parameters<SoulInjectorRepository["createDebugSession"]>[0]): Promise<DebugSessionRecord>;
   getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null>;
   getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null>;
   listTargetConfigs?(installationId: string, projectId: string): Promise<TargetConfigSummary[]>;
@@ -202,6 +203,25 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
     configureTarget: async (input) => {
       const saved = await repository.saveTargetConfig({ installationId: input.installationId, projectId: input.projectId, createdBy: input.userId, yaml: input.yaml });
       return { configId: saved.id, revision: saved.revision, sha256: saved.sha256, targetCount: saved.config.targets.length };
+    },
+    startDebugSession: async (input) => {
+      if (!repository.createDebugSession) throw new Error("debug session persistence is not available");
+      const session = await repository.createDebugSession({
+        installationId: input.installationId,
+        projectId: input.projectId,
+        caseId: input.caseId,
+        soulcloudDeviceRef: input.deviceId,
+        executionRef: input.executionId,
+        pluginVersion: input.pluginVersion,
+        manifestHash: input.manifestHash,
+        deviceFirmwareVersion: input.deviceFirmwareVersion,
+        targetConfigId: input.targetConfigId,
+        targetConfigRevision: input.targetConfigRevision,
+        targetId: input.targetId,
+        artifactId: input.artifactId,
+        startedBy: input.userId,
+      });
+      return { sessionId: session.id, executionId: input.executionId };
     },
     listTargetConfigs: async (input) => repository.listTargetConfigs
       ? repository.listTargetConfigs(input.installationId, input.projectId)

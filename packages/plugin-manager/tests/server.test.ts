@@ -26,6 +26,7 @@ const manifest: PluginManifest = {
 let renderedParams: unknown;
 let submittedAction: unknown;
 let actionTimeout: number | undefined;
+let sessionStartInput: unknown;
 const manager = {
   ready: async () => true,
   getManifest: () => manifest,
@@ -40,6 +41,10 @@ const manager = {
   encodeAction: async (input: { timeoutMs?: number }) => {
     actionTimeout = input.timeoutMs;
     return { batchId: randomUUID(), deviceCount: 1 };
+  },
+  startDebugSession: async (input: unknown) => {
+    sessionStartInput = input;
+    return { execution: { id: randomUUID() }, sessionId: randomUUID() };
   },
 } as unknown as PluginManager;
 const server = startPluginManagerServer({ hostname: "127.0.0.1", port: 0, serviceToken: "internal-service-token", manager, uiSessionSecret: secret });
@@ -151,5 +156,25 @@ describe("plugin SSR route", () => {
     });
     expect(response.status).toBe(200);
     expect(actionTimeout).toBe(4_000);
+  });
+
+  test("starts a debugger session without returning an execution token", async () => {
+    const response = await fetch(`${server.url}internal/plugins/debugger/sessions`, {
+      method: "POST",
+      headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+      body: JSON.stringify({
+        installationId,
+        projectId,
+        deviceId: randomUUID(),
+        userId: randomUUID(),
+        caseId: randomUUID(),
+        targetConfigId: randomUUID(),
+        targetConfigRevision: 1,
+        targetId: "fixture",
+      }),
+    });
+    expect(response.status).toBe(201);
+    expect(await response.json()).not.toHaveProperty("executionToken");
+    expect(sessionStartInput).toMatchObject({ installationId, projectId, caseId: expect.any(String), leaseMs: 60_000, ttlMs: 86_400_000 });
   });
 });

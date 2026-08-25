@@ -5,6 +5,7 @@ import {
   artifactChunkOutput,
   canonicalJson,
   configureTargetOutput,
+  debugSessionStartOutput,
   listTargetConfigsOutput,
   listArtifactsOutput,
   sha256BytesHex,
@@ -104,6 +105,16 @@ export interface PluginManagerOptions {
   retentionMaxBatches?: number;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
+
+const DEBUG_SESSION_CAPABILITIES = [
+  "execution.get",
+  "execution.renew_lease",
+  "execution.release",
+  "execution.complete",
+  "device.enqueue_command",
+  "device.get_command",
+  "device.cancel_command",
+] as const;
 
 export interface PluginEventStore {
   lease(limit: number, leaseMs: number): Promise<LeasedPluginEvent[]>;
@@ -216,7 +227,7 @@ export async function normalizeCommandArguments(value: unknown): Promise<Command
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
 
 interface ActiveOperation {
-  kind: "action" | "event" | "ui" | "configure" | "plugin-call";
+  kind: "action" | "event" | "ui" | "configure" | "plugin-call" | "debug-session-bootstrap";
   operationTokenHash: Buffer;
   connectionId: string;
   installationId: string;
@@ -379,6 +390,97 @@ export class PluginManager {
       ttlMs: input.ttlMs,
     });
     return { execution, executionToken };
+  }
+
+  /**
+   * Create the platform execution and pass its raw capability only through a
+   * one-shot Manager -> plugin bootstrap RPC. The caller receives no token.
+   */
+  async startDebugSession(input: {
+    installationId: string;
+    projectId: string;
+    deviceId: string;
+    userId: string;
+    caseId: string;
+    targetConfigId?: string | null;
+    targetConfigRevision?: number | null;
+    targetId?: string | null;
+    artifactId?: string | null;
+    deviceFirmwareVersion?: string | null;
+    leaseMs: number;
+    ttlMs: number;
+    timeoutMs?: number;
+  }): Promise<{ execution: DebugExecutionRecord; sessionId: string }> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    let started: { execution: DebugExecutionRecord; executionToken: string } | undefined;
+    let operationId: string | undefined;
+    try {
+      started = await this.startDebugExecution({
+        installationId: input.installationId,
+        projectId: input.projectId,
+        deviceId: input.deviceId,
+        userId: input.userId,
+        allowedCapabilities: DEBUG_SESSION_CAPABILITIES,
+        leaseMs: input.leaseMs,
+        ttlMs: input.ttlMs,
+      });
+      const execution = started.execution;
+      const installation = await this.options.prisma.pluginInstallation.findUnique({
+        where: { id: input.installationId },
+        select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
+      });
+      if (!installation || installation.state !== "enabled" || installation.projectId !== input.projectId) throw new Error("plugin installation changed while starting debug session");
+      const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
+      operationId = crypto.randomUUID();
+      const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+      const timeoutMs = input.timeoutMs ?? 30_000;
+      this.registerOperation(operationId, {
+        kind: "debug-session-bootstrap",
+        operationTokenHash: hashOperationToken(operationToken),
+        connectionId: connection.id,
+        installationId: installation.id,
+        projectId: installation.projectId,
+        pluginId: installation.pluginId,
+        pluginVersion: installation.pluginVersion,
+        manifestHash: installation.manifestHash.trim(),
+        deviceId: input.deviceId,
+        userId: input.userId,
+        deadline: performance.now() + timeoutMs,
+        state: "active",
+        reverseCalls: 0,
+        inFlightReverseCalls: 0,
+        stagedCommandCount: 0,
+        stagedCommandBytes: 0,
+        reverseSettledWaiters: new Set(),
+      });
+      const output = await connection.request("debugger.startSession", {
+        operationId,
+        operationToken,
+        installationId: installation.id,
+        projectId: installation.projectId,
+        deviceId: input.deviceId,
+        userId: input.userId,
+        pluginVersion: installation.pluginVersion,
+        manifestHash: installation.manifestHash.trim(),
+        executionId: execution.id,
+        executionToken: started.executionToken,
+        caseId: input.caseId,
+        ...(input.targetConfigId !== undefined ? { targetConfigId: input.targetConfigId } : {}),
+        ...(input.targetConfigRevision !== undefined ? { targetConfigRevision: input.targetConfigRevision } : {}),
+        ...(input.targetId !== undefined ? { targetId: input.targetId } : {}),
+        ...(input.artifactId !== undefined ? { artifactId: input.artifactId } : {}),
+        ...(input.deviceFirmwareVersion !== undefined ? { deviceFirmwareVersion: input.deviceFirmwareVersion } : {}),
+      }, timeoutMs);
+      const parsed = debugSessionStartOutput.parse(output);
+      if (parsed.executionId !== execution.id) throw new Error("plugin returned a different debug execution id");
+      await this.sealOperation(operationId);
+      return { execution, sessionId: parsed.sessionId };
+    } catch (error) {
+      if (started) await completeDebugExecution(this.options.prisma, started.execution.id, hashCapabilityToken(started.executionToken), "failed").catch(() => undefined);
+      throw error;
+    } finally {
+      if (operationId) this.finishOperation(operationId);
+    }
   }
 
   async getDebugExecution(executionId: string): Promise<DebugExecutionRecord | null> {

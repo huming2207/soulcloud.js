@@ -294,6 +294,27 @@ export interface ArtifactListInput {
 }
 export type ArtifactListHandler = (input: ArtifactListInput, context: { signal: AbortSignal }) => Promise<ArtifactSummary[]>;
 
+export interface DebugSessionStartInput {
+  operationId: string;
+  installationId: string;
+  projectId: string;
+  deviceId: string;
+  userId: string;
+  pluginVersion: string;
+  manifestHash: string;
+  executionId: string;
+  /** One-shot capability; the plugin must not persist this value. */
+  executionToken: string;
+  caseId: string;
+  targetConfigId?: string | null;
+  targetConfigRevision?: number | null;
+  targetId?: string | null;
+  artifactId?: string | null;
+  deviceFirmwareVersion?: string | null;
+}
+export interface DebugSessionStartOutput { sessionId: string; executionId: string; }
+export type DebugSessionStartHandler = (input: DebugSessionStartInput, context: { signal: AbortSignal }) => Promise<DebugSessionStartOutput>;
+
 export interface PluginCallContext {
   operationId: string;
   signal: AbortSignal;
@@ -321,6 +342,8 @@ export interface PluginDefinition {
   listTargetConfigs?: TargetConfigListHandler;
   storeArtifactChunk?: ArtifactChunkHandler;
   listArtifacts?: ArtifactListHandler;
+  /** Manager-only bootstrap for associating a private debugger session with an execution. */
+  startDebugSession?: DebugSessionStartHandler;
   /** Explicitly named procedures callable through Plugin Manager scope checks. */
   handleCall?: Record<string, PluginCallHandler>;
 }

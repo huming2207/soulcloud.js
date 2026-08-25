@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, artifactChunkInput, canonicalJson, deviceCancelInput, deviceCommandOutput, deviceEnqueueInput, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
+import { assertRpcValueBudget, artifactChunkInput, canonicalJson, debugSessionStartInput, debugSessionStartOutput, deviceCancelInput, deviceCommandOutput, deviceEnqueueInput, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
   test("sorts object keys without changing array order", async () => {
@@ -97,6 +97,30 @@ describe("debug execution RPC contract", () => {
       deviceCompletedAt: null,
       createdAt: new Date(0).toISOString(),
     }).success).toBe(true);
+  });
+});
+
+describe("debug session bootstrap RPC contract", () => {
+  const base = {
+    operationId: "session-operation",
+    operationToken: "session-operation-token-12345678901234567890",
+    deadlineMs: 1_000,
+    installationId: "00000000-0000-4000-8000-000000000001",
+    projectId: "00000000-0000-4000-8000-000000000002",
+    deviceId: "00000000-0000-4000-8000-000000000003",
+    userId: "00000000-0000-4000-8000-000000000004",
+    pluginVersion: "0.1.0",
+    manifestHash: "a".repeat(64),
+    executionId: "00000000-0000-4000-8000-000000000005",
+    executionToken: "session-execution-token-12345678901234567890",
+    caseId: "00000000-0000-4000-8000-000000000006",
+  };
+
+  test("requires target snapshot fields to be all-or-nothing", () => {
+    expect(debugSessionStartInput.safeParse({ ...base }).success).toBe(true);
+    expect(debugSessionStartInput.safeParse({ ...base, targetConfigRevision: 1 }).success).toBe(false);
+    expect(debugSessionStartInput.safeParse({ ...base, targetConfigId: "00000000-0000-4000-8000-000000000007", targetConfigRevision: 1, targetId: "fixture" }).success).toBe(true);
+    expect(debugSessionStartOutput.parse({ sessionId: base.executionId, executionId: base.executionId })).toEqual({ sessionId: base.executionId, executionId: base.executionId });
   });
 });
 

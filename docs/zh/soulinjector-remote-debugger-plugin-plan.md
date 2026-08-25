@@ -60,6 +60,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
   device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
   时钟。execution 私有 token 不写入数据库。
+- Human API 已有基础 `POST .../debugger/sessions` 入口；Manager 通过专用
+  `debugger.startSession` RPC 将一次性 execution token 交给同一 plugin，并只向 Human API 返回
+  execution/session 摘要。plugin 私有 session 保存 execution 引用但不保存原始 token；pause、
+  cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成。
 - oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`，以及
   受 execution capability 约束的 `context.devices.enqueueCommand`、`getCommand`、`cancelCommand`；
   Manager 会绑定父 operation、plugin/version、installation、device、token hash 和 capability
@@ -87,9 +91,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   行，不替产品决定完整 artifact 的 retention/deletion 策略。
 
 尚未实现：SoulInjector 设备固件 command handler、HTTPS 设备文件 gateway、Human API 的
-start/pause/cancel/take-over 与 plugin token handoff、LLM harness，以及独立 plugin-origin
-bootstrap/live channel。execution 绑定的 device enqueue/get/cancel 已有受限 reverse RPC 基础，
-但还没有 Human API 的长时启动入口和完整设备结果闭环。不要
+pause/cancel/take-over 与 plugin 重启后的 capability 恢复、LLM harness，以及独立 plugin-origin
+live channel。execution 绑定的 device enqueue/get/cancel 已有受限 reverse RPC 基础，Human API
+的 start/session bootstrap 基础已接入，但还没有完整设备结果闭环。不要
 把上述未完成项误认为已经可以进行生产远程诊断。
 
 ## 3. 已确认的架构决定
@@ -578,7 +582,8 @@ command intent。
 2. 实现 device control lease、renew/release/expiry；**已完成基础版本**；
 3. 增加 command origin/execution/plugin/user correlation；**已完成基础版本**；
 4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle 与 device command RPC；**已完成基础版本**；
-5. Human API 实现 start/pause/cancel/take-over 权限入口；**尚未完成，token handoff 方案仍需冻结**；
+5. Human API 实现 start/pause/cancel/take-over 权限入口；**start/session bootstrap 基础已完成，
+   pause/cancel/take-over 及重启恢复仍未完成**；
 6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试；**数据库
    集成测试已写入 CI，跨进程/真实 plugin reconnect 测试仍待补齐**。
 
@@ -602,8 +607,8 @@ MQTT/oRPC 热路径。
 
 工作：
 
-1. case 创建、device/target/artifact 关联；**已完成私有 case 创建基础、artifact→case 关联和
-   target-config revision 存储；execution 入口和 device/session 关联仍待实现**；
+1. case 创建、device/target/artifact 关联；**已完成私有 case 创建、artifact→case、target-config
+   revision 存储，以及 execution→session 输入快照关联基础**；
 2. SSR case/debugger 页面；**已完成最小 case 列表/创建、session 摘要和 target 配置页面；完整
    timeline、session 控制 UI 仍待实现**；
 3. 人工执行 identify/halt/read/reset/capture/close；
