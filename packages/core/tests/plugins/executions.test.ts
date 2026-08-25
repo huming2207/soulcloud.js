@@ -128,7 +128,16 @@ describe.serial("durable debug execution capability", () => {
   });
 
   test("rejects session bootstrap after the initiating user leaves the project", async () => {
-    const execution = await createDebugExecution(prisma, input(tokenHashG, 60_000, ["device.enqueue_command"], membershipRevocationDeviceId, membershipRevocationUserId));
+    const execution = await createDebugExecution(prisma, input(tokenHashG, 60_000, ["device.enqueue_command", "device.cancel_command"], membershipRevocationDeviceId, membershipRevocationUserId));
+    const queuedCommand = await enqueueDebugCommand(prisma, {
+      executionId: execution.id,
+      tokenHash: tokenHashG,
+      pluginId,
+      pluginVersion: "1.0.0",
+      manifestHash,
+      initiatingUserId: membershipRevocationUserId,
+      command: { cmd: "debug.identify", args: [] },
+    });
     await prisma.userProject.delete({ where: { userId_projectId: { userId: membershipRevocationUserId, projectId } } });
     try {
       expect(await getDebugExecutionCapability(prisma, execution.id, tokenHashG)).toBeNull();
@@ -142,6 +151,7 @@ describe.serial("durable debug execution capability", () => {
         pluginVersion: "1.0.0",
         manifestHash,
       })).rejects.toBeInstanceOf(DebugExecutionCapabilityError);
+      await expect(requestDebugCommandCancellation(prisma, execution.id, tokenHashG, queuedCommand.id)).rejects.toBeInstanceOf(DebugExecutionCapabilityError);
       await expect(enqueueDebugCommand(prisma, {
         executionId: execution.id,
         tokenHash: tokenHashG,

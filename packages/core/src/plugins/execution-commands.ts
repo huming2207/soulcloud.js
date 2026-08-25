@@ -292,37 +292,68 @@ export async function requestDebugCommandCancellation(
 ): Promise<DebugCommandRecord> {
   assertCapabilityInput(executionId, tokenHash);
   if (!UUID.test(commandId)) throw new RangeError("commandId must be a UUID");
-  const capability = await prisma.$queryRaw<Array<{ allowed_capabilities: unknown }>>`
-    SELECT allowed_capabilities
-    FROM debug_executions
-    WHERE id = ${executionId}::uuid
-      AND token_hash = ${tokenHash}
-      AND state IN ('active', 'paused', 'cancelling')
-      AND expires_at > CURRENT_TIMESTAMP
-    LIMIT 1
-  `;
-  if (!capability[0] || !capabilitiesOf(capability[0].allowed_capabilities).includes("device.cancel_command")) {
-    throw new DebugExecutionCapabilityError();
-  }
-  const rows = await prisma.$queryRaw<RawCommandRow[]>`
-    UPDATE device_commands c
-    SET cancel_requested_at = COALESCE(c.cancel_requested_at, CURRENT_TIMESTAMP),
-        state = CASE WHEN c.state = 'queued' THEN 'delivery_failed' ELSE c.state END,
-        lease_expires_at = CASE WHEN c.state = 'queued' THEN NULL ELSE c.lease_expires_at END
-    FROM debug_executions e
-    WHERE e.id = ${executionId}::uuid
-      AND e.token_hash = ${tokenHash}
-      AND e.state IN ('active', 'paused', 'cancelling')
-      AND e.expires_at > CURRENT_TIMESTAMP
-      AND e.allowed_capabilities ? 'device.cancel_command'
-      AND c.execution_id = e.id
-      AND c.id = ${commandId}::uuid
-      AND c.state IN ('queued', 'leased', 'broker_accepted')
-    RETURNING c.id, c.batch_id, c.device_id, c.sequence, c.state, c.result_code,
-      c.cancel_requested_at, c.broker_accepted_at, c.device_completed_at, c.created_at, c.payload
-  `;
-  if (rows[0]) return mapCommand(rows[0]);
-  const existing = await findDebugCommandWithCapability(prisma, executionId, tokenHash, commandId, "device.cancel_command");
-  if (!existing) throw new DebugExecutionCapabilityError("debug command is not available to this execution");
-  return existing;
+  return prisma.$transaction(async (tx) => {
+    const observed = await tx.debugExecution.findUnique({ where: { id: executionId }, select: { installationId: true, deviceId: true } });
+    if (!observed) throw new DebugExecutionCapabilityError();
+    const installationRows = await tx.$queryRaw<Array<{ id: string; project_id: string; state: string }>>`
+      SELECT id, project_id, state
+      FROM plugin_installations
+      WHERE id = ${observed.installationId}::uuid
+      FOR UPDATE
+    `;
+    const installation = installationRows[0];
+    if (!installation || installation.state !== "enabled") throw new DebugExecutionCapabilityError();
+    const deviceRows = await tx.$queryRaw<Array<{ id: string; project_id: string }>>`
+      SELECT id, project_id
+      FROM devices
+      WHERE id = ${observed.deviceId}::uuid
+      FOR UPDATE
+    `;
+    const device = deviceRows[0];
+    if (!device || device.project_id !== installation.project_id) throw new DebugExecutionCapabilityError();
+    const executionRows = await tx.$queryRaw<Array<{ id: string; installation_id: string; device_id: string; initiating_user_id: string; allowed_capabilities: unknown }>>`
+      SELECT id, installation_id, device_id, initiating_user_id, allowed_capabilities
+      FROM debug_executions
+      WHERE id = ${executionId}::uuid
+        AND token_hash = ${tokenHash}
+        AND state IN ('active', 'paused', 'cancelling')
+        AND expires_at > CURRENT_TIMESTAMP
+      FOR UPDATE
+    `;
+    const execution = executionRows[0];
+    if (!execution || execution.installation_id !== installation.id || execution.device_id !== device.id ||
+      !capabilitiesOf(execution.allowed_capabilities).includes("device.cancel_command")) {
+      throw new DebugExecutionCapabilityError();
+    }
+    const membershipRows = await tx.$queryRaw<Array<{ user_id: string }>>`
+      SELECT user_id
+      FROM user_projects
+      WHERE user_id = ${execution.initiating_user_id}::uuid
+        AND project_id = ${installation.project_id}::uuid
+      FOR SHARE
+    `;
+    if (!membershipRows[0]) throw new DebugExecutionCapabilityError("debug execution initiating user is no longer a project member");
+    const rows = await tx.$queryRaw<RawCommandRow[]>`
+      UPDATE device_commands c
+      SET cancel_requested_at = COALESCE(c.cancel_requested_at, CURRENT_TIMESTAMP),
+          state = CASE WHEN c.state = 'queued' THEN 'delivery_failed' ELSE c.state END,
+          lease_expires_at = CASE WHEN c.state = 'queued' THEN NULL ELSE c.lease_expires_at END
+      WHERE c.execution_id = ${execution.id}::uuid
+        AND c.id = ${commandId}::uuid
+        AND c.state IN ('queued', 'leased', 'broker_accepted')
+      RETURNING c.id, c.batch_id, c.device_id, c.sequence, c.state, c.result_code,
+        c.cancel_requested_at, c.broker_accepted_at, c.device_completed_at, c.created_at, c.payload
+    `;
+    if (rows[0]) return mapCommand(rows[0]);
+    const existingRows = await tx.$queryRaw<RawCommandRow[]>`
+      SELECT c.id, c.batch_id, c.device_id, c.sequence, c.state, c.result_code,
+        c.cancel_requested_at, c.broker_accepted_at, c.device_completed_at, c.created_at, c.payload
+      FROM device_commands c
+      WHERE c.execution_id = ${execution.id}::uuid
+        AND c.id = ${commandId}::uuid
+      LIMIT 1
+    `;
+    if (!existingRows[0]) throw new DebugExecutionCapabilityError("debug command is not available to this execution");
+    return mapCommand(existingRows[0]);
+  });
 }
