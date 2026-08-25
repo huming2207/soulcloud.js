@@ -72,13 +72,19 @@ function rpcError(code: string, message: string): never {
 
 /**
  * Enforce the deadline inside the plugin process as well as in the Manager.
- * The signal lets cooperative handlers stop their own work; the race ensures
- * an uncooperative handler cannot hold the runtime operation slot forever.
+ * The signal lets cooperative handlers stop their own work; the race lets the
+ * RPC-facing call return even when a handler ignores the signal. The operation
+ * limiter separately keeps its slot until that underlying work settles.
  */
-export async function runWithDeadline<T>(deadlineMs: number, operation: (signal: AbortSignal) => Promise<T> | T): Promise<T> {
+export async function runWithDeadline<T>(
+  deadlineMs: number,
+  operation: (signal: AbortSignal) => Promise<T> | T,
+  onSettled?: () => void,
+): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const work = Promise.resolve().then(() => operation(controller.signal));
+  if (onSettled) void work.then(onSettled, onSettled);
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       controller.abort();
@@ -239,9 +245,31 @@ interface RuntimeConnection {
   close(): Promise<void>;
 }
 
-interface OperationLimiter {
+export interface OperationLimiter {
   running: number;
   max: number;
+}
+
+/**
+ * Keep the limiter slot until the handler's promise really settles. A timeout
+ * only rejects the RPC-facing promise; it cannot stop a handler that ignores
+ * AbortSignal, so releasing the slot in the timeout path would allow the
+ * actual work to exceed the configured concurrency limit.
+ */
+export async function runWithOperationLimit<T>(
+  operations: OperationLimiter,
+  deadlineMs: number,
+  operation: (signal: AbortSignal) => Promise<T> | T,
+): Promise<T> {
+  if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+  operations.running += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    operations.running -= 1;
+  };
+  return runWithDeadline(deadlineMs, operation, release);
 }
 
 function createRuntimeConnection(
@@ -273,15 +301,13 @@ function createRuntimeConnection(
     action: {
       encode: implemented.action.encode.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
         const descriptor = definition.manifest.actions.find((action) => action.id === input.actionId);
         const encoder = definition.encodeAction?.[input.actionId];
         if (!descriptor || !encoder) rpcError("INVALID_ACTION_INPUT", "unknown action");
         const check = validateActionInput(descriptor.inputSchema, input.input);
         if (!check.ok) rpcError("INVALID_ACTION_INPUT", check.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; "));
-        operations.running += 1;
         try {
-          const args = await runWithDeadline(input.deadlineMs, (signal) => encoder(input.input, {
+          const args = await runWithOperationLimit(operations, input.deadlineMs, (signal) => encoder(input.input, {
             operationId: input.operationId,
             installationId: input.installationId,
             projectId: input.projectId,
@@ -293,8 +319,10 @@ function createRuntimeConnection(
           assertRpcValueBudget(args, budget);
           return { command: descriptor.wire.command, args: commandWire(args), schemaVersion: descriptor.wire.schemaVersion };
         }
-        catch (error) { rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message); }
-        finally { operations.running -= 1; }
+        catch (error) {
+          if (error instanceof ORPCError) throw error;
+          rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+        }
       }),
     },
     plugin: {
@@ -309,10 +337,7 @@ function createRuntimeConnection(
         } catch (error) {
           rpcError("INVALID_EVENT_INPUT", (error as Error).message);
         }
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const result = await runWithDeadline(input.deadlineMs, async (signal) => {
+        const result = await runWithOperationLimit(operations, input.deadlineMs, async (signal) => {
             const execution = input.execution;
             const ctx = {
               operationId: input.operationId,
@@ -345,34 +370,30 @@ function createRuntimeConnection(
                 return rpcBinaryFromBlob(result);
               },
             };
-            return definition.onEvent!(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload, installation: input.installation, device: input.device, ...(execution ? { execution } : {}) });
-          });
-          const updates = result?.updates ?? [];
-          try {
-            validateEntityUpdates(profile.entities, updates);
-            assertRpcValueBudget(updates, budget);
-          } catch (error) {
-            rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
-          }
-          const wireOutput = {
-            updates: updates.map((update) => ({ ...update, value: entityValueToWire(update.value) })),
-            logs: result?.logs ?? [],
-          };
-          const parsed = eventOutputSchema.safeParse(wireOutput);
-          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
-          return parsed.data;
-        } finally { operations.running -= 1; }
+          return definition.onEvent!(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload, installation: input.installation, device: input.device, ...(execution ? { execution } : {}) });
+        });
+        const updates = result?.updates ?? [];
+        try {
+          validateEntityUpdates(profile.entities, updates);
+          assertRpcValueBudget(updates, budget);
+        } catch (error) {
+          rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message);
+        }
+        const wireOutput = {
+          updates: updates.map((update) => ({ ...update, value: entityValueToWire(update.value) })),
+          logs: result?.logs ?? [],
+        };
+        const parsed = eventOutputSchema.safeParse(wireOutput);
+        if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+        return parsed.data;
       }),
       call: implemented.plugin.call.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         const handler = definition.handleCall?.[input.procedure];
         if (!handler) rpcError("NOT_FOUND", "unknown plugin procedure");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const callInput = await rpcBinaryFromBlob(input.input);
-          assertRpcValueBudget(callInput, budget);
-          const result = await runWithDeadline(input.deadlineMs, (signal) => handler(callInput, {
+        const callInput = await rpcBinaryFromBlob(input.input);
+        assertRpcValueBudget(callInput, budget);
+        const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => handler(callInput, {
             operationId: input.operationId,
             signal,
             caller: input.caller,
@@ -381,10 +402,9 @@ function createRuntimeConnection(
               const nestedResult = await reverse.context.plugins.callScoped({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, pluginId, procedure, input: rpcBinaryToBlob(nestedInput) });
               return rpcBinaryFromBlob(nestedResult);
             },
-          }));
-          assertRpcValueBudget(result, budget);
-          return rpcBinaryToBlob(result);
-        } finally { operations.running -= 1; }
+        }));
+        assertRpcValueBudget(result, budget);
+        return rpcBinaryToBlob(result);
       }),
     },
     ui: {
@@ -392,51 +412,36 @@ function createRuntimeConnection(
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         const renderer = definition.render?.[input.routeId];
         if (!renderer) rpcError("NOT_FOUND", "unknown UI route");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => renderer(pluginUiInput({
+        const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => renderer(pluginUiInput({
             ...input,
             signal,
             callPlugin: (pluginId, procedure, callInput) => invokePlugin(input.operationId, input.operationToken, input.deadlineMs, pluginId, procedure, callInput),
-          })));
-          assertRpcValueBudget(result, budget);
-          const parsed = uiRenderOutputSchema.safeParse(result);
-          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
-          return parsed.data;
-        } finally {
-          operations.running -= 1;
-        }
+        })));
+        assertRpcValueBudget(result, budget);
+        const parsed = uiRenderOutputSchema.safeParse(result);
+        if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+        return parsed.data;
       }),
       handleAction: implemented.ui.handleAction.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         const actionHandler = definition.handleAction?.[input.routeId];
         if (!actionHandler) rpcError("NOT_FOUND", "unknown UI route");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => actionHandler(input.action, pluginUiInput({
+        const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => actionHandler(input.action, pluginUiInput({
             ...input,
             signal,
             callPlugin: (pluginId, procedure, callInput) => invokePlugin(input.operationId, input.operationToken, input.deadlineMs, pluginId, procedure, callInput),
-          })) as { redirect?: string; errors?: { field: string; message: string }[] });
-          assertRpcValueBudget(result, budget);
-          const parsed = uiActionOutputSchema.safeParse(result);
-          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
-          return parsed.data;
-        } finally {
-          operations.running -= 1;
-        }
+        })) as { redirect?: string; errors?: { field: string; message: string }[] });
+        assertRpcValueBudget(result, budget);
+        const parsed = uiActionOutputSchema.safeParse(result);
+        if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+        return parsed.data;
       }),
       asset: implemented.ui.asset.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         const asset = definition.assets?.[input.assetPath];
         const descriptor = definition.manifest.ui?.assets?.find((item) => item.path === input.assetPath);
         if (!asset || !descriptor) rpcError("NOT_FOUND", "unknown UI asset");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => asset({
+        const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => asset({
             requestId: input.requestId,
             installationId: input.installationId,
             projectId: input.projectId,
@@ -445,26 +450,21 @@ function createRuntimeConnection(
             assetPath: input.assetPath,
             signal,
             callPlugin: (pluginId, procedure, callInput) => invokePlugin(input.operationId, input.operationToken, input.deadlineMs, pluginId, procedure, callInput),
-          }));
-          if (result.contentType !== descriptor.contentType) rpcError("INVALID_PLUGIN_OUTPUT", "UI asset content type differs from its manifest");
-          if (await sha256BytesHex(result.body) !== descriptor.sha256) rpcError("INVALID_PLUGIN_OUTPUT", "UI asset bytes differ from its manifest hash");
-          assertRpcValueBudget(result, budget);
-          const parsed = uiAssetOutputSchema.safeParse({ ...result, body: new Blob([result.body]) });
-          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
-          return parsed.data;
-        } finally {
-          operations.running -= 1;
-        }
+        }));
+        if (result.contentType !== descriptor.contentType) rpcError("INVALID_PLUGIN_OUTPUT", "UI asset content type differs from its manifest");
+        if (await sha256BytesHex(result.body) !== descriptor.sha256) rpcError("INVALID_PLUGIN_OUTPUT", "UI asset bytes differ from its manifest hash");
+        assertRpcValueBudget(result, budget);
+        const parsed = uiAssetOutputSchema.safeParse({ ...result, body: new Blob([result.body]) });
+        if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+        return parsed.data;
       }),
     },
     debugger: {
       configureTarget: implemented.debugger.configureTarget.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         if (!definition.configureTarget) rpcError("NOT_FOUND", "target configuration is not supported by this plugin");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
         try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.configureTarget!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, yaml: input.yaml }, { signal }));
+          const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => definition.configureTarget!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, yaml: input.yaml }, { signal }));
           assertRpcValueBudget(result, budget);
           const parsed = configureTargetOutputSchema.safeParse(result);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
@@ -474,44 +474,27 @@ function createRuntimeConnection(
             rpcError("INVALID_TARGET_CONFIG", error instanceof Error ? error.message : String(error));
           }
           throw error;
-        } finally {
-          operations.running -= 1;
         }
       }),
       listTargetConfigs: implemented.debugger.listTargetConfigs.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         if (!definition.listTargetConfigs) rpcError("NOT_FOUND", "target configuration listing is not supported by this plugin");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.listTargetConfigs!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId }, { signal }));
-          assertRpcValueBudget(result, budget);
-          return listTargetConfigsOutputSchema.parse(result);
-        } finally {
-          operations.running -= 1;
-        }
+        const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => definition.listTargetConfigs!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId }, { signal }));
+        assertRpcValueBudget(result, budget);
+        return listTargetConfigsOutputSchema.parse(result);
       }),
       listArtifacts: implemented.debugger.listArtifacts.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         if (!definition.listArtifacts) rpcError("NOT_FOUND", "artifact listing is not supported by this plugin");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.listArtifacts!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId }, { signal }));
-          assertRpcValueBudget(result, budget);
-          return listArtifactsOutputSchema.parse(result);
-        } finally {
-          operations.running -= 1;
-        }
+        const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => definition.listArtifacts!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId }, { signal }));
+        assertRpcValueBudget(result, budget);
+        return listArtifactsOutputSchema.parse(result);
       }),
       startSession: implemented.debugger.startSession.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         if (!definition.startDebugSession) rpcError("NOT_FOUND", "debug session bootstrap is not supported by this plugin");
         if (input.pluginVersion !== definition.manifest.version || input.manifestHash !== manifestHash) rpcError("HANDSHAKE_MISMATCH", "plugin manifest snapshot mismatch");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.startDebugSession!({
+        const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => definition.startDebugSession!({
             operationId: input.operationId,
             installationId: input.installationId,
             projectId: input.projectId,
@@ -527,22 +510,16 @@ function createRuntimeConnection(
             targetId: input.targetId,
             artifactId: input.artifactId,
             deviceFirmwareVersion: input.deviceFirmwareVersion,
-          }, { signal }));
-          assertRpcValueBudget(result, budget);
-          const parsed = debugSessionStartOutputSchema.safeParse(result);
-          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
-          return parsed.data;
-        } finally {
-          operations.running -= 1;
-        }
+        }, { signal }));
+        assertRpcValueBudget(result, budget);
+        const parsed = debugSessionStartOutputSchema.safeParse(result);
+        if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+        return parsed.data;
       }),
       abortSession: implemented.debugger.abortSession.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         if (!definition.abortDebugSession) rpcError("NOT_FOUND", "debug session cleanup is not supported by this plugin");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.abortDebugSession!({
+        const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => definition.abortDebugSession!({
             operationId: input.operationId,
             installationId: input.installationId,
             projectId: input.projectId,
@@ -550,48 +527,36 @@ function createRuntimeConnection(
             executionId: input.executionId,
             sessionId: input.sessionId ?? null,
             reason: input.reason,
-          }, { signal }));
-          assertRpcValueBudget(result, budget);
-          const parsed = debugSessionAbortOutputSchema.safeParse(result);
-          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
-          return parsed.data;
-        } finally {
-          operations.running -= 1;
-        }
+        }, { signal }));
+        assertRpcValueBudget(result, budget);
+        const parsed = debugSessionAbortOutputSchema.safeParse(result);
+        if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+        return parsed.data;
       }),
       storeArtifactChunk: implemented.debugger.storeArtifactChunk.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         if (!definition.storeArtifactChunk) rpcError("NOT_FOUND", "artifact upload is not supported by this plugin");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
+        const chunk = await rpcBinaryFromBlob(input.chunk);
+        if (!(chunk instanceof Uint8Array)) rpcError("INVALID_EVENT_INPUT", "artifact chunk is not binary");
+        let result: unknown;
         try {
-          const chunk = await rpcBinaryFromBlob(input.chunk);
-          if (!(chunk instanceof Uint8Array)) rpcError("INVALID_EVENT_INPUT", "artifact chunk is not binary");
-          let result: unknown;
-          try {
-            result = await runWithDeadline(input.deadlineMs, (signal) => definition.storeArtifactChunk!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, uploadId: input.uploadId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset: input.offset, final: input.final, chunk }, { signal }));
-          } catch (error) {
-            const code = typeof error === "object" && error !== null && "code" in error
-              ? (error as { code?: unknown }).code
-              : undefined;
-            if (code === "INVALID_ARTIFACT_INPUT") rpcError("INVALID_ARTIFACT_INPUT", error instanceof Error ? error.message : String(error));
-            throw error;
-          }
-          assertRpcValueBudget(result, budget);
-          const parsed = artifactChunkOutputSchema.safeParse(result);
-          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
-          return parsed.data;
-        } finally {
-          operations.running -= 1;
+          result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => definition.storeArtifactChunk!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, uploadId: input.uploadId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset: input.offset, final: input.final, chunk }, { signal }));
+        } catch (error) {
+          const code = typeof error === "object" && error !== null && "code" in error
+            ? (error as { code?: unknown }).code
+            : undefined;
+          if (code === "INVALID_ARTIFACT_INPUT") rpcError("INVALID_ARTIFACT_INPUT", error instanceof Error ? error.message : String(error));
+          throw error;
         }
+        assertRpcValueBudget(result, budget);
+        const parsed = artifactChunkOutputSchema.safeParse(result);
+        if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+        return parsed.data;
       }),
       readArtifactChunk: implemented.debugger.readArtifactChunk.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         if (!definition.readArtifactChunk) rpcError("NOT_FOUND", "artifact read is not supported by this plugin");
-        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
-        operations.running += 1;
-        try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.readArtifactChunk!({
+        const result = await runWithOperationLimit(operations, input.deadlineMs, (signal) => definition.readArtifactChunk!({
             operationId: input.operationId,
             installationId: input.installationId,
             projectId: input.projectId,
@@ -599,17 +564,14 @@ function createRuntimeConnection(
             artifactId: input.artifactId,
             offset: input.offset,
             length: input.length,
-          }, { signal }));
-          const output = result.chunk instanceof Uint8Array
-            ? { ...result, chunk: new Blob([result.chunk]) }
-            : result;
-          assertRpcValueBudget(output, budget);
-          const parsed = artifactReadChunkOutputSchema.safeParse(output);
-          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
-          return parsed.data;
-        } finally {
-          operations.running -= 1;
-        }
+        }, { signal }));
+        const output = result.chunk instanceof Uint8Array
+          ? { ...result, chunk: new Blob([result.chunk]) }
+          : result;
+        assertRpcValueBudget(output, budget);
+        const parsed = artifactReadChunkOutputSchema.safeParse(output);
+        if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+        return parsed.data;
       }),
     },
   };
