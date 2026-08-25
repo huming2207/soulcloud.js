@@ -8,7 +8,7 @@ const profileId = "soulinjector-debugger";
 const CLIENT_BUNDLE = `document.querySelector('form')?.addEventListener('submit',()=>{const button=document.querySelector('button[type="submit"]');if(button instanceof HTMLButtonElement){button.disabled=true;button.textContent='Saving…';}});`;
 
 const targetRevision = { type: "integer" as const, required: true, min: 1, max: Number.MAX_SAFE_INTEGER };
-const artifactId = { type: "string" as const, required: true };
+const artifactId = { type: "string" as const, required: true, maxLength: 128 };
 
 const actions: PluginManifest["actions"] = [
   { id: "debug.identify", inputSchema: { targetConfigRevision: targetRevision }, wire: { command: SOULINJECTOR_COMMAND.identify, schemaVersion: 1 } },
@@ -64,7 +64,7 @@ const manifest = {
       id: "debugger",
       path: "/debugger",
       methods: ["GET", "POST"] as ("GET" | "POST")[],
-      actionSchema: { yaml: { type: "string" as const, required: true, title: "Target YAML", description: "Target architecture, chip and required debugger primitives" } },
+      actionSchema: { yaml: { type: "string" as const, required: true, maxLength: 65_536, title: "Target YAML", description: "Target architecture, chip and required debugger primitives" } },
     }],
     assets: [{ path: "/debugger/app.js", contentType: "text/javascript; charset=utf-8" }],
   },
@@ -135,7 +135,7 @@ function escapeHtml(value: string): string {
 }
 
 function configForm(input: { installationId: string; yaml: string }): string {
-  return `<main><h1>SoulInjector debugger</h1><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="262144" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets/debugger/app.js" defer></script></main>`;
+  return `<main><h1>SoulInjector debugger</h1><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets/debugger/app.js" defer></script></main>`;
 }
 
 export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {

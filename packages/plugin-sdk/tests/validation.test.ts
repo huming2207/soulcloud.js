@@ -75,6 +75,10 @@ describe("plugin manifest descriptor validation", () => {
     expect(() => validateManifest(manifest({ type: "number", min: 2, max: 1 }))).toThrow("min cannot exceed max");
     expect(() => validateManifest(manifest({ type: "boolean", enum: ["true"] }))).toThrow("enum for string fields");
     expect(() => validateManifest(manifest({ type: "integer", default: 1.5 }))).toThrow("invalid default");
+    expect(() => validateManifest(manifest({ type: "number", maxLength: 4 }))).toThrow("maxLength for string");
+    const stringManifest = manifest({ type: "string", maxLength: 4 });
+    const stringSchema = (stringManifest.actions[0] as { inputSchema: Record<string, unknown> }).inputSchema;
+    expect(validateActionInput(stringSchema as never, { value: "12345" })).toMatchObject({ ok: false });
   });
 });
 

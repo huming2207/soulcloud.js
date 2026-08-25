@@ -8,6 +8,7 @@ const field = z.object({
   enum: z.array(z.string().max(1024)).min(1).max(128).optional(),
   min: z.number().finite().optional(),
   max: z.number().finite().optional(),
+  maxLength: z.number().int().positive().max(65_536).optional(),
   title: z.string().max(256).optional(),
   description: z.string().max(2048).optional(),
   default: z.union([z.string(), z.number(), z.boolean()]).optional(),
@@ -104,6 +105,9 @@ function validateActionSchemaDeclaration(label: string, schema: ActionInputSchem
     if (!numeric && (rule.min !== undefined || rule.max !== undefined)) {
       throw new Error(`${label}.${key} can only declare min/max for numeric types`);
     }
+    if (rule.type !== "string" && rule.maxLength !== undefined) {
+      throw new Error(`${label}.${key} can only declare maxLength for string types`);
+    }
     if (rule.min !== undefined && rule.max !== undefined && rule.min > rule.max) {
       throw new Error(`${label}.${key} min cannot exceed max`);
     }
@@ -151,6 +155,7 @@ export function validateActionInput(schema: ActionInputSchema, input: unknown): 
     if (rule.enum && !rule.enum.includes(value as string)) failures.push({ field: key, error: "is not an allowed value" });
     if (typeof value === "number" && rule.min !== undefined && value < rule.min) failures.push({ field: key, error: `must be >= ${rule.min}` });
     if (typeof value === "number" && rule.max !== undefined && value > rule.max) failures.push({ field: key, error: `must be <= ${rule.max}` });
+    if (typeof value === "string" && rule.maxLength !== undefined && Buffer.byteLength(value) > rule.maxLength) failures.push({ field: key, error: `must be at most ${rule.maxLength} bytes` });
   }
   return failures.length ? { ok: false, failures } : { ok: true };
 }

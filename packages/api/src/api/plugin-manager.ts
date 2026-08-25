@@ -68,7 +68,7 @@ const bindingBody = z.object({ device_id: z.string().uuid(), profile_id: z.strin
 const actionBody = z.object({ device_id: z.string().uuid(), input: z.unknown() }).strict();
 const stateBody = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
 const migrateBody = z.object({ plugin_version: z.string().min(1).max(128), manifest_hash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown().optional() }).strict();
-const targetConfigBody = z.object({ yaml: z.string().min(1).max(262_144) }).strict();
+const targetConfigBody = z.object({ yaml: z.string().min(1).max(65_536) }).strict();
 const debuggerArtifactQuery = z.object({ kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), content_type: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)).default("application/octet-stream") }).strict();
 
 /** Human API is the only browser-facing authority for plugin metadata. */

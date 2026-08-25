@@ -31,6 +31,7 @@ export interface ActionInputField {
   enum?: string[];
   min?: number;
   max?: number;
+  maxLength?: number;
   title?: string;
   description?: string;
   default?: string | number | boolean;

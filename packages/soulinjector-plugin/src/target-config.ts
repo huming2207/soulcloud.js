@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MAX_TARGET_CONFIG_BYTES = 256 * 1024;
+export const MAX_TARGET_CONFIG_BYTES = 64 * 1024;
 
 /**
  * The primitive names are deliberately a small wire-level vocabulary. A

@@ -51,6 +51,6 @@ describe("SoulInjector target configuration", () => {
   });
 
   test("rejects an oversized document before parsing", () => {
-    expect(() => parseTargetConfigYaml(`${validYaml}\n#${"x".repeat(300_000)}`)).toThrow("exceeds");
+    expect(() => parseTargetConfigYaml(`${validYaml}\n#${"x".repeat(70_000)}`)).toThrow("exceeds");
   });
 });
