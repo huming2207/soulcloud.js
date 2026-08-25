@@ -1,6 +1,6 @@
 # SoulInjector 远程 Debugger Plugin 实施计划
 
-**状态**：目标产品与实施计划；尚未开始实现
+**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；设备固件、case/LLM 和长时 execution 尚未实现）
 **日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
 
@@ -9,7 +9,7 @@
 将 SoulInjector 做成一台可联网、可远程控制、可由人类工程师或 LLM 调试 agent 使用的
 Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 
-1. 研发调试：用户上传 ELF、固件和可选源码，远程诊断通过 SWD/UART 连接的目标 MCU，
+1. 研发调试：用户上传 ELF 或固件（source archive/VCS 留到后续阶段），远程诊断通过 SWD/UART 连接的目标 MCU，
    收集证据并生成修改建议；
 2. 跨境维修：海外非技术人员只负责按说明接线，设备自动开始初检；国内支持/研发人员和
    LLM 在同一维修案例中继续分析、接管设备并生成报告。
@@ -32,6 +32,27 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   的生命周期。应用代码不 spawn、kill 或 restart 容器。
 - 本计划不引入 Station、Agent 服务、设备侧 plugin runtime、第二套设备 RPC 或通用
   workflow/orchestration。本文中的 agent 只表示 plugin 内的 **LLM 调试 agent**。
+
+### 2.1 当前实现进度（2026-08-25）
+
+已提交的基础实现包括：
+
+- `packages/soulinjector-plugin` 独立 plugin package/image、manifest、profile、SSR 配置页和
+  最小 client bundle；
+- target architecture/chip、transport 和 required debugger primitives 的受限 YAML schema，
+  可通过 Human API/Plugin Manager 配置并在 plugin 私有 PostgreSQL 保存 revision；首批目标不
+  在代码中写死；
+- ELF/firmware 的大小、文件名、ELF magic、SHA-256 校验，以及 64 KiB 分块上传、私有
+  PostgreSQL `bytea` 最终存储；不使用 S3/object storage；
+- `debugger.configureTarget`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
+  路由和转发，不读取 plugin 私有业务表；
+- 高层 SoulInjector command/event schema 和 `requiresHumanApproval` action 元数据。当前
+  Human API 的人工 action 请求显式传递 approval；真正可审计的长期 approval/execution record
+  仍属于后续阶段。
+
+尚未实现：SoulInjector 设备固件 command handler、HTTPS 设备文件 gateway、case/session/report
+业务表、LLM harness、长时间 device lease，以及独立 plugin-origin bootstrap/live channel。不要
+把上述未完成项误认为已经可以进行生产远程诊断。
 
 ## 3. 已确认的架构决定
 
@@ -182,22 +203,18 @@ envelope 顶层发送 plugin/installation/project ID。
 
 ### 6.2 第一轮高层 command 候选
 
-精确名称、schema 和目标 MCU 支持矩阵必须在设备实现前冻结。候选能力：
+精确名称、schema 和目标 MCU 支持矩阵必须在设备实现前冻结。当前 plugin 代码已经声明并编码
+以下第一批高层命令；设备固件尚未实现，不能仅凭 manifest 认为设备支持：
 
 ```text
-debug.open
 debug.identify
 debug.halt
 debug.resume
 debug.reset
 debug.read_registers
 debug.read_memory
-debug.write_memory
-debug.set_breakpoint
-debug.clear_breakpoint
-debug.capture_uart
-debug.collect_snapshot
-debug.close
+debug.flash_write
+debug.start
 ```
 
 烧写功能继续复用或演进现有 erase/program/verify 能力，不因为 debugger plugin 建第二套下行
@@ -462,22 +479,22 @@ artifact reference。
 
 工作：
 
-1. 创建独立 SoulInjector plugin package/image；
+1. 创建独立 SoulInjector plugin package/image；**已完成基础版本**；
 2. 建立 manifest、profile、Action、Event 和 UI route；
-3. 建立私有 DB migration、case/session/artifact/observation/report 基础表；
+3. 建立私有 DB migration、target-config revision、artifact upload/chunk/bytea 基础表；case/session/observation/report 表留到后续；
 4. 接入 Plugin Manager handshake 和 health；
 5. Compose 开发部署加入 plugin 私有 DB，但不把 credential 给 Manager；
 6. 测试 plugin DB failure/crash 不影响 Manager/Broker/Human API。
 
-退出条件：可以创建纯云端 case，plugin 重启后状态恢复，Soulcloud DB 无产品 case 表。
+当前结果：target config 和 artifact 在 plugin 私有 DB 重启后可恢复；纯云端 case 尚未实现。
 
 ### 阶段 D2：设备联网与确定性 Debug Primitive
 
 工作：
 
-1. 将 SoulInjector 作为普通 Soulcloud Device 完成注册、认证、MQTT/WSS 和 HTTPS；
-2. 实现冻结的高层 debugger commands；
-3. 实现 target connected/progress/snapshot/finished events；
+1. 将 SoulInjector 作为普通 Soulcloud Device 完成注册、认证、MQTT/WSS 和 HTTPS；**设备侧未完成**；
+2. 实现冻结的高层 debugger commands；**plugin contract 已完成，设备 handler 未完成**；
+3. 实现 target connected/progress/snapshot/finished events；**plugin status/log schema 已完成，设备 event producer 未完成**；
 4. 实现 command 幂等、取消、本地 timeout 和安全 transport release；
 5. 使用有界静态/初始化期 buffer，避免业务热路径不必要 heap allocation；
 6. 验证断网、重投递、target 拔线和设备重启后的状态。
@@ -501,8 +518,8 @@ artifact reference。
 
 工作：
 
-1. 实现 ELF/firmware/source metadata 与 plugin 私有存储；
-2. 实现 Manager scoped artifact metadata/transfer capability；
+1. 实现 ELF/firmware metadata 与 plugin 私有存储；**已完成首版**；source metadata 留后续；
+2. 实现 Manager scoped artifact metadata/transfer capability；**已完成 plugin-to-Manager 分块转发基础**；
 3. 实现 Soulcloud HTTPS device transfer gateway；
 4. 实现大小、hash、streaming、临时文件清理和失败恢复；
 5. 大 snapshot/dump 上传后用 `/event` 通知；
@@ -528,8 +545,8 @@ MQTT/oRPC 热路径。
 
 工作：
 
-1. 扩展 manifest UI asset 声明和 handshake capability；
-2. Manager 实现 asset fetch/hash/MIME/cache/独立 origin；
+1. 扩展 manifest UI asset 声明和 handshake capability；**已完成受限 asset RPC/manifest 基础**；
+2. Manager 实现 asset fetch/hash/MIME/cache/独立 origin；**已完成 MIME/cache/代理基础；hash/独立 origin bootstrap 尚未完成**；
 3. 实现 Human API 一次性 bootstrap 和 plugin-origin session；
 4. 实现 Browser ↔ Manager live channel 与 plugin oRPC stream/call；
 5. 实现 terminal、progress、register/memory 和多人观察 UI；
@@ -595,16 +612,18 @@ MQTT/oRPC 热路径。
 
 ## 15. 实现前仍需产品负责人确认
 
-以下选择会改变 wire、权限或部署，实施者不能自行决定：
+以下选择仍会改变 wire、权限或部署，实施者不能自行决定：
 
-1. 首批支持的 target architecture/chip 与必需 debugger primitive；
-2. 第一版输入只含 ELF/firmware，还是允许 source archive/VCS integration；
-3. 哪些 destructive operation 可由 LLM 自动执行，哪些必须人工逐次批准；
-4. plugin 私有 blob 使用数据库、本地 volume 还是现有外部存储；
-5. Soulcloud transfer gateway 采用 push staging 还是受控 pull proxy；
-6. plugin UI 独立 origin 的具体域名、bootstrap 和 CSRF 方案；
-7. case/artifact/LLM trace/report 的 retention 与客户删除语义；
-8. 是否需要同时在线多个 plugin version 处理长时间未结束的历史 case。
+1. 首批 target architecture/chip 具体值（代码保留 YAML 配置接口，不替产品选择）；
+2. Soulcloud transfer gateway 采用 push staging 还是受控 pull proxy；
+3. plugin UI 独立 origin 的具体域名、bootstrap 和 CSRF 方案；
+4. case/artifact/LLM trace/report 的 retention 与客户删除语义；
+5. 是否需要同时在线多个 plugin version 处理长时间未结束的历史 case。
+
+已确认且不再阻塞当前实现的决定：第一版输入为 ELF/firmware，source archive/VCS 后置；所有
+destructive operation 均需人工逐次批准；plugin 私有 blob 先存独立 PostgreSQL `bytea`，不
+引入 S3/object storage。target architecture/chip 的具体选择仍由产品负责人决定，但必须通过
+配置接口完成，不能由实施者擅自冻结。
 
 当前每台 Soulcloud Device 只能绑定一个 plugin installation。SoulInjector 第一版只使用一个
 SoulInjector plugin，因此不要求先修改为多 plugin fan-out；出现第二个真实消费方时再确认语义。

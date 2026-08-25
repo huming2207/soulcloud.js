@@ -267,11 +267,11 @@ scoped plugin-to-plugin 和更完整的 UI catalog 仍待后续阶段补齐。
 
 ## 阶段 6：Plugin UI MVP
 
-**状态：SSR 传输纵切已完成，产品 MVP 未完成。** Human API 能签发短期 path-scoped HttpOnly
-session cookie，Manager 能验签并转发有界 HTML fragment；当前只有真实 WebSocket 集成测试，
-尚无部署示例 React plugin 页面，`context.ui.getData` 也没有生产 handler。目标产品已确认需要
-content-hashed client bundle 和 Manager 代理的实时 UI channel；RSC 与 Manager 进程内执行
-plugin code 仍不在范围内。
+**状态：SSR 与 client asset 传输基础纵切已完成，产品 MVP 未完成。** Human API 能签发短期
+path-scoped HttpOnly session cookie，Manager 能验签并转发有界 HTML fragment；manifest/contract/
+runtime 已有 `ui.asset`，并通过 Manager 同源代理一个最小 client bundle。当前 bundle 尚未做
+content hash，独立 plugin-origin bootstrap、`context.ui.getData` 和实时 UI channel 仍未完成。
+RSC 与 Manager 进程内执行 plugin code 仍不在范围内。
 
 ### Session 与路由
 

@@ -119,6 +119,7 @@ plugin.handleEvent
 action.encode
 ui.render
 ui.handleAction
+ui.asset
 ```
 
 ### 5.1 `plugin.handleEvent`
@@ -200,12 +201,14 @@ interface PluginSsrMeta {
 shell、CSP 和错误页。plugin 不能设置 cookie、CORS、CSP、redirect target 或任意响应 header；
 允许的 title/status/cache metadata 仍由 Manager 校验。
 
-当前基础纵切不传 client bundle、不 hydration。表单提交进入 Manager 的 `/plugins/*` action
-route，再调用 `ui.handleAction`。该 procedure 返回 redirect intent、validation errors 或重新
-渲染所需状态，不能直接绕过 Human API 权限创建 Soulcloud 副作用。
+当前 SSR 基础纵切已经支持受限 `ui.asset` procedure；表单提交进入 Manager 的 `/plugins/*`
+action route，再调用 `ui.handleAction`。该 procedure 返回 redirect intent、validation errors
+或重新渲染所需状态，不能直接绕过 Human API 权限创建 Soulcloud 副作用。当前 asset 已有路径、
+MIME、Blob 大小和同源代理校验，但 content hash、独立 origin bootstrap 和 live channel 尚未
+实现完整生产闭环。
 
 目标协议允许 manifest 声明 immutable、content-hashed JavaScript/CSS asset。Manager 按需从
-plugin 获取有界 Blob，校验路径、MIME、大小和 hash 后缓存，并只从 plugin UI origin 的
+plugin 获取有界 Blob，校验路径、MIME、大小和（后续加入的）hash 后缓存，并只从 plugin UI origin 的
 `/plugins/{installation}/assets/{hash}/...` 返回。该 origin 必须与 Human Web/API origin
 分离，不能读取主站浏览器存储或携带主站 refresh/access token。Browser 不直连 plugin；
 Manager 不执行 bundle。动态 UI 使用由 Manager 终止并鉴权的
@@ -269,7 +272,7 @@ SSR plugin 需要 Soulcloud 数据时使用 `context.ui.getData`，由 Manager �
 
 ## 7. Operation capability
 
-每次 `handleEvent`、`action.encode`、`ui.render` 或 `ui.handleAction` 创建 active operation，
+每次 `handleEvent`、`action.encode`、`ui.render`、`ui.handleAction` 或 `ui.asset` 创建 active operation，
 至少保存 connection、plugin/version、installation/project、可选 device/user、monotonic
 deadline、reverse budget、staged effects 和 active/sealed/discarded 状态。
 
