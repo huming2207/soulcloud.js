@@ -222,6 +222,7 @@ function publicError(message: string, status: number, publicCode: string): Error
 export async function normalizeCommandArguments(value: unknown): Promise<CommandArgument[]> {
   if (!Array.isArray(value) || value.length > 256) throw new Error("command arguments must be an array of at most 256 items");
   const result: CommandArgument[] = [];
+  const names = new Set<string>();
   for (const argument of value) {
     if (!argument || typeof argument !== "object" || Array.isArray(argument)) {
       throw new Error("each command argument must be an object");
@@ -230,6 +231,8 @@ export async function normalizeCommandArguments(value: unknown): Promise<Command
     if (typeof record.name !== "string" || record.name.length < 1 || record.name.length > 256 || !Object.prototype.hasOwnProperty.call(record, "value")) {
       throw new Error("each command argument must contain a bounded name and value");
     }
+    if (names.has(record.name)) throw new Error(`command argument ${record.name} is duplicated`);
+    names.add(record.name);
     const raw = record.value;
     const commandValue = raw instanceof Blob ? new Uint8Array(await raw.arrayBuffer()) : raw;
     if (commandValue !== null && typeof commandValue !== "string" && typeof commandValue !== "bigint" && typeof commandValue !== "boolean" && !(typeof commandValue === "number" && Number.isFinite(commandValue)) && !(commandValue instanceof Uint8Array)) {

@@ -26,5 +26,6 @@ describe("plugin command argument boundary", () => {
     await expect(normalizeCommandArguments({ name: "not-an-array", value: 1 })).rejects.toThrow("must be an array");
     await expect(normalizeCommandArguments([{ name: "", value: 1 }])).rejects.toThrow("bounded name");
     await expect(normalizeCommandArguments([{ name: "missing" }])).rejects.toThrow("bounded name");
+    await expect(normalizeCommandArguments([{ name: "same", value: 1 }, { name: "same", value: 2 }])).rejects.toThrow("duplicated");
   });
 });
