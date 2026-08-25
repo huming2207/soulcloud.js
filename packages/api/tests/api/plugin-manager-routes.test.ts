@@ -18,6 +18,7 @@ let receivedArtifactListRequests: unknown[] = [];
 let receivedArtifactUploads: { path: string; headers: Record<string, string | null>; bytes: number }[] = [];
 let receivedSessionStartRequests: unknown[] = [];
 let receivedExecutionGetRequests: unknown[] = [];
+let receivedExecutionPauseRequests: unknown[] = [];
 let projectId: string;
 let installationId: string;
 let deviceId: string;
@@ -57,6 +58,11 @@ beforeAll(async () => {
       if (request.method === "POST" && url.pathname.endsWith("/executions/get")) {
         receivedExecutionGetRequests.push(await request.json());
         return new Response(JSON.stringify({ id: randomUUID(), installationId, deviceId, initiatingUserId: randomUUID(), pluginId: "test.plugin", pluginVersion: "1.0.0", manifestHash: "a".repeat(64), allowedCapabilities: [], state: "active", deviceLeaseExpiresAt: new Date(Date.now() + 60_000).toISOString(), expiresAt: new Date(Date.now() + 3_600_000).toISOString(), createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), finishedAt: null }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (request.method === "POST" && url.pathname.endsWith("/executions/pause")) {
+        const input = await request.json() as Record<string, unknown>;
+        receivedExecutionPauseRequests.push(input);
+        return new Response(JSON.stringify({ id: input.executionId, installationId, deviceId, initiatingUserId: input.userId, pluginId: "test.plugin", pluginVersion: "1.0.0", manifestHash: "a".repeat(64), allowedCapabilities: [], state: "paused", deviceLeaseExpiresAt: null, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), finishedAt: null }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ error: "not_found" }), {
         status: 404,
@@ -239,6 +245,23 @@ describe("GET /v1/plugin-installations/:id/debugger/executions/:executionId", ()
     const value = await res.json() as Record<string, unknown>;
     expect(value).not.toHaveProperty("executionToken");
     expect(receivedExecutionGetRequests).toEqual([{ executionId, installationId, projectId, userId: expect.any(String) }]);
+  });
+});
+
+describe("POST /v1/plugin-installations/:id/debugger/executions/:executionId/pause", () => {
+  test("forwards the authenticated user scope without exposing credentials", async () => {
+    const executionId = randomUUID();
+    const res = await app.handle(
+      new Request(`http://localhost/v1/plugin-installations/${installationId}/debugger/executions/${executionId}/pause`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${accessToken}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const value = await res.json() as Record<string, unknown>;
+    expect(value).toMatchObject({ id: executionId, state: "paused", deviceLeaseExpiresAt: null });
+    expect(value).not.toHaveProperty("tokenHash");
+    expect(receivedExecutionPauseRequests).toEqual([{ executionId, installationId, projectId, userId: expect.any(String) }]);
   });
 });
 

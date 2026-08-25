@@ -104,6 +104,7 @@ const configureTargetSchema = z.object({ installationId: z.string().uuid(), proj
 const listTargetConfigsSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const listArtifactsSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const getDebugExecutionSchema = z.object({ executionId: z.string().uuid(), installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid() }).strict();
+const pauseDebugExecutionSchema = z.object({ executionId: z.string().uuid(), installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid() }).strict();
 const startDebugSessionSchema = z.object({
   installationId: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -460,6 +461,10 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
           const input = parseBody(getDebugExecutionSchema, body);
           const execution = await options.manager.getDebugExecutionForScope(input);
           return execution ? json(200, execution) : json(404, { error: "not_found", message: "debug execution not found" });
+        }
+        if (url.pathname === "/internal/plugins/debugger/executions/pause") {
+          const input = parseBody(pauseDebugExecutionSchema, body);
+          return json(200, await options.manager.pauseDebugExecutionForUser(input));
         }
         if (url.pathname === "/internal/plugins/debugger/sessions") {
           const input = parseBody(startDebugSessionSchema, body);

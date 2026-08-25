@@ -745,6 +745,37 @@ export class PluginManager {
     return released;
   }
 
+  /**
+   * Pause a debugger execution from the Human API's authenticated user scope.
+   * This is deliberately the same lease-release operation used by the plugin
+   * UI: it stops new cloud-side device control, but does not claim that an
+   * already broker-accepted command has stopped on the hardware.
+   */
+  async pauseDebugExecutionForUser(input: {
+    executionId: string;
+    installationId: string;
+    projectId: string;
+    userId: string;
+  }): Promise<DebugExecutionRecord> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    if (!UUID.test(input.executionId) || !UUID.test(input.installationId) || !UUID.test(input.projectId) || !UUID.test(input.userId)) {
+      throw publicError("debug execution scope must contain UUIDs", 400, "invalid_request");
+    }
+    const execution = await this.getDebugExecutionForScope(input);
+    if (!execution) throw publicError("debug execution is not available to this user", 404, "not_found");
+    if (execution.initiatingUserId !== input.userId) {
+      throw publicError("only the execution initiating user can pause this execution", 403, "forbidden");
+    }
+    const cached = this.executionTokens.get(execution.id);
+    if (!cached || cached.installationId !== execution.installationId || cached.deviceId !== execution.deviceId || cached.expiresAt <= Date.now()) {
+      this.forgetExecutionCapability(execution.id);
+      throw publicError("debug execution capability is no longer available", 409, "conflict");
+    }
+    const paused = await releaseDebugExecution(this.options.prisma, execution.id, hashCapabilityToken(cached.token));
+    this.forgetExecutionDeviceScope(execution.id);
+    return paused;
+  }
+
   /** Renew an execution lease from the same human-scoped plugin UI session. */
   async renewDebugExecutionFromUiSession(
     session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
