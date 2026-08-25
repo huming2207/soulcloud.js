@@ -50,6 +50,7 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   PostgreSQL `bytea` 最终存储；不使用 S3/object storage；
 - `debugger.configureTarget`、`debugger.listTargetConfigs`、`debugger.listArtifacts`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
   路由和转发，不读取 plugin 私有业务表；UI asset 已绑定 manifest SHA-256 并使用内容哈希路径；
+- artifact 上传要求 Human API 的 `Idempotency-Key`（UUID）贯穿 API → Plugin Manager → plugin 私库；响应丢失后用同一 key 重试会返回原 artifact，而不会重复创建；上传流还有可配置的绝对 wall-clock deadline，避免卡住的 body 或大量分块长期占用资源；
 - SSR target 配置表单对非法 YAML 给出受限错误状态；详细 schema 校验仍由 plugin 私有 parser 执行，Human API
   路径返回 400，不把用户提交的原文拼进 redirect 或页面错误信息；
 - 高层 SoulInjector command/event schema 和 `requiresHumanApproval` action 元数据；动作编码
@@ -403,7 +404,7 @@ hash，并检查 connection/plugin/version/installation/device/expiry/allowed ca
 - plugin 请求 device transfer 时，Manager 验证 execution/device/artifact scope；
 - Device 使用短期 HTTPS capability，绑定 device、execution、artifact、direction、size/hash；
 - 支持流式处理、Content-Length 上限、SHA-256 和失败清理；
-- 分块上传使用客户端提供的 `uploadId` 做幂等键；最终提交后在短期过期窗口内保留完成结果，
+- 分块上传使用客户端提供的 `uploadId`（Human API 对应 `Idempotency-Key`）做幂等键；最终提交后在短期过期窗口内保留完成结果，
   响应丢失时重试同一 `uploadId` 必须返回同一个 artifact，而不能重新创建或破坏上传；
 - 弱网需要时支持 Range/resume，但在有真实大文件纵切后再实现；
 - MVP 的 plugin 私有 blob 固定使用独立 PostgreSQL `bytea`，不使用 local spool、S3 或其他对象存储；
