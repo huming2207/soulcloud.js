@@ -36,6 +36,8 @@ const tokenHashD = "e".repeat(64);
 const tokenHashE = "f".repeat(64);
 const tokenHashF = "1".repeat(64);
 const tokenHashG = "2".repeat(64);
+const tokenHashH = "3".repeat(64);
+const tokenHashI = "4".repeat(64);
 let installationId: string;
 
 beforeAll(async () => {
@@ -122,6 +124,7 @@ describe.serial("durable debug execution capability", () => {
       manifestHash,
     })).toMatchObject({ id: execution.id, state: "active" });
     await expect(createDebugExecution(prisma, input(tokenHashB))).rejects.toBeInstanceOf(DebugExecutionConflictError);
+    await completeDebugExecution(prisma, execution.id, tokenHashA, "completed");
   });
 
   test("rejects session bootstrap after the initiating user leaves the project", async () => {
@@ -155,12 +158,13 @@ describe.serial("durable debug execution capability", () => {
   });
 
   test("renews, releases and completes using the raw-token hash", async () => {
-    const renewed = await renewDebugExecutionLease(prisma, await executionIdFor(tokenHashA), tokenHashA, 10_000);
+    const renewable = await createDebugExecution(prisma, input(tokenHashH));
+    const renewed = await renewDebugExecutionLease(prisma, renewable.id, tokenHashH, 10_000);
     expect(renewed.state).toBe("active");
-    const released = await releaseDebugExecution(prisma, renewed.id, tokenHashA);
+    const released = await releaseDebugExecution(prisma, renewed.id, tokenHashH);
     expect(released.state).toBe("paused");
     expect(released.deviceLeaseExpiresAt).toBeNull();
-    expect(await getDebugExecutionCapability(prisma, released.id, tokenHashA)).not.toBeNull();
+    expect(await getDebugExecutionCapability(prisma, released.id, tokenHashH)).not.toBeNull();
 
     const second = await createDebugExecution(prisma, input(tokenHashB));
     await expect(completeDebugExecution(prisma, second.id, tokenHashC, "completed")).rejects.toThrow("invalid or expired");
@@ -244,12 +248,12 @@ describe.serial("durable debug execution capability", () => {
     expect(cancelledWithoutReadCapability.cancelRequestedAt).not.toBeNull();
     await completeDebugExecution(prisma, noReadCapability.id, tokenHashF, "failed");
 
-    const invalidated = await createDebugExecution(prisma, input("2".repeat(64), 60_000, ["device.enqueue_command"]));
+    const invalidated = await createDebugExecution(prisma, input(tokenHashI, 60_000, ["device.enqueue_command"]));
     await setPluginInstallationState(prisma, installationId, "disabled");
     expect((await prisma.debugExecution.findUniqueOrThrow({ where: { id: invalidated.id } })).state).toBe("failed");
     await expect(revalidateDebugSessionExecution(prisma, {
       executionId: invalidated.id,
-      tokenHash: "2".repeat(64),
+      tokenHash: tokenHashI,
       installationId,
       projectId,
       deviceId,
@@ -260,8 +264,3 @@ describe.serial("durable debug execution capability", () => {
     await setPluginInstallationState(prisma, installationId, "enabled");
   });
 });
-
-async function executionIdFor(tokenHash: string): Promise<string> {
-  const execution = await prisma.debugExecution.findUniqueOrThrow({ where: { tokenHash } });
-  return execution.id;
-}
