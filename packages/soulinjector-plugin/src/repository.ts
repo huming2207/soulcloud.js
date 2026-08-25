@@ -844,18 +844,6 @@ export class SoulInjectorRepository {
     }
   }
 
-  async getArtifact(id: string, installationId: string, projectId: string): Promise<(DebugArtifactRecord & { bytes: Uint8Array }) | null> {
-    const result = await this.pool.query<QueryResultRow>(
-      `SELECT * FROM ${schema}.debug_artifacts WHERE id = $1 AND installation_id = $2 AND project_id = $3`,
-      [id, installationId, projectId],
-    );
-    const row = result.rows[0];
-    if (!row) return null;
-    const record = asArtifactRecord(row);
-    if (!Buffer.isBuffer(row.content)) throw new Error("private plugin database returned invalid artifact bytes");
-    return { ...record, bytes: new Uint8Array(row.content.buffer, row.content.byteOffset, row.content.byteLength) };
-  }
-
   async readArtifactChunk(id: string, installationId: string, projectId: string, offset: number, length: number): Promise<ReadArtifactChunkOutput | null> {
     if (!UUID.test(id) || !UUID.test(installationId) || !UUID.test(projectId)) throw new RangeError("artifact scope must be UUIDs");
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > 64 * 1024 * 1024) throw new RangeError("artifact offset is invalid");
