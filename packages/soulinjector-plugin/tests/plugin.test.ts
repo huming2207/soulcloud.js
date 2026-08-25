@@ -39,6 +39,12 @@ describe("SoulInjector plugin", () => {
     const plugin = createSoulInjectorPlugin(store());
     const args = await plugin.encodeAction!["debug.read_memory"]!({ targetConfigRevision: 3, targetId: "fixture", address: 4096, length: 32 }, { operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, deviceId: saved.installationId, userId: saved.createdBy });
     expect(args).toEqual([{ targetConfigRevision: 3 }, { targetId: "fixture" }, { architecture: "cortex-m" }, { chip: "fixture" }, { transport: "swd" }, { requiredPrimitives: "identify" }, { address: 4096 }, { length: 32 }]);
+    expect(plugin.manifest.actions.find((action) => action.id === "debug.read_memory")?.inputSchema).toMatchObject({
+      architecture: { type: "string" },
+      chip: { type: "string" },
+      transport: { type: "string", enum: ["swd", "uart"] },
+      requiredPrimitives: { type: "string" },
+    });
   });
 
   test("does not encode a target from another project or missing revision", async () => {

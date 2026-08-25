@@ -16,7 +16,17 @@ const MAX_OBSERVATION_DATA_CHARS = 2_048;
 
 const targetRevision = { type: "integer" as const, required: true, min: 1, max: Number.MAX_SAFE_INTEGER };
 const targetId = { type: "string" as const, required: true, maxLength: 64 };
-const targetSelection = { targetConfigRevision: targetRevision, targetId };
+// These optional fields are output-side target snapshots. The encoder ignores
+// user-supplied values and always reloads them from the selected immutable
+// target-config revision before sending a device command.
+const targetSelection = {
+  targetConfigRevision: targetRevision,
+  targetId,
+  architecture: { type: "string" as const, maxLength: 64 },
+  chip: { type: "string" as const, maxLength: 128 },
+  transport: { type: "string" as const, enum: ["swd", "uart"] },
+  requiredPrimitives: { type: "string" as const, maxLength: 2_048 },
+};
 
 const actions: PluginManifest["actions"] = [
   { id: "debug.identify", inputSchema: targetSelection, wire: { command: SOULINJECTOR_COMMAND.identify, schemaVersion: 1 } },
