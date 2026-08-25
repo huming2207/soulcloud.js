@@ -103,6 +103,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   的 user/project/installation scope，严格校验 case、Soulcloud Device、target-config 三元组和
   artifact 引用，Manager 负责 execution capability、设备 lease、并发冲突和 plugin bootstrap。
   页面不会接触主站 JWT，也不会让 plugin 直接获得 execution token。
+- 当前 execution 发起人可以在同一个 plugin-origin debugger 页面显式释放自己的 device lease；该
+  路由只使用 Manager 进程内尚未过期的原始 capability，不能由其他 project member 或 plugin
+  reverse RPC 代替 take-over。Manager 重启后不会从数据库恢复原始 token，因此旧页面只能得到
+  冲突并重新启动一个人工 session。
 - Plugin Manager 在每次 SSR、asset、UI action 和 plugin-origin session 创建前同时复核
   `plugin_installation` 快照与 `user_projects` membership；用户被移出 project 后，尚未过期的旧
   UI cookie 也会立即失效。
@@ -710,8 +714,9 @@ MQTT/oRPC 热路径。
    revision 存储，以及 execution→session 输入快照关联基础**；
 2. SSR case/debugger 页面；**已完成最小 case 列表/创建、plugin-origin session 创建入口、session
    摘要、installation-scoped observation timeline、target 配置页面和基于 plugin-origin session
-   的人工 action 控件；session 控制闭环和实时状态 UI 仍待实现**；
-3. 人工执行 identify/halt/read/reset/capture/close；
+   的人工 action 控件，以及由 execution 发起人触发的 lease release；session 控制闭环和实时状态
+   UI 仍待实现**；
+3. 人工执行 identify/halt/read/reset/capture/close，并能在需要时释放当前 device lease；
 4. command timeline、observation、错误与报告草稿；**报告草稿/修订/定稿基础、受限 command
    timeline 和失败/最新错误告警视图已完成**；
 5. overseas guided view 和国内工程师 take-over；
