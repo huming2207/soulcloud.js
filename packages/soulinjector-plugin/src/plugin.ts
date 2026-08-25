@@ -33,6 +33,8 @@ if(actionForm instanceof HTMLFormElement)actionForm.addEventListener('submit',su
 const releaseButton=document.getElementById('debug-release-execution');
 async function releaseDebugExecution(){if(!(releaseButton instanceof HTMLButtonElement))return;const executionId=releaseButton.dataset.executionId;if(typeof executionId!=='string'||executionId.length===0){setActionStatus('The selected session has no active execution lease.');return;}releaseButton.disabled=true;setActionStatus('Releasing device lease…');try{const response=await fetch('/plugins/'+encodeURIComponent(artifactInstallation)+'/debugger/executions/'+encodeURIComponent(executionId)+'/release',{method:'POST'});if(!response.ok){setActionStatus('Lease release failed ('+response.status+').');return;}setActionStatus('Device lease released.');location.reload();}catch{setActionStatus('Lease release request failed.');}finally{releaseButton.disabled=false;}}
 if(releaseButton instanceof HTMLButtonElement)releaseButton.addEventListener('click',()=>{void releaseDebugExecution();});
+async function renewDebugExecutionLease(){if(!(releaseButton instanceof HTMLButtonElement))return;const executionId=releaseButton.dataset.executionId;if(typeof executionId!=='string'||executionId.length===0)return;try{const response=await fetch('/plugins/'+encodeURIComponent(artifactInstallation)+'/debugger/executions/'+encodeURIComponent(executionId)+'/renew',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({leaseMs:60000})});if(!response.ok){setActionStatus('Device lease renewal failed ('+response.status+').');if(actionForm instanceof HTMLFormElement)for(const control of actionForm.querySelectorAll('button'))control.disabled=true;releaseButton.disabled=true;}}catch{setActionStatus('Device lease renewal request failed.');}}
+if(releaseButton instanceof HTMLButtonElement)window.setInterval(()=>{void renewDebugExecutionLease();},20000);
 const sessionForm=document.getElementById('debug-session-create');
 const sessionStatus=document.getElementById('debug-session-status');
 function setSessionStatus(message){if(sessionStatus instanceof HTMLElement)sessionStatus.textContent=message;}
@@ -42,8 +44,8 @@ const commandTimeline=document.getElementById('debug-command-timeline');
 async function refreshCommandTimeline(){if(!(commandTimeline instanceof HTMLElement))return;const executionId=commandTimeline.dataset.executionId;if(typeof executionId!=='string'||executionId.length===0)return;try{const response=await fetch('/plugins/'+encodeURIComponent(artifactInstallation)+'/debugger/executions/'+encodeURIComponent(executionId)+'/commands');if(!response.ok)return;const commands=await response.json();if(!Array.isArray(commands))return;const list=document.createElement('ol');for(const command of commands){if(!command||typeof command!=='object')continue;const item=document.createElement('li');const record=command;item.textContent='batch '+String(record.batchId??'')+' — '+String(record.state??'')+(record.resultCode===null||record.resultCode===undefined?'':' — result '+String(record.resultCode));list.appendChild(item);}commandTimeline.replaceChildren(list);}catch{} }
 if(commandTimeline instanceof HTMLElement){void refreshCommandTimeline();window.setInterval(()=>{void refreshCommandTimeline();},5000);}
 `;
-const CLIENT_BUNDLE_PATH = "/debugger/app.7cb731b6fe819bf29c7c12aa9f3d387ce300e1a882ed888bd25a68538d72cfd9.js";
-const CLIENT_BUNDLE_SHA256 = "7cb731b6fe819bf29c7c12aa9f3d387ce300e1a882ed888bd25a68538d72cfd9";
+const CLIENT_BUNDLE_PATH = "/debugger/app.db8d651029e2a93d2fcea3485a8b1eee6a2dcdd7b25da5ef321d0f87c93943c7.js";
+const CLIENT_BUNDLE_SHA256 = "db8d651029e2a93d2fcea3485a8b1eee6a2dcdd7b25da5ef321d0f87c93943c7";
 const MAX_TIMELINE_OBSERVATIONS = 16;
 const MAX_OBSERVATION_DATA_CHARS = 2_048;
 

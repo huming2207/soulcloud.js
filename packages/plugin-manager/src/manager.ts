@@ -708,6 +708,35 @@ export class PluginManager {
     return released;
   }
 
+  /** Renew an execution lease from the same human-scoped plugin UI session. */
+  async renewDebugExecutionFromUiSession(
+    session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
+    executionId: string,
+    leaseMs: number,
+  ): Promise<DebugExecutionRecord> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    if (!UUID.test(executionId)) throw publicError("debug execution ID must be a UUID", 400, "invalid_request");
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1_000 || leaseMs > 900_000) throw publicError("debug execution lease is invalid", 400, "invalid_request");
+    await this.assertUiSessionCurrent(session as PluginUiSession);
+    const execution = await this.getDebugExecutionForScope({
+      executionId,
+      installationId: session.installationId,
+      projectId: session.projectId,
+    });
+    if (!execution || execution.pluginId !== session.pluginId || execution.pluginVersion !== session.pluginVersion || execution.manifestHash !== session.manifestHash) {
+      throw publicError("debug execution is not available to this plugin UI session", 404, "not_found");
+    }
+    if (execution.initiatingUserId !== session.sub) {
+      throw publicError("only the execution initiating user can renew this lease", 403, "forbidden");
+    }
+    const cached = this.executionTokens.get(execution.id);
+    if (!cached || cached.installationId !== execution.installationId || cached.deviceId !== execution.deviceId || cached.expiresAt <= Date.now()) {
+      this.forgetExecutionCapability(execution.id);
+      throw publicError("debug execution capability is no longer available", 409, "conflict");
+    }
+    return renewDebugExecutionLease(this.options.prisma, execution.id, hashCapabilityToken(cached.token), leaseMs);
+  }
+
   async renewDebugExecution(executionId: string, executionToken: string, leaseMs: number): Promise<DebugExecutionRecord> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     return renewDebugExecutionLease(this.options.prisma, executionId, hashCapabilityToken(executionToken), leaseMs);

@@ -143,6 +143,7 @@ const pluginUiDeviceActionSchema = z.object({
   executionId: z.string().uuid().optional(),
   timeoutMs: z.number().int().min(100).max(30_000).optional(),
 }).strict();
+const pluginUiExecutionRenewSchema = z.object({ leaseMs: z.number().int().min(1_000).max(900_000).default(60_000) }).strict();
 const pluginUiStartDebugSessionSchema = z.object({
   deviceId: z.string().uuid(),
   caseId: z.string().uuid(),
@@ -259,6 +260,13 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
           try {
             const executionId = parseInstallationId(url.pathname.slice(uiExecutionReleasePrefix.length, -"/release".length));
             return json(200, await options.manager.releaseDebugExecutionFromUiSession(session, executionId));
+          } catch (error) { return failure(error); }
+        }
+        if (request.method === "POST" && url.pathname.startsWith(uiExecutionReleasePrefix) && url.pathname.endsWith("/renew")) {
+          try {
+            const executionId = parseInstallationId(url.pathname.slice(uiExecutionReleasePrefix.length, -"/renew".length));
+            const input = parseBody(pluginUiExecutionRenewSchema, await requestJson(request));
+            return json(200, await options.manager.renewDebugExecutionFromUiSession(session, executionId, input.leaseMs));
           } catch (error) { return failure(error); }
         }
         const uiDebuggerSessionPath = `/plugins/${session.installationId}/debugger/sessions`;
