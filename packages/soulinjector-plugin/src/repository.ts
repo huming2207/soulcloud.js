@@ -199,13 +199,16 @@ export class SoulInjectorRepository {
   }
 
   async migrate(): Promise<void> {
-    await this.pool.query("BEGIN");
+    const client = await this.pool.connect();
     try {
-      await this.pool.query(MIGRATION);
-      await this.pool.query("COMMIT");
+      await client.query("BEGIN");
+      await client.query(MIGRATION);
+      await client.query("COMMIT");
     } catch (error) {
-      await this.pool.query("ROLLBACK").catch(() => undefined);
+      await client.query("ROLLBACK").catch(() => undefined);
       throw error;
+    } finally {
+      client.release();
     }
   }
 
