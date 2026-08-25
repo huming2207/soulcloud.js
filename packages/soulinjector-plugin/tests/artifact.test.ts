@@ -36,10 +36,18 @@ describe("SoulInjector artifact envelope", () => {
     const bytes = new Uint8Array(64);
     bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
     const header = new DataView(bytes.buffer);
+    header.setUint32(20, 1, true);
     header.setUint16(52, 64, true);
     header.setUint16(54, 56, true);
     header.setUint16(56, 1, true);
     header.setBigUint64(32, 64n, true);
     expect(() => validateArtifact({ kind: "elf", filename: "firmware.elf", bytes })).toThrow("program header table is outside");
+  });
+
+  test("rejects an unsupported ELF header version", () => {
+    const bytes = new Uint8Array(64);
+    bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
+    new DataView(bytes.buffer).setUint32(20, 2, true);
+    expect(() => validateArtifact({ kind: "elf", filename: "firmware.elf", bytes })).toThrow("header version is unsupported");
   });
 });

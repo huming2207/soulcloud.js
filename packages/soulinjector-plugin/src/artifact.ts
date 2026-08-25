@@ -83,6 +83,7 @@ function parseElfHeader(bytes: Uint8Array): ElfHeader {
   const u16 = (offset: number): number => view.getUint16(offset, littleEndian);
   const u32 = (offset: number): number => view.getUint32(offset, littleEndian);
   const u64 = (offset: number): bigint => view.getBigUint64(offset, littleEndian);
+  if (u32(20) !== 1) throw new ArtifactValidationError("ELF header version is unsupported");
   const machine = u16(18);
   const entryAddress = elfClass === ELF_CLASS_32 ? BigInt(u32(24)) : u64(24);
   const programHeaderOffset = elfClass === ELF_CLASS_32 ? BigInt(u32(28)) : u64(32);
