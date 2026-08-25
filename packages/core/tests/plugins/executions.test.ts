@@ -7,6 +7,7 @@ import {
   DebugExecutionConflictError,
   expireDebugExecutions,
   getDebugExecutionCapability,
+  revalidateDebugSessionExecution,
   releaseDebugExecution,
   renewDebugExecutionLease,
 } from "../../src/plugins/executions";
@@ -98,6 +99,16 @@ describe("durable debug execution capability", () => {
     });
     expect(execution.deviceLeaseExpiresAt).not.toBeNull();
     expect("tokenHash" in execution).toBe(false);
+    expect(await revalidateDebugSessionExecution(prisma, {
+      executionId: execution.id,
+      tokenHash: tokenHashA,
+      installationId,
+      projectId,
+      deviceId,
+      pluginId,
+      pluginVersion: "1.0.0",
+      manifestHash,
+    })).toMatchObject({ id: execution.id, state: "active" });
     await expect(createDebugExecution(prisma, input(tokenHashB))).rejects.toBeInstanceOf(DebugExecutionConflictError);
   });
 
@@ -193,6 +204,16 @@ describe("durable debug execution capability", () => {
     const invalidated = await createDebugExecution(prisma, input("2".repeat(64), 60_000, ["device.enqueue_command"]));
     await setPluginInstallationState(prisma, installationId, "disabled");
     expect((await prisma.debugExecution.findUniqueOrThrow({ where: { id: invalidated.id } })).state).toBe("failed");
+    await expect(revalidateDebugSessionExecution(prisma, {
+      executionId: invalidated.id,
+      tokenHash: "2".repeat(64),
+      installationId,
+      projectId,
+      deviceId,
+      pluginId,
+      pluginVersion: "1.0.0",
+      manifestHash,
+    })).rejects.toThrow("invalid or expired");
     await setPluginInstallationState(prisma, installationId, "enabled");
   });
 });

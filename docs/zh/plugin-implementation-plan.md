@@ -381,7 +381,9 @@ LLM state 或报告写入 Soulcloud PostgreSQL。
 
 当前 debugger 已有 Manager→plugin 的专用 `debugger.startSession` bootstrap：Human API 不接收
 execution token，plugin 私有 session 只保存 execution 引用和 target/artifact 输入快照。该
-bootstrap 不等于完整控制闭环；pause/cancel/take-over、设备固件 handler、HTTPS 文件入口和
+bootstrap 返回前会重新按 installation → device → binding 锁顺序验证 execution scope、数据库
+时钟 lease 及 installation 状态，避免生命周期并发变更后返回过期控制权。它仍不等于完整控制闭环；
+pause/cancel/take-over、设备固件 handler、HTTPS 文件入口和
 plugin 重启后的 capability 恢复仍按 debugger 计划后续阶段实施。
 
 ## 进入下一阶段前必须确认的语义

@@ -273,6 +273,107 @@ export async function getDebugExecutionCapability(
   return rows[0] ? mapExecution(rows[0]) : null;
 }
 
+export interface DebugSessionExecutionScope {
+  executionId: string;
+  tokenHash: string;
+  installationId: string;
+  projectId: string;
+  deviceId: string;
+  pluginId: string;
+  pluginVersion: string;
+  manifestHash: string;
+}
+
+/**
+ * Re-check the execution and its lifecycle scope after a plugin session
+ * bootstrap RPC. Lifecycle mutations lock installation -> device -> binding;
+ * use the same order here before reading the execution so a concurrent
+ * disable, migration or rebind cannot leave the caller with stale control.
+ */
+export async function revalidateDebugSessionExecution(
+  prisma: PrismaClient,
+  input: DebugSessionExecutionScope,
+): Promise<DebugExecutionRecord> {
+  if (
+    !UUID.test(input.executionId) ||
+    !UUID.test(input.installationId) ||
+    !UUID.test(input.projectId) ||
+    !UUID.test(input.deviceId) ||
+    !SHA256.test(input.tokenHash) ||
+    !SHA256.test(input.manifestHash)
+  ) {
+    throw new DebugExecutionCapabilityError();
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const installationRows = await tx.$queryRaw<Array<{
+      id: string;
+      project_id: string;
+      plugin_id: string;
+      plugin_version: string;
+      manifest_hash: string;
+      state: string;
+    }>>`
+      SELECT id, project_id, plugin_id, plugin_version, manifest_hash, state
+      FROM plugin_installations
+      WHERE id = ${input.installationId}::uuid
+      FOR UPDATE
+    `;
+    const installation = installationRows[0];
+    if (
+      !installation ||
+      installation.state !== "enabled" ||
+      installation.project_id !== input.projectId ||
+      installation.plugin_id !== input.pluginId ||
+      installation.plugin_version !== input.pluginVersion ||
+      installation.manifest_hash.trim() !== input.manifestHash
+    ) {
+      throw new DebugExecutionCapabilityError("debug execution scope is no longer valid");
+    }
+
+    const deviceRows = await tx.$queryRaw<Array<{ id: string; project_id: string }>>`
+      SELECT id, project_id
+      FROM devices
+      WHERE id = ${input.deviceId}::uuid
+      FOR UPDATE
+    `;
+    const device = deviceRows[0];
+    if (!device || device.project_id !== input.projectId) {
+      throw new DebugExecutionCapabilityError("debug execution device scope is no longer valid");
+    }
+
+    const bindingRows = await tx.$queryRaw<Array<{ installation_id: string }>>`
+      SELECT installation_id
+      FROM plugin_device_bindings
+      WHERE device_id = ${input.deviceId}::uuid
+      FOR UPDATE
+    `;
+    if (bindingRows[0]?.installation_id !== input.installationId) {
+      throw new DebugExecutionCapabilityError("debug execution device binding is no longer valid");
+    }
+
+    const executionRows = await tx.$queryRaw<RawExecutionRow[]>`
+      SELECT id, installation_id, device_id, initiating_user_id, plugin_id, plugin_version,
+        manifest_hash, allowed_capabilities, state, device_lease_expires_at, expires_at,
+        created_at, updated_at, finished_at
+      FROM debug_executions
+      WHERE id = ${input.executionId}::uuid
+        AND token_hash = ${input.tokenHash}
+        AND installation_id = ${input.installationId}::uuid
+        AND device_id = ${input.deviceId}::uuid
+        AND plugin_id = ${input.pluginId}
+        AND plugin_version = ${input.pluginVersion}
+        AND manifest_hash = ${input.manifestHash}
+        AND state = 'active'
+        AND expires_at > CURRENT_TIMESTAMP
+        AND device_lease_expires_at > CURRENT_TIMESTAMP
+      FOR UPDATE
+    `;
+    if (!executionRows[0]) throw new DebugExecutionCapabilityError();
+    return mapExecution(executionRows[0]);
+  });
+}
+
 export async function renewDebugExecutionLease(
   prisma: PrismaClient,
   executionId: string,

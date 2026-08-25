@@ -38,6 +38,7 @@ import {
   enqueueDebugCommand,
   expireDebugExecutions,
   getDebugExecutionCapability,
+  revalidateDebugSessionExecution,
   getDebugCommand,
   getDebugExecution,
   consumePluginUiGrant,
@@ -63,6 +64,7 @@ import {
   type BindDeviceInput,
   type CreateInstallationInput,
   type PrismaClient,
+  DebugExecutionCapabilityError,
 } from "@soulcloud/core";
 import { PluginConnection, type PluginConnectionOptions, type ReverseHandlers } from "./connection";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -483,7 +485,25 @@ export class PluginManager {
       const parsed = debugSessionStartOutput.parse(output);
       if (parsed.executionId !== execution.id) throw new Error("plugin returned a different debug execution id");
       await this.sealOperation(operationId);
-      return { execution, sessionId: parsed.sessionId };
+      let currentExecution: DebugExecutionRecord;
+      try {
+        currentExecution = await revalidateDebugSessionExecution(this.options.prisma, {
+          executionId: execution.id,
+          tokenHash: hashCapabilityToken(started.executionToken),
+          installationId: installation.id,
+          projectId: installation.projectId,
+          deviceId: input.deviceId,
+          pluginId: installation.pluginId,
+          pluginVersion: installation.pluginVersion,
+          manifestHash: installation.manifestHash.trim(),
+        });
+      } catch (error) {
+        if (error instanceof DebugExecutionCapabilityError) {
+          throw publicError("debug execution changed while starting debug session", 409, "conflict");
+        }
+        throw error;
+      }
+      return { execution: currentExecution, sessionId: parsed.sessionId };
     } catch (error) {
       if (started) await completeDebugExecution(this.options.prisma, started.execution.id, hashCapabilityToken(started.executionToken), "failed").catch(() => undefined);
       throw error;
