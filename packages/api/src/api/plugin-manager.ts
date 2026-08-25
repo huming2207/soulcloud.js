@@ -242,6 +242,27 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
         return result.value;
       } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
     })
+    .get("/v1/plugin-installations/:id/debugger/executions/:executionId", async ({ request, params, set }) => {
+      const user = await authenticateRequest(prisma, jwt, request);
+      if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installationId = z.string().uuid().safeParse(params.id);
+      const executionId = z.string().uuid().safeParse(params.executionId);
+      if (!installationId.success || !executionId.success) { set.status = 400; return { error: "invalid_request", message: "installation and execution IDs must be UUIDs" }; }
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId.data }, select: { projectId: true } });
+      if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
+      if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
+      if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
+      try {
+        const result = await callManager(options, "/internal/plugins/debugger/executions/get", {
+          executionId: executionId.data,
+          installationId: installationId.data,
+          projectId: installation.projectId,
+          userId: user.user.id,
+        });
+        set.status = result.status;
+        return result.value;
+      } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
+    })
     .post("/v1/plugin-installations/:id/debugger/artifacts", async ({ request, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }

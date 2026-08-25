@@ -64,6 +64,22 @@ const manager = {
     chunk: Uint8Array.of(4, 5, 6),
     final: true,
   }),
+  getDebugExecutionForScope: async () => ({
+    id: randomUUID(),
+    installationId,
+    deviceId: randomUUID(),
+    initiatingUserId: randomUUID(),
+    pluginId: manifest.id,
+    pluginVersion: manifest.version,
+    manifestHash: "a".repeat(64),
+    allowedCapabilities: [],
+    state: "active" as const,
+    deviceLeaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    finishedAt: null,
+  }),
   consumePluginUiGrant: async (nonce: string) => {
     if (consumedGrants.has(nonce)) return false;
     consumedGrants.add(nonce);
@@ -169,6 +185,16 @@ describe("plugin SSR route", () => {
       body: JSON.stringify({ installationId, projectId, userId: randomUUID(), artifactId, offset: 4, length: 8 }),
     });
     expect(unauthorized.status).toBe(401);
+  });
+
+  test("returns a scoped debug execution summary over the internal API", async () => {
+    const response = await fetch(`${server.url}internal/plugins/debugger/executions/get`, {
+      method: "POST",
+      headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+      body: JSON.stringify({ executionId: randomUUID(), installationId, projectId, userId: randomUUID() }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).not.toHaveProperty("tokenHash");
   });
 
   test("reports invalid plugin UI output as a 502 plugin error", async () => {

@@ -629,6 +629,15 @@ export class PluginManager {
     return getDebugExecution(this.options.prisma, executionId);
   }
 
+  async getDebugExecutionForScope(input: { executionId: string; installationId: string; projectId: string }): Promise<DebugExecutionRecord | null> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    const execution = await getDebugExecution(this.options.prisma, input.executionId);
+    if (!execution || execution.installationId !== input.installationId) return null;
+    const installation = await this.options.prisma.pluginInstallation.findUnique({ where: { id: input.installationId }, select: { projectId: true } });
+    if (!installation || installation.projectId !== input.projectId) return null;
+    return execution;
+  }
+
   async renewDebugExecution(executionId: string, executionToken: string, leaseMs: number): Promise<DebugExecutionRecord> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     return renewDebugExecutionLease(this.options.prisma, executionId, hashCapabilityToken(executionToken), leaseMs);

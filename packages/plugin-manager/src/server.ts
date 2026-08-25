@@ -100,6 +100,7 @@ const encodeActionSchema = z.object({ installationId: z.string().uuid(), userId:
 const configureTargetSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), yaml: z.string().min(1).max(65_536), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const listTargetConfigsSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const listArtifactsSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
+const getDebugExecutionSchema = z.object({ executionId: z.string().uuid(), installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid() }).strict();
 const startDebugSessionSchema = z.object({
   installationId: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -365,6 +366,11 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         if (url.pathname === "/internal/plugins/debugger/artifacts") {
           const input = parseBody(listArtifactsSchema, body);
           return json(200, await options.manager.listArtifacts(input));
+        }
+        if (url.pathname === "/internal/plugins/debugger/executions/get") {
+          const input = parseBody(getDebugExecutionSchema, body);
+          const execution = await options.manager.getDebugExecutionForScope(input);
+          return execution ? json(200, execution) : json(404, { error: "not_found", message: "debug execution not found" });
         }
         if (url.pathname === "/internal/plugins/debugger/sessions") {
           const input = parseBody(startDebugSessionSchema, body);
