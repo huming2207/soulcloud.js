@@ -320,6 +320,22 @@ describe("SoulInjector plugin", () => {
     expect(observationLimit).toBe(16);
   });
 
+  test("renders bounded target configuration revision metadata without YAML", async () => {
+    const plugin = createSoulInjectorPlugin(store());
+    const result = await plugin.render!["debugger"]!({
+      requestId: "request",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      user: { id: saved.createdBy, locale: "en", permissions: [] },
+      routeId: "debugger",
+      params: {},
+    });
+    expect(result.html).toContain("Saved revisions");
+    expect(result.html).toContain(`Revision ${saved.revision}`);
+    expect(result.html).toContain(saved.sha256);
+    expect(result.html).not.toContain("yaml_content");
+  });
+
   test("persists device observations idempotently by broker event id", async () => {
     const observations: unknown[] = [];
     const sessionStates: unknown[] = [];

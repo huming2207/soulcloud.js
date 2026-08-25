@@ -187,7 +187,7 @@ function observationData(value: unknown): string {
   return escapeHtml(serialized.length > MAX_OBSERVATION_DATA_CHARS ? `${serialized.slice(0, MAX_OBSERVATION_DATA_CHARS)}…` : serialized);
 }
 
-function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[]; selectedSession: DebugSessionRecord | null; observations: DebugObservationRecord[]; error?: string }): string {
+function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[]; selectedSession: DebugSessionRecord | null; observations: DebugObservationRecord[]; targetConfigs: TargetConfigSummary[]; error?: string }): string {
   const cases = input.cases.length === 0
     ? "<p>No debugger cases yet.</p>"
     : `<ul>${input.cases.map((item) => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(item.state)}${item.targetUnitRef ? ` — ${escapeHtml(item.targetUnitRef)}` : ""}</li>`).join("")}</ul>`;
@@ -199,8 +199,11 @@ function configForm(input: { installationId: string; yaml: string; cases: DebugC
     : input.observations.length === 0
       ? `<p>No observations recorded for session <code>${escapeHtml(input.selectedSession.id)}</code>.</p>`
       : `<ol>${input.observations.map((item) => `<li><time datetime="${escapeHtml(item.createdAt)}">${escapeHtml(item.createdAt)}</time> — <strong>${escapeHtml(item.source)}:${escapeHtml(item.kind)}</strong><pre>${observationData(item.structuredData)}</pre></li>`).join("")}</ol>`;
+  const targetConfigs = input.targetConfigs.length === 0
+    ? "<p>No target configuration revisions yet.</p>"
+    : `<ul>${input.targetConfigs.map((item) => `<li><strong>Revision ${item.revision}</strong> — ${item.targetCount} target(s) — <code>${escapeHtml(item.sha256)}</code> — created ${escapeHtml(item.createdAt)}</li>`).join("")}</ul>`;
   const error = input.error === "invalid_target_config" ? "<p role=\"alert\">Target configuration is invalid. Review the YAML schema and try again.</p>" : "";
-  return `<main><h1>SoulInjector debugger</h1>${error}<section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section><section><h2>Sessions</h2>${sessions}</section><section><h2>Session timeline</h2>${timeline}</section><section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
+  return `<main><h1>SoulInjector debugger</h1>${error}<section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section><section><h2>Sessions</h2>${sessions}</section><section><h2>Session timeline</h2>${timeline}</section><section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><h3>Saved revisions</h3>${targetConfigs}<form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
 }
 
 export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {
@@ -303,6 +306,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
         const saved = await repository.getLatestTargetConfig(input.installationId);
         const cases = repository.listDebugCases ? await repository.listDebugCases(input.projectId, 64) : [];
         const sessions = repository.listDebugSessions ? await repository.listDebugSessions(input.installationId, input.projectId, 64) : [];
+        const targetConfigs = repository.listTargetConfigs ? await repository.listTargetConfigs(input.installationId, input.projectId) : [];
         const selectedId = typeof input.params.session_id === "string" && isUuid(input.params.session_id) ? input.params.session_id : null;
         const selectedSession = selectedId && repository.getDebugSession
           ? await repository.getDebugSession(selectedId, input.installationId, input.projectId)
@@ -311,7 +315,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
           ? await repository.listDebugObservations(selectedSession.id, input.installationId, input.projectId, MAX_TIMELINE_OBSERVATIONS)
           : [];
         const error = typeof input.params.error === "string" ? input.params.error : undefined;
-        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions, selectedSession, observations, error }), title: "SoulInjector debugger", cache: "no-store" };
+        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions, selectedSession, observations, targetConfigs, error }), title: "SoulInjector debugger", cache: "no-store" };
       },
     },
     handleAction: {
