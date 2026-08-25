@@ -379,6 +379,11 @@ artifact transfer、client bundle 和实时 UI 按
 设备侧 plugin runtime 和通用 workflow/orchestration 的禁止，也不把 SoulInjector 产品 case、
 LLM state 或报告写入 Soulcloud PostgreSQL。
 
+当前 debugger 已有 Manager→plugin 的专用 `debugger.startSession` bootstrap：Human API 不接收
+execution token，plugin 私有 session 只保存 execution 引用和 target/artifact 输入快照。该
+bootstrap 不等于完整控制闭环；pause/cancel/take-over、设备固件 handler、HTTPS 文件入口和
+plugin 重启后的 capability 恢复仍按 debugger 计划后续阶段实施。
+
 ## 进入下一阶段前必须确认的语义
 
 以下事项会改变 schema 或部署路由，不能由实现者自行假设：
