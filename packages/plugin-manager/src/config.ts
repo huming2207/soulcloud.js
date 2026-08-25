@@ -23,7 +23,7 @@ const envSchema = z.object({
   PLUGIN_RPC_MAX_VALUE_DEPTH: z.coerce.number().int().positive().max(128).default(32),
   PLUGIN_RPC_MAX_VALUE_NODES: z.coerce.number().int().positive().max(1_000_000).default(4096),
   PLUGIN_RPC_MAX_ARRAY_ITEMS: z.coerce.number().int().positive().max(1_000_000).default(4096),
-  PLUGIN_RPC_MAX_STRING_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(65_536),
+  PLUGIN_RPC_MAX_STRING_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(512 * 1024),
   PLUGIN_RPC_MAX_BLOBS: z.coerce.number().int().positive().max(4096).default(16),
   PLUGIN_RPC_MAX_BLOB_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(65_536),
   PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(256 * 1024),

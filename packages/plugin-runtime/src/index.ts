@@ -31,7 +31,7 @@ const runtime = await startPluginRuntime(definition, {
     maxDepth: positiveInteger("PLUGIN_RPC_MAX_VALUE_DEPTH", 32, 128),
     maxNodes: positiveInteger("PLUGIN_RPC_MAX_VALUE_NODES", 4096, 1_000_000),
     maxArrayItems: positiveInteger("PLUGIN_RPC_MAX_ARRAY_ITEMS", 4096, 1_000_000),
-    maxStringBytes: positiveInteger("PLUGIN_RPC_MAX_STRING_BYTES", 65_536, 64 * 1024 * 1024),
+    maxStringBytes: positiveInteger("PLUGIN_RPC_MAX_STRING_BYTES", 512 * 1024, 64 * 1024 * 1024),
     maxBlobs: positiveInteger("PLUGIN_RPC_MAX_BLOBS", 16, 4096),
     maxBlobBytes: positiveInteger("PLUGIN_RPC_MAX_BLOB_BYTES", 65_536, 64 * 1024 * 1024),
     maxTotalBlobBytes: positiveInteger("PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES", 256 * 1024, 64 * 1024 * 1024),

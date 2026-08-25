@@ -258,7 +258,9 @@ export const DEFAULT_RPC_VALUE_BUDGET: Readonly<RpcValueBudget> = Object.freeze(
   maxDepth: 32,
   maxNodes: 4096,
   maxArrayItems: 4096,
-  maxStringBytes: 65_536,
+  // SSR pages may contain the bounded target-config editor and observation
+  // timeline in one response. Keep this below the default 1 MiB frame limit.
+  maxStringBytes: 512 * 1024,
   maxBlobs: 16,
   maxBlobBytes: 65_536,
   maxTotalBlobBytes: 256 * 1024,

@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, artifactChunkInput, canonicalJson, debugSessionStartInput, debugSessionStartOutput, deviceCancelInput, deviceCommandOutput, deviceEnqueueInput, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
+import { assertRpcValueBudget, artifactChunkInput, canonicalJson, DEFAULT_RPC_VALUE_BUDGET, debugSessionStartInput, debugSessionStartOutput, deviceCancelInput, deviceCommandOutput, deviceEnqueueInput, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
+  test("keeps the default string budget below the default frame budget", () => {
+    expect(DEFAULT_RPC_VALUE_BUDGET.maxStringBytes).toBe(512 * 1024);
+    expect(DEFAULT_RPC_VALUE_BUDGET.maxStringBytes).toBeLessThan(1024 * 1024);
+  });
+
   test("sorts object keys without changing array order", async () => {
     expect(canonicalJson({ z: 1, a: { y: true, x: "ok" }, list: [2, 1] })).toBe('{"a":{"x":"ok","y":true},"list":[2,1],"z":1}');
     expect(await sha256Hex(canonicalJson({ b: 1, a: 2 }))).toBe(await sha256Hex(canonicalJson({ a: 2, b: 1 })));
