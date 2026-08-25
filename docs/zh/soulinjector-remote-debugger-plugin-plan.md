@@ -52,8 +52,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - `debugger.configureTarget`、`debugger.listTargetConfigs`、`debugger.listArtifacts`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
   路由和转发，不读取 plugin 私有业务表；SSR 配置页展示受限的 target-config revision 和 ELF/firmware artifact 元数据摘要，但不回显 YAML 或 artifact 正文；UI asset 已绑定 manifest SHA-256 并使用内容哈希路径；
 - artifact 上传要求 Human API 的 `Idempotency-Key`（UUID）贯穿 API → Plugin Manager → plugin 私库；响应丢失后用同一 key 重试会返回原 artifact，而不会重复创建；上传流还有可配置的绝对 wall-clock deadline，避免卡住的 body 或大量分块长期占用资源；
-- SSR target 配置表单对非法 YAML 给出受限错误状态；详细 schema 校验仍由 plugin 私有 parser 执行，Human API
-  路径返回 400，不把用户提交的原文拼进 redirect 或页面错误信息；
+- SSR target 配置表单支持 textarea 和受限的 YAML 文件载入，对非法 YAML 给出受限错误状态；Human API
+  同一路由接受 JSON `{yaml}` 或原始 YAML 文本，详细 schema 校验仍由 plugin 私有 parser 执行，路径返回 400，
+  不把用户提交的原文拼进 redirect 或页面错误信息；
 - 高层 SoulInjector command/event schema 和 `requiresHumanApproval` action 元数据；动作编码
   会读取指定 installation/project 下的不可变 target-config revision，并把目标快照传给设备。
   当前
