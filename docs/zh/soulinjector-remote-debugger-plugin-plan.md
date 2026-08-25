@@ -224,7 +224,7 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   行，不替产品决定完整 artifact 的 retention/deletion 策略。
 
 尚未实现：SoulInjector 设备固件 command handler、HTTPS 设备文件 gateway、Human API 的
-pause/cancel/take-over 与 plugin 重启后的 capability 恢复、LLM harness，以及独立 plugin-origin
+cancel/take-over 与 plugin 重启后的 capability 恢复、LLM harness，以及独立 plugin-origin
 live channel。execution 绑定的 device enqueue/get/cancel 已有受限 reverse RPC 基础；设备终态事件
 关闭平台 execution 的插件侧同步已接入，但设备固件 command/result producer 和完整设备结果闭环
 仍未完成。不要把上述未完成项误认为已经可以进行生产远程诊断。
