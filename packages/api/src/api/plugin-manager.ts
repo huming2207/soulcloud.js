@@ -65,7 +65,7 @@ export function pluginManagerOperationTimeoutMs(requestTimeoutMs = 5_000): numbe
 
 const installationBody = z.object({ project_id: z.string().uuid(), plugin_id: z.string().min(1).max(128), plugin_version: z.string().min(1).max(128), manifest_hash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown().optional() }).strict();
 const bindingBody = z.object({ device_id: z.string().uuid(), profile_id: z.string().min(1).max(128), profile_version: z.number().int().positive() }).strict();
-const actionBody = z.object({ device_id: z.string().uuid(), input: z.unknown() }).strict();
+export const pluginActionRequestBody = z.object({ device_id: z.string().uuid(), input: z.unknown(), human_approved: z.boolean().optional().default(false) }).strict();
 const stateBody = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
 const migrateBody = z.object({ plugin_version: z.string().min(1).max(128), manifest_hash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown().optional() }).strict();
 const targetConfigBody = z.object({ yaml: z.string().min(1).max(65_536) }).strict();
@@ -136,7 +136,7 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .post("/v1/plugin-installations/:id/actions/:actionId", async ({ request, body, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
-      const parsed = actionBody.safeParse(body);
+      const parsed = pluginActionRequestBody.safeParse(body);
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
       const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
       const device = await prisma.device.findUnique({ where: { id: parsed.data.device_id }, select: { projectId: true } });
@@ -146,7 +146,7 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       try {
         const result = await callManager(options, "/internal/plugins/actions/encode", {
           installationId: params.id, userId: user.user.id, deviceId: parsed.data.device_id, actionId: params.actionId, input: parsed.data.input,
-          humanApproved: true,
+          humanApproved: parsed.data.human_approved,
           timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
         });
         set.status = result.status;
