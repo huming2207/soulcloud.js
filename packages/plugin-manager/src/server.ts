@@ -140,6 +140,7 @@ const readArtifactChunkSchema = z.object({
 const pluginUiDeviceActionSchema = z.object({
   deviceId: z.string().uuid(),
   input: z.unknown(),
+  executionId: z.string().uuid().optional(),
   timeoutMs: z.number().int().min(100).max(30_000).optional(),
 }).strict();
 const pluginUiStartDebugSessionSchema = z.object({
@@ -248,6 +249,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
               deviceId: input.deviceId,
               actionId: parsedActionId.data,
               actionInput: input.input,
+              executionId: input.executionId,
               timeoutMs: input.timeoutMs,
             }));
           } catch (error) { return failure(error); }

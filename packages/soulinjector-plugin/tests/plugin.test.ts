@@ -361,6 +361,7 @@ describe("SoulInjector plugin", () => {
     expect(result.html).toContain('id="debug-memory-address"');
     expect(result.html).toContain('id="debug-memory-length"');
     expect(result.html).toContain(`data-device-id="${session.soulcloudDeviceRef}"`);
+    expect(result.html).toContain(`data-execution-id="${session.executionRef}"`);
     expect(observationLimit).toBe(16);
   });
 

@@ -264,6 +264,7 @@ export function commandArgumentsToActionInput(args: readonly CommandArgument[]):
 }
 
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface ActiveOperation {
   kind: "action" | "event" | "ui" | "configure" | "plugin-call" | "debug-session-bootstrap";
@@ -730,10 +731,14 @@ export class PluginManager {
     deviceId: string;
     actionId: string;
     actionInput: unknown;
+    executionId?: string;
     humanApproved?: boolean;
     timeoutMs?: number;
   }): Promise<{ batchId: string; deviceCount: number }> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    if (input.executionId !== undefined && !UUID.test(input.executionId)) {
+      throw publicError("debug execution ID must be a UUID", 400, "invalid_request");
+    }
     const installation = await this.options.prisma.pluginInstallation.findUnique({
       where: { id: input.installationId },
       select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
@@ -839,6 +844,22 @@ export class PluginManager {
         }
         const binding = await tx.pluginDeviceBinding.findUnique({ where: { deviceId: input.deviceId }, select: { installationId: true } });
         if (!binding || binding.installationId !== installation.id) throw new Error("device is not bound to the plugin installation");
+        let executionId: string | undefined;
+        if (input.executionId !== undefined) {
+          const executionRows = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id
+            FROM debug_executions
+            WHERE id = ${input.executionId}::uuid
+              AND installation_id = ${installation.id}::uuid
+              AND device_id = ${input.deviceId}::uuid
+              AND state = 'active'
+              AND device_lease_expires_at > CURRENT_TIMESTAMP
+              AND expires_at > CURRENT_TIMESTAMP
+            FOR UPDATE
+          `;
+          if (!executionRows[0]) throw publicError("debug execution is not active for this device", 409, "conflict");
+          executionId = executionRows[0].id;
+        }
         return enqueueBatchInTransaction(tx, [input.deviceId], { cmd: encoded.command, args }, {
           provenance: {
             // The public Human API marks its authenticated action request as
@@ -852,6 +873,7 @@ export class PluginManager {
             pluginInstallationId: installation.id,
             pluginVersion: installation.pluginVersion,
             manifestHash: installation.manifestHash.trim(),
+            executionId,
             correlationId: operationId,
           },
         });
@@ -1302,7 +1324,7 @@ export class PluginManager {
    */
   async encodeActionFromUiSession(
     session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
-    input: { deviceId: string; actionId: string; actionInput: unknown; timeoutMs?: number },
+    input: { deviceId: string; actionId: string; actionInput: unknown; executionId?: string; timeoutMs?: number },
   ): Promise<{ batchId: string; deviceCount: number }> {
     await this.assertUiSessionCurrent(session as PluginUiSession);
     return this.encodeAction({
@@ -1311,6 +1333,7 @@ export class PluginManager {
       deviceId: input.deviceId,
       actionId: input.actionId,
       actionInput: input.actionInput,
+      executionId: input.executionId,
       humanApproved: true,
       timeoutMs: input.timeoutMs,
     });

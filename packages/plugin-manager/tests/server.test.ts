@@ -195,16 +195,17 @@ describe("plugin SSR route", () => {
 
   test("executes a manifest action only through the plugin-origin human session", async () => {
     const deviceId = randomUUID();
+    const executionId = randomUUID();
     const response = await fetch(`${server.url}plugins/${installationId}/actions/debug.identify`, {
       method: "POST",
       headers: { cookie, "content-type": "application/json" },
-      body: JSON.stringify({ deviceId, input: { targetConfigRevision: 3, targetId: "fixture" } }),
+      body: JSON.stringify({ deviceId, executionId, input: { targetConfigRevision: 3, targetId: "fixture" } }),
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ deviceCount: 1 });
     expect(uiDeviceActionInput).toMatchObject({
       session: { installationId, projectId },
-      input: { deviceId, actionId: "debug.identify", actionInput: { targetConfigRevision: 3, targetId: "fixture" } },
+      input: { deviceId, executionId, actionId: "debug.identify", actionInput: { targetConfigRevision: 3, targetId: "fixture" } },
     });
   });
 
