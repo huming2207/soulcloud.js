@@ -203,8 +203,14 @@ export async function createDebugExecution(
       SELECT installation_id FROM plugin_device_bindings WHERE device_id = ${input.deviceId}::uuid FOR UPDATE
     `;
     if (bindingRows[0]?.installation_id !== input.installationId) throw new Error("device is not bound to the plugin installation");
-    const userProject = await tx.userProject.findUnique({ where: { userId_projectId: { userId: input.initiatingUserId, projectId: installation.project_id } }, select: { userId: true } });
-    if (!userProject) throw new Error("initiating user is not a member of the project");
+    const userProjectRows = await tx.$queryRaw<Array<{ user_id: string }>>`
+      SELECT user_id
+      FROM user_projects
+      WHERE user_id = ${input.initiatingUserId}::uuid
+        AND project_id = ${installation.project_id}::uuid
+      FOR SHARE
+    `;
+    if (!userProjectRows[0]) throw new Error("initiating user is not a member of the project");
 
     try {
       const rows = await tx.$queryRaw<RawExecutionRow[]>`
@@ -370,6 +376,14 @@ export async function revalidateDebugSessionExecution(
       FOR UPDATE
     `;
     if (!executionRows[0]) throw new DebugExecutionCapabilityError();
+    const userProjectRows = await tx.$queryRaw<Array<{ user_id: string }>>`
+      SELECT user_id
+      FROM user_projects
+      WHERE user_id = ${executionRows[0].initiating_user_id}::uuid
+        AND project_id = ${input.projectId}::uuid
+      FOR SHARE
+    `;
+    if (!userProjectRows[0]) throw new DebugExecutionCapabilityError("debug execution initiating user is no longer a project member");
     return mapExecution(executionRows[0]);
   });
 }

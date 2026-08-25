@@ -33,6 +33,7 @@ const tokenHashC = "d".repeat(64);
 const tokenHashD = "e".repeat(64);
 const tokenHashE = "f".repeat(64);
 const tokenHashF = "1".repeat(64);
+const tokenHashG = "2".repeat(64);
 let installationId: string;
 
 beforeAll(async () => {
@@ -112,6 +113,26 @@ describe("durable debug execution capability", () => {
       manifestHash,
     })).toMatchObject({ id: execution.id, state: "active" });
     await expect(createDebugExecution(prisma, input(tokenHashB))).rejects.toBeInstanceOf(DebugExecutionConflictError);
+  });
+
+  test("rejects session bootstrap after the initiating user leaves the project", async () => {
+    const execution = await createDebugExecution(prisma, input(tokenHashG));
+    await prisma.userProject.delete({ where: { userId_projectId: { userId, projectId } } });
+    try {
+      await expect(revalidateDebugSessionExecution(prisma, {
+        executionId: execution.id,
+        tokenHash: tokenHashG,
+        installationId,
+        projectId,
+        deviceId,
+        pluginId,
+        pluginVersion: "1.0.0",
+        manifestHash,
+      })).rejects.toBeInstanceOf(DebugExecutionCapabilityError);
+    } finally {
+      await prisma.userProject.create({ data: { userId, projectId } });
+      await completeDebugExecution(prisma, execution.id, tokenHashG, "failed");
+    }
   });
 
   test("renews, releases and completes using the raw-token hash", async () => {
