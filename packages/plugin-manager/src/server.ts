@@ -137,6 +137,11 @@ const readArtifactChunkSchema = z.object({
   length: z.number().int().positive().max(64 * 1024),
   timeoutMs: z.number().int().min(100).max(30_000).optional(),
 }).strict();
+const pluginUiDeviceActionSchema = z.object({
+  deviceId: z.string().uuid(),
+  input: z.unknown(),
+  timeoutMs: z.number().int().min(100).max(30_000).optional(),
+}).strict();
 
 function parseBody<T>(schema: ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -209,6 +214,27 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         } catch { return json(401, { error: "invalid_plugin_ui_session" }); }
         if (!url.pathname.startsWith(`/plugins/${session.installationId}/`)) return json(403, { error: "plugin_ui_scope_mismatch" });
         const manifest = options.manager.getManifest(session.pluginId, session.pluginVersion);
+        const actionPrefix = `/plugins/${session.installationId}/actions/`;
+        const actionPath = url.pathname.startsWith(actionPrefix) ? url.pathname.slice(actionPrefix.length) : "";
+        if (request.method === "POST" && actionPath.length > 0 && !actionPath.includes("/")) {
+          try {
+            let actionId: string;
+            try {
+              actionId = decodeURIComponent(actionPath);
+            } catch {
+              throw invalidRequest("plugin action ID is not valid URL encoding");
+            }
+            const parsedActionId = z.string().min(1).max(128).safeParse(actionId);
+            if (!parsedActionId.success) throw invalidRequest("plugin action ID is invalid");
+            const input = parseBody(pluginUiDeviceActionSchema, await requestJson(request));
+            return json(200, await options.manager.encodeActionFromUiSession(session, {
+              deviceId: input.deviceId,
+              actionId: parsedActionId.data,
+              actionInput: input.input,
+              timeoutMs: input.timeoutMs,
+            }));
+          } catch (error) { return failure(error); }
+        }
         const uiArtifactPath = `/plugins/${session.installationId}/debugger/artifacts`;
         if (request.method === "POST" && url.pathname === uiArtifactPath && session.routeId === "debugger") {
           try {

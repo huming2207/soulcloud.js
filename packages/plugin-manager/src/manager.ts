@@ -1268,6 +1268,28 @@ export class PluginManager {
     return this.callUi(session, "ui.handleAction", { requestId, params, action });
   }
 
+  /**
+   * Execute one manifest action from an authenticated plugin-origin UI
+   * session. The session was minted by Human API, so this is the explicit
+   * per-click human approval path; the plugin never receives a service token
+   * and cannot invoke this method over reverse RPC.
+   */
+  async encodeActionFromUiSession(
+    session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
+    input: { deviceId: string; actionId: string; actionInput: unknown; timeoutMs?: number },
+  ): Promise<{ batchId: string; deviceCount: number }> {
+    await this.assertUiSessionCurrent(session as PluginUiSession);
+    return this.encodeAction({
+      installationId: session.installationId,
+      userId: session.sub,
+      deviceId: input.deviceId,
+      actionId: input.actionId,
+      actionInput: input.actionInput,
+      humanApproved: true,
+      timeoutMs: input.timeoutMs,
+    });
+  }
+
   async getPluginUiAsset(session: PluginUiSession, requestId: string, assetPath: string): Promise<unknown> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     await this.assertUiSessionCurrent(session);

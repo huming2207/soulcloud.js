@@ -30,6 +30,7 @@ const manifest: PluginManifest = {
 let renderedParams: unknown;
 let submittedAction: unknown;
 let actionTimeout: number | undefined;
+let uiDeviceActionInput: unknown;
 let sessionStartInput: unknown;
 let uploadedArtifactInput: { input: unknown; bytes: Uint8Array } | undefined;
 const consumedGrants = new Set<string>();
@@ -46,6 +47,10 @@ const manager = {
   },
   encodeAction: async (input: { timeoutMs?: number }) => {
     actionTimeout = input.timeoutMs;
+    return { batchId: randomUUID(), deviceCount: 1 };
+  },
+  encodeActionFromUiSession: async (session: unknown, input: unknown) => {
+    uiDeviceActionInput = { session, input };
     return { batchId: randomUUID(), deviceCount: 1 };
   },
   startDebugSession: async (input: unknown) => {
@@ -175,6 +180,21 @@ describe("plugin SSR route", () => {
         pluginVersion: manifest.version,
         manifestHash: "a".repeat(64),
       },
+    });
+  });
+
+  test("executes a manifest action only through the plugin-origin human session", async () => {
+    const deviceId = randomUUID();
+    const response = await fetch(`${server.url}plugins/${installationId}/actions/debug.identify`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ deviceId, input: { targetConfigRevision: 3, targetId: "fixture" } }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ deviceCount: 1 });
+    expect(uiDeviceActionInput).toMatchObject({
+      session: { installationId, projectId },
+      input: { deviceId, actionId: "debug.identify", actionInput: { targetConfigRevision: 3, targetId: "fixture" } },
     });
   });
 
