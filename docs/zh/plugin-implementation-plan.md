@@ -51,6 +51,18 @@ Device Broker MQTT/HTTPS 协议。
 - Human API 始终是用户权限权威；
 - plugin code 只在 plugin 自己的进程中执行。
 
+### 3.1 Soulcloud Device 与 Soulcloud Client 的术语边界
+
+Soulcloud Device 是硬件或边缘计算机的身份名称；Soulcloud Client 只表示运行在该设备上的
+MQTT/HTTPS 通信软件或固件组件，不能用来代指设备本身。对于 SoulInjector，SWD/UART 的低层
+协议、时序、target 状态、轮询、重试和硬件清理都由 **SoulInjector 设备的本地设备软件/固件**
+执行；其中负责连接 Soulcloud 的部分才称为 Soulcloud Client。
+
+因此，文档和接口中禁止使用“低层 SWD/UART 留在 Client”这种表述。统一写法是：
+“低层 SWD/UART 留在 Soulcloud Device（SoulInjector 设备）的本地设备软件/固件中”。云端
+plugin 只能通过现有 Device Broker 下发设备已经实现的、有界 DeviceCommand，不因 plugin 而在
+设备上增加容器、oRPC、第二套 MQTT topic 或动态硬件驱动。
+
 ## 阶段 0：契约冻结与删除清单
 
 **状态：已完成。** 旧插件目录、旧 Dispatcher/Host 命名、旧 endpoint/env 和双 registry 已
