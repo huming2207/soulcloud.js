@@ -464,6 +464,8 @@ describe("SoulInjector plugin", () => {
     expect(bundle).toContain("Retrying…");
     expect(bundle).toContain("/renew");
     expect(bundle).toContain("refreshDebugExecutionState");
+    expect(bundle).toContain("refreshDebuggerView");
+    expect(bundle).toContain("debugExecutionState==='cancelling'");
     expect(bundle).toContain("Debugger execution is paused");
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", body));
     const hash = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
