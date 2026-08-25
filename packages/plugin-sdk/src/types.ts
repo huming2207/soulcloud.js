@@ -295,6 +295,25 @@ export interface ArtifactListInput {
 }
 export type ArtifactListHandler = (input: ArtifactListInput, context: { signal: AbortSignal }) => Promise<ArtifactSummary[]>;
 
+export interface ArtifactReadChunkInput {
+  operationId: string;
+  installationId: string;
+  projectId: string;
+  userId: string;
+  artifactId: string;
+  offset: number;
+  length: number;
+}
+export interface ArtifactReadChunkOutput {
+  artifactId: string;
+  offset: number;
+  totalSize: number;
+  sha256: string;
+  chunk: Uint8Array;
+  final: boolean;
+}
+export type ArtifactReadChunkHandler = (input: ArtifactReadChunkInput, context: { signal: AbortSignal }) => Promise<ArtifactReadChunkOutput>;
+
 export interface DebugSessionStartInput {
   operationId: string;
   installationId: string;
@@ -355,6 +374,8 @@ export interface PluginDefinition {
   listTargetConfigs?: TargetConfigListHandler;
   storeArtifactChunk?: ArtifactChunkHandler;
   listArtifacts?: ArtifactListHandler;
+  /** Manager-only bounded read from the plugin's private artifact store. */
+  readArtifactChunk?: ArtifactReadChunkHandler;
   /** Manager-only bootstrap for associating a private debugger session with an execution. */
   startDebugSession?: DebugSessionStartHandler;
   /** Manager-only cleanup when a bootstrap execution becomes invalid in flight. */

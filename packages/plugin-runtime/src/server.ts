@@ -29,6 +29,7 @@ import {
   uiAssetOutput as uiAssetOutputSchema,
   uiRenderOutput as uiRenderOutputSchema,
   listArtifactsOutput as listArtifactsOutputSchema,
+  artifactReadChunkOutput as artifactReadChunkOutputSchema,
   type RpcValueBudget,
 } from "@soulcloud/plugin-rpc-contract";
 import {
@@ -578,6 +579,32 @@ function createRuntimeConnection(
           }
           assertRpcValueBudget(result, budget);
           const parsed = artifactChunkOutputSchema.safeParse(result);
+          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+          return parsed.data;
+        } finally {
+          operations.running -= 1;
+        }
+      }),
+      readArtifactChunk: implemented.debugger.readArtifactChunk.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        if (!definition.readArtifactChunk) rpcError("NOT_FOUND", "artifact read is not supported by this plugin");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
+        try {
+          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.readArtifactChunk!({
+            operationId: input.operationId,
+            installationId: input.installationId,
+            projectId: input.projectId,
+            userId: input.userId,
+            artifactId: input.artifactId,
+            offset: input.offset,
+            length: input.length,
+          }, { signal }));
+          const output = result.chunk instanceof Uint8Array
+            ? { ...result, chunk: new Blob([result.chunk]) }
+            : result;
+          assertRpcValueBudget(output, budget);
+          const parsed = artifactReadChunkOutputSchema.safeParse(output);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
         } finally {

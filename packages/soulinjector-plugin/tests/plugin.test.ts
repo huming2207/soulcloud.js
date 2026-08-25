@@ -451,4 +451,26 @@ describe("SoulInjector plugin", () => {
     const result = await plugin.storeArtifactChunk!({ operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, userId: saved.createdBy, uploadId: saved.id, kind: "firmware", filename: "image.bin", contentType: "application/octet-stream", totalSize: 3, offset: 0, final: true, chunk: Uint8Array.of(1, 2, 3) }, { signal: AbortSignal.timeout(1000) });
     expect(result).toMatchObject({ uploadId: saved.id, receivedBytes: 3, complete: true, artifactId: saved.id });
   });
+
+  test("reads bounded artifact chunks without exposing the complete blob", async () => {
+    const chunk = Uint8Array.of(1, 2, 3);
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      readArtifactChunk: async (artifactId, installationId, projectId, offset, length) => {
+        expect({ artifactId, installationId, projectId, offset, length }).toEqual({ artifactId: saved.id, installationId: saved.installationId, projectId: saved.projectId, offset: 4, length: 8 });
+        return { artifactId: saved.id, offset: 4, totalSize: 7, sha256: saved.sha256, chunk, final: true };
+      },
+    });
+    const result = await plugin.readArtifactChunk!({
+      operationId: "operation",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      userId: saved.createdBy,
+      artifactId: saved.id,
+      offset: 4,
+      length: 8,
+    }, { signal: AbortSignal.timeout(1000) });
+    expect(result).toMatchObject({ artifactId: saved.id, offset: 4, totalSize: 7, final: true });
+    expect(result.chunk).toEqual(chunk);
+  });
 });

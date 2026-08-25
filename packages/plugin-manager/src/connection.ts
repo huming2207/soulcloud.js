@@ -215,7 +215,7 @@ export class PluginConnection {
     this.heartbeatTimer.unref?.();
   }
 
-  async request(method: "plugin.handleEvent" | "plugin.call" | "action.encode" | "ui.render" | "ui.handleAction" | "ui.asset" | "debugger.configureTarget" | "debugger.listTargetConfigs" | "debugger.listArtifacts" | "debugger.storeArtifactChunk" | "debugger.startSession" | "debugger.abortSession", input: unknown, timeoutMs: number): Promise<unknown> {
+  async request(method: "plugin.handleEvent" | "plugin.call" | "action.encode" | "ui.render" | "ui.handleAction" | "ui.asset" | "debugger.configureTarget" | "debugger.listTargetConfigs" | "debugger.listArtifacts" | "debugger.storeArtifactChunk" | "debugger.readArtifactChunk" | "debugger.startSession" | "debugger.abortSession", input: unknown, timeoutMs: number): Promise<unknown> {
     await this.connect();
     if (!this.forward || !this.socket) throw new PluginConnectionError("plugin is unavailable");
     if (this.socket.bufferedAmount > this.options.backpressureBytes) throw new PluginConnectionError("plugin send queue is full");
@@ -243,6 +243,7 @@ export class PluginConnection {
       if (method === "debugger.listArtifacts") return await this.forward.debugger.listArtifacts({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
       if (method === "debugger.startSession") return await this.forward.debugger.startSession({ ...operation, deadlineMs: timeoutMs } as DebugSessionStartInput, { signal: controller.signal });
       if (method === "debugger.abortSession") return await this.forward.debugger.abortSession({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
+      if (method === "debugger.readArtifactChunk") return await this.forward.debugger.readArtifactChunk({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
       return await this.forward.debugger.storeArtifactChunk({ ...operation, deadlineMs: timeoutMs, chunk: rpcBinaryToBlob(operation.chunk) }, { signal: controller.signal });
     } catch (error) {
       if (controller.signal.aborted) throw new PluginConnectionTimeout(`${method} timed out`);

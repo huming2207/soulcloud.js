@@ -3,6 +3,7 @@ import {
   DEFAULT_RPC_VALUE_BUDGET,
   assertRpcValueBudget,
   artifactChunkOutput,
+  artifactReadChunkOutput,
   canonicalJson,
   configureTargetOutput,
   debugSessionStartOutput,
@@ -972,6 +973,76 @@ export class PluginManager {
         return listArtifactsOutput.parse(result);
       } catch (error) {
         throw publicError(`plugin artifact list output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
+      }
+    } finally {
+      this.finishOperation(operationId);
+    }
+  }
+
+  /** Read one bounded artifact chunk from plugin-private storage. This is a
+   * manager primitive for a future device transfer gateway; it does not expose
+   * the plugin database or choose push-vs-pull transport semantics. */
+  async readArtifactChunk(input: {
+    installationId: string;
+    projectId: string;
+    userId: string;
+    artifactId: string;
+    offset: number;
+    length: number;
+    timeoutMs?: number;
+  }): Promise<{ artifactId: string; offset: number; totalSize: number; sha256: string; chunk: Uint8Array; final: boolean }> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    if (!Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset > 64 * 1024 * 1024) throw publicError("artifact offset is invalid", 400, "invalid_request");
+    if (!Number.isSafeInteger(input.length) || input.length < 1 || input.length > 64 * 1024) throw publicError("artifact chunk length is invalid", 400, "invalid_request");
+    const installation = await this.options.prisma.pluginInstallation.findUnique({
+      where: { id: input.installationId },
+      select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
+    });
+    if (!installation) throw Object.assign(new Error("plugin installation not found"), { status: 404 });
+    if (installation.projectId !== input.projectId) throw Object.assign(new Error("plugin installation project mismatch"), { status: 403 });
+    if (installation.state !== "enabled") throw Object.assign(new Error("plugin installation is disabled"), { status: 409 });
+    const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const timeoutMs = input.timeoutMs ?? 30_000;
+    this.registerOperation(operationId, {
+      kind: "configure",
+      operationTokenHash: hashOperationToken(operationToken),
+      connectionId: connection.id,
+      installationId: installation.id,
+      projectId: installation.projectId,
+      pluginId: installation.pluginId,
+      pluginVersion: installation.pluginVersion,
+      userId: input.userId,
+      deadline: performance.now() + timeoutMs,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set(),
+    });
+    try {
+      const result = await connection.request("debugger.readArtifactChunk", {
+        operationId,
+        operationToken,
+        installationId: installation.id,
+        projectId: installation.projectId,
+        userId: input.userId,
+        artifactId: input.artifactId,
+        offset: input.offset,
+        length: input.length,
+      }, timeoutMs);
+      try {
+        assertRpcValueBudget(result, this.valueBudget);
+        const parsed = artifactReadChunkOutput.parse(result);
+        const chunk = new Uint8Array(await parsed.chunk.arrayBuffer());
+        if (parsed.artifactId !== input.artifactId || parsed.offset !== input.offset || chunk.byteLength > input.length || parsed.offset + chunk.byteLength > parsed.totalSize || parsed.final !== (parsed.offset + chunk.byteLength === parsed.totalSize)) {
+          throw new Error("artifact chunk bounds or identity do not match the request");
+        }
+        return { artifactId: parsed.artifactId, offset: parsed.offset, totalSize: parsed.totalSize, sha256: parsed.sha256, chunk, final: parsed.final };
+      } catch (error) {
+        throw publicError(`plugin artifact chunk output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
       }
     } finally {
       this.finishOperation(operationId);

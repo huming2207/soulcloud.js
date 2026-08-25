@@ -83,6 +83,22 @@ export const artifactChunkOutput = z.object({ uploadId: z.string().uuid(), recei
 export const listArtifactsInput = operation.extend({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid() }).strict();
 const artifactMetadata = z.record(z.string().max(64), z.union([z.string().max(256), z.number().finite()])).refine((value) => Object.keys(value).length <= 32);
 export const listArtifactsOutput = z.array(z.object({ artifactId: z.string().uuid(), kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), contentType: z.string().min(1).max(128), size: z.number().int().positive().max(64 * 1024 * 1024), sha256: z.string().regex(/^[0-9a-f]{64}$/), metadata: artifactMetadata, createdAt: z.string().datetime({ offset: true }) }).strict()).max(64);
+export const artifactReadChunkInput = operation.extend({
+  installationId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  userId: z.string().uuid(),
+  artifactId: z.string().uuid(),
+  offset: z.number().int().nonnegative().max(64 * 1024 * 1024),
+  length: z.number().int().positive().max(64 * 1024),
+}).strict();
+export const artifactReadChunkOutput = z.object({
+  artifactId: z.string().uuid(),
+  offset: z.number().int().nonnegative().max(64 * 1024 * 1024),
+  totalSize: z.number().int().positive().max(64 * 1024 * 1024),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  chunk: z.instanceof(Blob).refine((value) => value.size > 0 && value.size <= 64 * 1024, "artifact chunk must be 1..65536 bytes"),
+  final: z.boolean(),
+}).strict();
 
 export const debugSessionStartInput = operation.extend({
   installationId: z.string().uuid(),
@@ -203,6 +219,7 @@ export const managerToPluginContract = {
     listTargetConfigs: procedure(listTargetConfigsInput, listTargetConfigsOutput, ["debugger", "listTargetConfigs"]),
     storeArtifactChunk: procedure(artifactChunkInput, artifactChunkOutput, ["debugger", "storeArtifactChunk"]),
     listArtifacts: procedure(listArtifactsInput, listArtifactsOutput, ["debugger", "listArtifacts"]),
+    readArtifactChunk: procedure(artifactReadChunkInput, artifactReadChunkOutput, ["debugger", "readArtifactChunk"]),
     startSession: procedure(debugSessionStartInput, debugSessionStartOutput, ["debugger", "startSession"]),
     abortSession: procedure(debugSessionAbortInput, debugSessionAbortOutput, ["debugger", "abortSession"]),
   },
@@ -242,6 +259,8 @@ export type ExecutionCompleteInput = z.infer<typeof executionCompleteInput>;
 export type DeviceEnqueueInput = z.infer<typeof deviceEnqueueInput>;
 export type DeviceGetInput = z.infer<typeof deviceGetInput>;
 export type DeviceCancelInput = z.infer<typeof deviceCancelInput>;
+export type ArtifactReadChunkInput = z.infer<typeof artifactReadChunkInput>;
+export type ArtifactReadChunkOutput = z.infer<typeof artifactReadChunkOutput>;
 export type DeviceCommandOutput = z.infer<typeof deviceCommandOutput>;
 export type ActionInput = z.infer<typeof actionInput>;
 export type ActionOutput = z.infer<typeof actionOutput>;

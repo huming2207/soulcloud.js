@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, artifactChunkInput, canonicalJson, DEFAULT_RPC_VALUE_BUDGET, debugSessionAbortInput, debugSessionStartInput, debugSessionStartOutput, deviceCancelInput, deviceCommandOutput, deviceEnqueueInput, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
+import { assertRpcValueBudget, artifactChunkInput, artifactReadChunkInput, artifactReadChunkOutput, canonicalJson, DEFAULT_RPC_VALUE_BUDGET, debugSessionAbortInput, debugSessionStartInput, debugSessionStartOutput, deviceCancelInput, deviceCommandOutput, deviceEnqueueInput, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
   test("keeps the default string budget below the default frame budget", () => {
@@ -206,5 +206,22 @@ describe("artifact chunk contract", () => {
   test("rejects final chunks that overrun or stop before the declared size", () => {
     expect(artifactChunkInput.safeParse({ ...base, offset: 3, final: true, chunk: new Blob([Uint8Array.of(1, 2)]) }).success).toBe(false);
     expect(artifactChunkInput.safeParse({ ...base, offset: 0, final: true, chunk: new Blob([Uint8Array.of(1, 2, 3)]) }).success).toBe(false);
+  });
+
+  test("bounds private artifact reads to one binary chunk", () => {
+    const readBase = {
+      operationId: base.operationId,
+      operationToken: base.operationToken,
+      deadlineMs: base.deadlineMs,
+      installationId: base.installationId,
+      projectId: base.projectId,
+      userId: base.userId,
+      artifactId: "00000000-0000-4000-8000-000000000005",
+      offset: 4,
+      length: 8,
+    };
+    expect(artifactReadChunkInput.safeParse(readBase).success).toBe(true);
+    expect(artifactReadChunkInput.safeParse({ ...readBase, length: 65 * 1024 }).success).toBe(false);
+    expect(artifactReadChunkOutput.safeParse({ artifactId: readBase.artifactId, offset: 4, totalSize: 7, sha256: "a".repeat(64), chunk: new Blob([Uint8Array.of(1, 2, 3)]), final: true }).success).toBe(true);
   });
 });

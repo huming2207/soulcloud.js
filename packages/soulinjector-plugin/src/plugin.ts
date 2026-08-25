@@ -1,6 +1,6 @@
 import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginEventOutput, type PluginManifest } from "@soulcloud/plugin-sdk";
 import { DebugSessionNotAvailableError } from "./repository";
-import type { AppendDebugObservationInput, CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, DebugObservationRecord, DebugSessionRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary, UpdateDebugSessionStateInput } from "./repository";
+import type { AppendDebugObservationInput, CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, DebugObservationRecord, DebugSessionRecord, ReadArtifactChunkOutput, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary, UpdateDebugSessionStateInput } from "./repository";
 import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 import { targetSelectionArgs } from "./target-selection";
 import { TargetConfigError } from "./target-config";
@@ -101,6 +101,7 @@ interface SoulInjectorPluginStore {
   listTargetConfigs?(installationId: string, projectId: string): Promise<TargetConfigSummary[]>;
   listArtifacts?(installationId: string, projectId: string): Promise<DebugArtifactRecord[]>;
   storeArtifactChunk(input: { installationId: string; projectId: string; userId: string; uploadId: string; caseId?: string; kind: "elf" | "firmware"; filename: string; contentType: string; totalSize: number; offset: number; final: boolean; chunk: Uint8Array }): Promise<StoreArtifactChunkOutput>;
+  readArtifactChunk?(id: string, installationId: string, projectId: string, offset: number, length: number): Promise<ReadArtifactChunkOutput | null>;
 }
 
 function value(input: unknown, key: string): unknown {
@@ -305,6 +306,12 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
       }));
     },
     storeArtifactChunk: async (input) => repository.storeArtifactChunk({ ...input, caseId: input.caseId }),
+    readArtifactChunk: async (input) => {
+      if (!repository.readArtifactChunk) throw new Error("artifact read is not available");
+      const chunk = await repository.readArtifactChunk(input.artifactId, input.installationId, input.projectId, input.offset, input.length);
+      if (!chunk) throw new Error("artifact not found");
+      return chunk;
+    },
     render: {
       debugger: async (input) => {
         const [saved, cases, sessions, targetConfigs, artifacts] = await Promise.all([

@@ -81,6 +81,15 @@ export interface StoreArtifactChunkOutput {
   sha256: string | null;
 }
 
+export interface ReadArtifactChunkOutput {
+  artifactId: string;
+  offset: number;
+  totalSize: number;
+  sha256: string;
+  chunk: Uint8Array;
+  final: boolean;
+}
+
 export type DebugCaseState = "open" | "in_progress" | "resolved" | "closed";
 export type DebugSessionState = "active" | "paused" | "completed" | "failed" | "cancelled";
 export type DebugReportState = "draft" | "final";
@@ -802,6 +811,33 @@ export class SoulInjectorRepository {
     const record = asArtifactRecord(row);
     if (!Buffer.isBuffer(row.content)) throw new Error("private plugin database returned invalid artifact bytes");
     return { ...record, bytes: new Uint8Array(row.content.buffer, row.content.byteOffset, row.content.byteLength) };
+  }
+
+  async readArtifactChunk(id: string, installationId: string, projectId: string, offset: number, length: number): Promise<ReadArtifactChunkOutput | null> {
+    if (!UUID.test(id) || !UUID.test(installationId) || !UUID.test(projectId)) throw new RangeError("artifact scope must be UUIDs");
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 64 * 1024 * 1024) throw new RangeError("artifact offset is invalid");
+    if (!Number.isSafeInteger(length) || length < 1 || length > 64 * 1024) throw new RangeError("artifact chunk length is invalid");
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT id, size, sha256, substring(content FROM $4 FOR $5) AS chunk
+       FROM ${schema}.debug_artifacts
+       WHERE id = $1 AND installation_id = $2 AND project_id = $3`,
+      [id, installationId, projectId, offset + 1, length],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    if (!Buffer.isBuffer(row.chunk)) throw new Error("private plugin database returned invalid artifact chunk");
+    const totalSize = Number(row.size);
+    if (!Number.isSafeInteger(totalSize) || totalSize < 1 || offset >= totalSize || row.chunk.byteLength < 1 || row.chunk.byteLength > length) {
+      throw new Error("private plugin database returned an invalid artifact chunk");
+    }
+    return {
+      artifactId: asString(row.id, "artifact id"),
+      offset,
+      totalSize,
+      sha256: asString(row.sha256, "artifact hash").trim().toLowerCase(),
+      chunk: new Uint8Array(row.chunk.buffer, row.chunk.byteOffset, row.chunk.byteLength),
+      final: offset + row.chunk.byteLength === totalSize,
+    };
   }
 
   async listArtifacts(installationId: string, projectId: string): Promise<DebugArtifactRecord[]> {
