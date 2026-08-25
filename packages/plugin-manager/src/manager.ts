@@ -1070,9 +1070,18 @@ export class PluginManager {
     totalSize: number;
     body: ReadableStream<Uint8Array>;
     timeoutMs?: number;
+    /** When present, pin this upload to the already-authenticated plugin UI snapshot. */
+    uiSession?: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">;
   }): Promise<{ uploadId: string; artifactId: string; sha256: string; size: number; kind: "elf" | "firmware"; filename: string }> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     if (!Number.isSafeInteger(input.totalSize) || input.totalSize <= 0 || input.totalSize > 64 * 1024 * 1024) throw publicError("artifact size is invalid", 413, "payload_too_large");
+    if (input.uiSession && (
+      input.uiSession.installationId !== input.installationId ||
+      input.uiSession.projectId !== input.projectId ||
+      input.uiSession.sub !== input.userId
+    )) {
+      throw publicError("plugin UI session scope does not match the artifact upload", 403, "plugin_ui_session_invalid");
+    }
     const installation = await this.options.prisma.pluginInstallation.findUnique({
       where: { id: input.installationId },
       select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
@@ -1080,6 +1089,13 @@ export class PluginManager {
     if (!installation) throw Object.assign(new Error("plugin installation not found"), { status: 404 });
     if (installation.projectId !== input.projectId) throw Object.assign(new Error("plugin installation project mismatch"), { status: 403 });
     if (installation.state !== "enabled") throw Object.assign(new Error("plugin installation is disabled"), { status: 409 });
+    if (input.uiSession && (
+      installation.pluginId !== input.uiSession.pluginId ||
+      installation.pluginVersion !== input.uiSession.pluginVersion ||
+      installation.manifestHash.trim().toLowerCase() !== input.uiSession.manifestHash.trim().toLowerCase()
+    )) {
+      throw publicError("plugin UI session is no longer valid", 403, "plugin_ui_session_invalid");
+    }
     const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
     const uploadId = input.uploadId;
     const chunkTimeoutMs = input.timeoutMs ?? 30_000;

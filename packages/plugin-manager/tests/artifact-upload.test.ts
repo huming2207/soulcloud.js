@@ -102,4 +102,47 @@ describe("plugin artifact upload body", () => {
     expect(result).toEqual({ uploadId, artifactId, sha256: "b".repeat(64), size: 65_537, kind: "firmware", filename: "fixture.bin" });
     expect(calls).toHaveLength(1);
   });
+
+  test("pins a UI upload to the session's plugin snapshot", async () => {
+    const installationId = randomUUID();
+    const projectId = randomUUID();
+    const userId = randomUUID();
+    const pluginId = "fixture.plugin";
+    const pluginVersion = "1.0.0";
+    const manifestHash = "a".repeat(64);
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "test-plugin-rpc-token-that-is-long-enough",
+      maxFrameBytes: 1024 * 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024 * 1024,
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      prisma: {
+        pluginInstallation: {
+          findUnique: async () => ({ id: installationId, projectId, pluginId, pluginVersion, manifestHash, state: "enabled" }),
+        },
+      } as never,
+    });
+    await expect(manager.uploadArtifact({
+      installationId,
+      projectId,
+      userId,
+      uploadId: randomUUID(),
+      kind: "firmware",
+      filename: "fixture.bin",
+      contentType: "application/octet-stream",
+      totalSize: 1,
+      body: new ReadableStream({ start(controller) { controller.enqueue(Uint8Array.of(1)); controller.close(); } }),
+      uiSession: {
+        installationId,
+        projectId,
+        sub: userId,
+        pluginId,
+        pluginVersion: "0.9.0",
+        manifestHash,
+      },
+    })).rejects.toMatchObject({ status: 403, publicCode: "plugin_ui_session_invalid" });
+  });
 });

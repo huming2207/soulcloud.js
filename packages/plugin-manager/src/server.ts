@@ -234,6 +234,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
               uploadId: uploadId.data,
               totalSize,
               body: request.body as ReadableStream<Uint8Array>,
+              uiSession: session,
             }));
           } catch (error) { return failure(error); }
         }
