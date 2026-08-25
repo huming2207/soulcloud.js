@@ -152,9 +152,11 @@ describe("ota poller", () => {
     // the token is bound to THIS device and THIS release
     const claims = await verifyOtaToken(SECRET, download.token as string);
     expect(claims).toEqual({ deviceUid: onlineDeviceUid, releaseId, jobId: job.jobId });
-    // the signed token must be usable (round-trip through the same secret)
+    // A fresh signature may have a different second-level iat, so compare
+    // the verified claims instead of treating the compact JWT signature as
+    // deterministic across calls.
     const resigned = await signOtaToken(SECRET, claims!, 900);
-    expect(resigned.split(".")[2]).toBe((download.token as string).split(".")[2]);
+    expect(await verifyOtaToken(SECRET, resigned)).toEqual(claims);
 
     // target is delivered
     const target = await prisma.otaTarget.findFirst({ where: { jobId: job.jobId } });
