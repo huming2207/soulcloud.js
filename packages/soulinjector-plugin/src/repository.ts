@@ -779,7 +779,8 @@ export class SoulInjectorRepository {
       );
       const hash = createHash("sha256");
       let expectedOffset = 0;
-      let header: Uint8Array | undefined;
+      const header = input.kind === "elf" ? new Uint8Array(Math.min(64, input.totalSize)) : undefined;
+      let headerBytes = 0;
       try {
         while (true) {
           const batch = await client.query<QueryResultRow>(`FETCH FORWARD 8 FROM ${cursorName}`);
@@ -793,7 +794,11 @@ export class SoulInjectorRepository {
             if (asString(row.sha256, "artifact chunk hash").trim().toLowerCase() !== chunkHash) {
               throw new Error("artifact upload chunk hash mismatch");
             }
-            if (!header) header = content;
+            if (header && headerBytes < header.byteLength) {
+              const copyLength = Math.min(content.byteLength, header.byteLength - headerBytes);
+              header.set(content.subarray(0, copyLength), headerBytes);
+              headerBytes += copyLength;
+            }
             hash.update(content);
             expectedOffset += content.byteLength;
           }
@@ -801,12 +806,12 @@ export class SoulInjectorRepository {
       } finally {
         await client.query(`CLOSE ${cursorName}`).catch(() => undefined);
       }
-      if (expectedOffset !== input.totalSize || !header) throw new Error("final artifact chunks do not match the declared size");
+      if (expectedOffset !== input.totalSize) throw new Error("final artifact chunks do not match the declared size");
       const artifact = validateArtifactMetadata({
         kind: input.kind,
         filename: input.filename,
         contentType: input.contentType,
-        header,
+        header: header ?? new Uint8Array(),
         size: input.totalSize,
         sha256: hash.digest("hex"),
       });
