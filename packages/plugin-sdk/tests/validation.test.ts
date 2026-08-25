@@ -34,6 +34,13 @@ describe("plugin UI manifest validation", () => {
     expect(() => validateManifest({ ...base, ui: { routes: [{ id: "one", path: "/same" }, { id: "two", path: "/same" }] } })).toThrow("duplicate UI route path");
   });
 
+  test("requires a lowercase SHA-256 digest for each client asset", () => {
+    const base = { id: "example.plugin", version: "1", apiVersion: 1 as const, profiles: [], actions: [], events: [] };
+    expect(() => validateManifest({ ...base, ui: { routes: [], assets: [{ path: "/app.js", contentType: "text/javascript" }] } })).toThrow();
+    expect(() => validateManifest({ ...base, ui: { routes: [], assets: [{ path: "/app.js", contentType: "text/javascript", sha256: "A".repeat(64) }] } })).toThrow("asset sha256");
+    expect(() => validateManifest({ ...base, ui: { routes: [], assets: [{ path: "/app.js", contentType: "text/javascript", sha256: "a".repeat(64) }] } })).not.toThrow();
+  });
+
   test("coerces typed form/query values before validation", () => {
     const schema = { count: { type: "integer" as const, required: true }, enabled: { type: "boolean" as const, required: true } };
     const value = coerceStringActionInput(schema, { count: "3", enabled: "true" });

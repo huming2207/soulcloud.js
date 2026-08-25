@@ -60,6 +60,7 @@ export const manifestSchema = z.object({
     path: z.string().regex(/^\/(?:[A-Za-z0-9._~-]+\/)*[A-Za-z0-9._~-]+$/).max(256)
       .refine((path) => !path.split("/").some((segment) => segment === "." || segment === ".."), "path traversal is not allowed"),
     contentType: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value), "invalid content type"),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/, "asset sha256 must be a lowercase SHA-256 hex digest"),
   }).strict()).max(64).optional() }).strict().optional(),
 }).strict();
 

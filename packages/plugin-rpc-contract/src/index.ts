@@ -227,3 +227,13 @@ export async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+export async function sha256BytesHex(value: Uint8Array | ArrayBuffer | Blob): Promise<string> {
+  const bytes = value instanceof Blob
+    ? new Uint8Array(await value.arrayBuffer())
+    : value instanceof ArrayBuffer
+      ? new Uint8Array(value)
+      : value;
+  const digest = await crypto.subtle.digest("SHA-256", bytes as unknown as Uint8Array<ArrayBuffer>);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}

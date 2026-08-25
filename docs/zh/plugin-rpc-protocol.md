@@ -221,8 +221,8 @@ shell、CSP 和错误页。plugin 不能设置 cookie、CORS、CSP、redirect ta
 当前 SSR 基础纵切已经支持受限 `ui.asset` procedure；表单提交进入 Manager 的 `/plugins/*`
 action route，再调用 `ui.handleAction`。该 procedure 返回 redirect intent、validation errors
 或重新渲染所需状态，不能直接绕过 Human API 权限创建 Soulcloud 副作用。当前 asset 已有路径、
-MIME、Blob 大小和同源代理校验，但 content hash、独立 origin bootstrap 和 live channel 尚未
-实现完整生产闭环。
+MIME、Blob 大小、manifest SHA-256 双端校验和同源代理校验；独立 origin bootstrap 和 live
+channel 尚未实现完整生产闭环。
 
 目标协议允许 manifest 声明 immutable、content-hashed JavaScript/CSS asset。Manager 按需从
 plugin 获取有界 Blob，校验路径、MIME、大小和（后续加入的）hash 后缓存，并只从 plugin UI origin 的

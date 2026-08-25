@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, artifactChunkInput, canonicalJson, eventOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256Hex } from "../src";
+import { assertRpcValueBudget, artifactChunkInput, canonicalJson, eventOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
   test("sorts object keys without changing array order", async () => {
@@ -34,6 +34,10 @@ describe("RPC integer bounds", () => {
 });
 
 describe("RPC binary adapter", () => {
+  test("hashes exact binary asset bytes", async () => {
+    expect(await sha256BytesHex(Uint8Array.of(99, 111, 110, 115, 116))).toBe("f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631");
+  });
+
   test("round-trips root and nested Uint8Array values through Blob", async () => {
     const wire = rpcBinaryToBlob({
       raw: Uint8Array.of(1, 2, 3),

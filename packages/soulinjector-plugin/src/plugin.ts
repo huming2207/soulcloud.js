@@ -7,6 +7,8 @@ export const SOULINJECTOR_PLUGIN_ID = "soulcloud.soulinjector-debugger";
 export const SOULINJECTOR_PLUGIN_VERSION = "0.1.0";
 const profileId = "soulinjector-debugger";
 const CLIENT_BUNDLE = `document.querySelector('form')?.addEventListener('submit',()=>{const button=document.querySelector('button[type="submit"]');if(button instanceof HTMLButtonElement){button.disabled=true;button.textContent='Saving…';}});`;
+const CLIENT_BUNDLE_PATH = "/debugger/app.ddfdcf5c9f59b7af5dd3234beff0a29e9a178f40fb7c7f0dd9f0c9cf640ab118.js";
+const CLIENT_BUNDLE_SHA256 = "ddfdcf5c9f59b7af5dd3234beff0a29e9a178f40fb7c7f0dd9f0c9cf640ab118";
 
 const targetRevision = { type: "integer" as const, required: true, min: 1, max: Number.MAX_SAFE_INTEGER };
 const targetId = { type: "string" as const, required: true, maxLength: 64 };
@@ -66,7 +68,7 @@ const manifest = {
       methods: ["GET", "POST"] as ("GET" | "POST")[],
       actionSchema: { yaml: { type: "string" as const, required: true, maxLength: 65_536, title: "Target YAML", description: "Target architecture, chip and required debugger primitives" } },
     }],
-    assets: [{ path: "/debugger/app.js", contentType: "text/javascript; charset=utf-8" }],
+    assets: [{ path: CLIENT_BUNDLE_PATH, contentType: "text/javascript; charset=utf-8", sha256: CLIENT_BUNDLE_SHA256 }],
   },
 };
 
@@ -141,7 +143,7 @@ function escapeHtml(value: string): string {
 }
 
 function configForm(input: { installationId: string; yaml: string }): string {
-  return `<main><h1>SoulInjector debugger</h1><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets/debugger/app.js" defer></script></main>`;
+  return `<main><h1>SoulInjector debugger</h1><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
 }
 
 export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {
@@ -177,7 +179,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
       },
     },
     assets: {
-      "/debugger/app.js": async () => ({ body: new TextEncoder().encode(CLIENT_BUNDLE), contentType: "text/javascript; charset=utf-8", cache: "no-store" }),
+      [CLIENT_BUNDLE_PATH]: async () => ({ body: new TextEncoder().encode(CLIENT_BUNDLE), contentType: "text/javascript; charset=utf-8", cache: { maxAgeSeconds: 31_536_000 } }),
     },
   });
 }

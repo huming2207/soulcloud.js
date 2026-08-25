@@ -147,9 +147,13 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
           try {
             const output = await options.manager.getPluginUiAsset(session, crypto.randomUUID(), assetPath) as { body?: unknown; contentType?: unknown; cache?: unknown };
             if (!(output.body instanceof Blob) || typeof output.contentType !== "string") return json(502, { error: "plugin_ui_invalid_output" });
-            const maxAge = output.cache && typeof output.cache === "object" ? Number((output.cache as { maxAgeSeconds?: unknown }).maxAgeSeconds) : 0;
-            const cache = output.cache === "no-store" || !Number.isSafeInteger(maxAge) ? "private, no-store" : `private, max-age=${maxAge}`;
-            return new Response(output.body, { status: 200, headers: { "content-type": output.contentType, "cache-control": cache, "content-security-policy": "default-src 'none'; script-src 'none'; object-src 'none'" } });
+            const maxAge = output.cache && typeof output.cache === "object" ? Number((output.cache as { maxAgeSeconds?: unknown }).maxAgeSeconds) : undefined;
+            const cache = output.cache === "no-store"
+              ? "private, no-store"
+              : !Number.isSafeInteger(maxAge)
+                ? "public, max-age=31536000, immutable"
+                : `public, max-age=${maxAge}, immutable`;
+            return new Response(output.body, { status: 200, headers: { "content-type": output.contentType, "cache-control": cache, "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; script-src 'none'; object-src 'none'" } });
           } catch (error) { return failure(error); }
         }
         const route = manifest?.ui?.routes.find((item) => item.id === session.routeId);

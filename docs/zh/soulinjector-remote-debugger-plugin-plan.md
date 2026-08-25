@@ -45,7 +45,7 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - ELF/firmware 的大小、文件名、ELF magic、SHA-256 校验，以及 64 KiB 分块上传、私有
   PostgreSQL `bytea` 最终存储；不使用 S3/object storage；
 - `debugger.configureTarget`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
-  路由和转发，不读取 plugin 私有业务表；
+  路由和转发，不读取 plugin 私有业务表；UI asset 已绑定 manifest SHA-256 并使用内容哈希路径；
 - 高层 SoulInjector command/event schema 和 `requiresHumanApproval` action 元数据；动作编码
   会读取指定 installation/project 下的不可变 target-config revision，并把目标快照传给设备。
   当前
@@ -578,7 +578,7 @@ MQTT/oRPC 热路径。
 工作：
 
 1. 扩展 manifest UI asset 声明和 handshake capability；**已完成受限 asset RPC/manifest 基础**；
-2. Manager 实现 asset fetch/hash/MIME/cache/独立 origin；**已完成 MIME/cache/代理基础；hash/独立 origin bootstrap 尚未完成**；
+2. Manager 实现 asset fetch/hash/MIME/cache/独立 origin；**已完成 manifest hash/MIME/cache/代理基础；独立 origin bootstrap 尚未完成**；
 3. 实现 Human API 一次性 bootstrap 和 plugin-origin session；
 4. 实现 Browser ↔ Manager live channel 与 plugin oRPC stream/call；
 5. 实现 terminal、progress、register/memory 和多人观察 UI；

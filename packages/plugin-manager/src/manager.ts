@@ -5,6 +5,7 @@ import {
   artifactChunkOutput,
   canonicalJson,
   configureTargetOutput,
+  sha256BytesHex,
   sha256Hex,
   type CommandEnqueueInput,
   type EntityGetInput,
@@ -620,7 +621,8 @@ export class PluginManager {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     await this.assertUiSessionCurrent(session);
     const manifest = this.getManifest(session.pluginId, session.pluginVersion);
-    if (!manifest?.ui?.assets?.some((asset) => asset.path === assetPath)) throw Object.assign(new Error("plugin UI asset is not declared"), { status: 404 });
+    const descriptor = manifest?.ui?.assets?.find((asset) => asset.path === assetPath);
+    if (!descriptor) throw Object.assign(new Error("plugin UI asset is not declared"), { status: 404 });
     const { connection } = this.requireConnectedManifest(session.pluginId, session.pluginVersion, session.manifestHash);
     const operationId = crypto.randomUUID();
     const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
@@ -652,6 +654,12 @@ export class PluginManager {
         user: { id: session.sub, locale: session.locale, permissions: session.permissions },
       }, 30_000);
       assertRpcValueBudget(result, this.valueBudget);
+      if (!(result instanceof Object) || !((result as { body?: unknown }).body instanceof Blob)) {
+        throw publicError("plugin UI asset output is invalid", 502, "plugin_ui_invalid_output");
+      }
+      if (await sha256BytesHex((result as { body: Blob }).body) !== descriptor.sha256) {
+        throw publicError("plugin UI asset bytes differ from its manifest hash", 502, "plugin_ui_invalid_output");
+      }
       await this.sealOperation(operationId);
       await this.assertUiSessionCurrent(session);
       return result;

@@ -64,6 +64,8 @@ export interface PluginUiRoute {
 export interface PluginUiAsset {
   path: string;
   contentType: string;
+  /** SHA-256 of the exact bytes returned by the asset renderer. */
+  sha256: string;
 }
 
 export interface PluginManifest {

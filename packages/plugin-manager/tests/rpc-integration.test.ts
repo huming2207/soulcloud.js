@@ -32,7 +32,7 @@ beforeAll(async () => {
       }],
       actions: [{ id: "reboot", inputSchema: {}, wire: { command: "reboot", schemaVersion: 1 } }],
       events: [{ kind: "reading", schemaVersion: 1 }],
-      ui: { routes: [{ id: "main", path: "/main" }], assets: [{ path: "/main/app.js", contentType: "text/javascript; charset=utf-8" }] },
+      ui: { routes: [{ id: "main", path: "/main" }], assets: [{ path: "/main/app.js", contentType: "text/javascript; charset=utf-8", sha256: "f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631" }] },
     },
     encodeAction: { reboot: () => [{ delay: 3n }] },
     onEvent: async (context, event) => {

@@ -19,6 +19,7 @@ import {
   managerToPluginContract,
   pluginToManagerContract,
   rpcBinaryFromBlob,
+  sha256BytesHex,
   sha256Hex,
   uiActionOutput as uiActionOutputSchema,
   uiAssetOutput as uiAssetOutputSchema,
@@ -365,6 +366,7 @@ function createRuntimeConnection(
         try {
           const result = await runWithDeadline(input.deadlineMs, (signal) => asset({ requestId: input.requestId, installationId: input.installationId, projectId: input.projectId, user: input.user, routeId: input.routeId, assetPath: input.assetPath, signal }));
           if (result.contentType !== descriptor.contentType) rpcError("INVALID_PLUGIN_OUTPUT", "UI asset content type differs from its manifest");
+          if (await sha256BytesHex(result.body) !== descriptor.sha256) rpcError("INVALID_PLUGIN_OUTPUT", "UI asset bytes differ from its manifest hash");
           assertRpcValueBudget(result, budget);
           const parsed = uiAssetOutputSchema.safeParse({ ...result, body: new Blob([result.body]) });
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
