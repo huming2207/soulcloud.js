@@ -11,6 +11,8 @@ const profileId = "soulinjector-debugger";
 const CLIENT_BUNDLE = `document.querySelector('form')?.addEventListener('submit',()=>{const button=document.querySelector('button[type="submit"]');if(button instanceof HTMLButtonElement){button.disabled=true;button.textContent='Saving…';}});`;
 const CLIENT_BUNDLE_PATH = "/debugger/app.ddfdcf5c9f59b7af5dd3234beff0a29e9a178f40fb7c7f0dd9f0c9cf640ab118.js";
 const CLIENT_BUNDLE_SHA256 = "ddfdcf5c9f59b7af5dd3234beff0a29e9a178f40fb7c7f0dd9f0c9cf640ab118";
+const MAX_TIMELINE_OBSERVATIONS = 16;
+const MAX_OBSERVATION_DATA_CHARS = 2_048;
 
 const targetRevision = { type: "integer" as const, required: true, min: 1, max: Number.MAX_SAFE_INTEGER };
 const targetId = { type: "string" as const, required: true, maxLength: 64 };
@@ -181,7 +183,7 @@ function observationData(value: unknown): string {
   } catch {
     serialized = "[unserializable]";
   }
-  return escapeHtml(serialized.length > 8_192 ? `${serialized.slice(0, 8_192)}…` : serialized);
+  return escapeHtml(serialized.length > MAX_OBSERVATION_DATA_CHARS ? `${serialized.slice(0, MAX_OBSERVATION_DATA_CHARS)}…` : serialized);
 }
 
 function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[]; selectedSession: DebugSessionRecord | null; observations: DebugObservationRecord[]; error?: string }): string {
@@ -298,7 +300,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
           ? await repository.getDebugSession(selectedId, input.installationId, input.projectId)
           : null;
         const observations = selectedSession && repository.listDebugObservations
-          ? await repository.listDebugObservations(selectedSession.id, input.installationId, input.projectId, 128)
+          ? await repository.listDebugObservations(selectedSession.id, input.installationId, input.projectId, MAX_TIMELINE_OBSERVATIONS)
           : [];
         const error = typeof input.params.error === "string" ? input.params.error : undefined;
         return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions, selectedSession, observations, error }), title: "SoulInjector debugger", cache: "no-store" };

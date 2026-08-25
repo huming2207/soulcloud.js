@@ -215,20 +215,24 @@ describe("SoulInjector plugin", () => {
       startedAt: saved.createdAt,
       endedAt: null,
     };
+    let observationLimit = 0;
     const plugin = createSoulInjectorPlugin({
       ...store(),
       listDebugSessions: async () => [session],
       getDebugSession: async (id, installationId, projectId) => id === sessionId && installationId === saved.installationId && projectId === saved.projectId ? session : null,
-      listDebugObservations: async (id, installationId, projectId) => id === sessionId && installationId === saved.installationId && projectId === saved.projectId ? [{
-        id: "00000000-0000-4000-8000-000000000007",
-        sessionId,
-        eventRef: "broker-event-1",
-        source: "device",
-        kind: "debug.log",
-        structuredData: { message: "<target halted>" },
-        artifactId: null,
-        createdAt: saved.createdAt,
-      }] : [],
+      listDebugObservations: async (id, installationId, projectId, limit) => {
+        observationLimit = limit ?? 0;
+        return id === sessionId && installationId === saved.installationId && projectId === saved.projectId ? [{
+          id: "00000000-0000-4000-8000-000000000007",
+          sessionId,
+          eventRef: "broker-event-1",
+          source: "device",
+          kind: "debug.log",
+          structuredData: { message: "<target halted>" },
+          artifactId: null,
+          createdAt: saved.createdAt,
+        }] : [];
+      },
     });
     const result = await plugin.render!["debugger"]!({
       requestId: "request",
@@ -242,6 +246,7 @@ describe("SoulInjector plugin", () => {
     expect(result.html).toContain("debug.log");
     expect(result.html).toContain("&lt;target halted&gt;");
     expect(result.html).not.toContain("<target halted>");
+    expect(observationLimit).toBe(16);
   });
 
   test("persists device observations idempotently by broker event id", async () => {
