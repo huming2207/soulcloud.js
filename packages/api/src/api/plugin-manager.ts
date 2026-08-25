@@ -89,6 +89,16 @@ const debuggerSessionBody = z.object({
 }, "target configuration id, revision and target id must be provided together");
 const debuggerArtifactQuery = z.object({ kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), case_id: z.string().uuid().optional(), content_type: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)).default("application/octet-stream") }).strict();
 
+function parseInstallationId(value: string): string | null {
+  const parsed = z.string().uuid().safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function invalidInstallationId(set: { status?: number | string }): { error: "invalid_request"; message: string } {
+  set.status = 400;
+  return { error: "invalid_request", message: "installation ID must be a UUID" };
+}
+
 /** Human API is the only browser-facing authority for plugin metadata. */
 export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, options?: PluginManagerOptions) {
   return new Elysia().get("/v1/plugins/catalog", async ({ request, set }) => {
@@ -117,15 +127,17 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .post("/v1/plugin-installations/:id/bindings", async ({ request, body, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
       const parsed = bindingBody.safeParse(body);
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       const device = await prisma.device.findUnique({ where: { id: parsed.data.device_id }, select: { projectId: true } });
       if (!installation || !device) { set.status = 404; return { error: "not_found", message: "installation or device not found" }; }
       if (installation.projectId !== device.projectId || !(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
-        const result = await callManager(options, `/internal/plugins/installations/${params.id}/bindings`, {
+        const result = await callManager(options, `/internal/plugins/installations/${installationId}/bindings`, {
           deviceId: parsed.data.device_id,
           profileId: parsed.data.profile_id,
           profileVersion: parsed.data.profile_version,
@@ -137,16 +149,18 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .post("/v1/plugin-installations/:id/actions/:actionId", async ({ request, body, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
       const parsed = pluginActionRequestBody.safeParse(body);
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       const device = await prisma.device.findUnique({ where: { id: parsed.data.device_id }, select: { projectId: true } });
       if (!installation || !device) { set.status = 404; return { error: "not_found", message: "installation or device not found" }; }
       if (installation.projectId !== device.projectId || !(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
         const result = await callManager(options, "/internal/plugins/actions/encode", {
-          installationId: params.id, userId: user.user.id, deviceId: parsed.data.device_id, actionId: params.actionId, input: parsed.data.input,
+          installationId, userId: user.user.id, deviceId: parsed.data.device_id, actionId: params.actionId, input: parsed.data.input,
           humanApproved: parsed.data.human_approved,
           timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
         });
@@ -157,16 +171,18 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .post("/v1/plugin-installations/:id/debugger/target-config", async ({ request, body, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
       const parsed = pluginTargetConfigRequestBody.safeParse(body);
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
       const yaml = typeof parsed.data === "string" ? parsed.data : parsed.data.yaml;
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
       if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
         const result = await callManager(options, "/internal/plugins/debugger/target-config", {
-          installationId: params.id,
+          installationId,
           projectId: installation.projectId,
           userId: user.user.id,
           yaml,
@@ -179,13 +195,15 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .get("/v1/plugin-installations/:id/debugger/target-configs", async ({ request, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
       if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
         const result = await callManager(options, "/internal/plugins/debugger/target-configs", {
-          installationId: params.id,
+          installationId,
           projectId: installation.projectId,
           userId: user.user.id,
           timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
@@ -197,13 +215,15 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .get("/v1/plugin-installations/:id/debugger/artifacts", async ({ request, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
       if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
         const result = await callManager(options, "/internal/plugins/debugger/artifacts", {
-          installationId: params.id,
+          installationId,
           projectId: installation.projectId,
           userId: user.user.id,
           timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
@@ -215,16 +235,18 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .post("/v1/plugin-installations/:id/debugger/sessions", async ({ request, body, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
       const parsed = debuggerSessionBody.safeParse(body);
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       const device = await prisma.device.findUnique({ where: { id: parsed.data.device_id }, select: { projectId: true } });
       if (!installation || !device) { set.status = 404; return { error: "not_found", message: "installation or device not found" }; }
       if (installation.projectId !== device.projectId || !(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
         const result = await callManager(options, "/internal/plugins/debugger/sessions", {
-          installationId: params.id,
+          installationId,
           projectId: installation.projectId,
           deviceId: parsed.data.device_id,
           userId: user.user.id,
@@ -310,6 +332,8 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .post("/v1/plugin-installations/:id/debugger/artifacts", async ({ request, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
       const url = new URL(request.url);
       const parsed = debuggerArtifactQuery.safeParse({ kind: url.searchParams.get("kind"), filename: url.searchParams.get("filename"), case_id: url.searchParams.get("case_id") ?? undefined, content_type: url.searchParams.get("content_type") ?? undefined });
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
@@ -317,12 +341,12 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       if (!uploadId.success) { set.status = 400; return { error: "invalid_request", message: "Idempotency-Key must be a UUID" }; }
       const totalSize = Number(request.headers.get("content-length") ?? "0");
       if (!Number.isSafeInteger(totalSize) || totalSize < 1 || totalSize > 64 * 1024 * 1024) { set.status = totalSize > 64 * 1024 * 1024 ? 413 : 411; return { error: totalSize > 64 * 1024 * 1024 ? "payload_too_large" : "length_required", message: "artifact content-length must be between 1 and 67108864 bytes" }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
       if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
-        const result = await callManagerBinary(options, `/internal/plugins/debugger/installations/${params.id}/artifacts`, request, {
+        const result = await callManagerBinary(options, `/internal/plugins/debugger/installations/${installationId}/artifacts`, request, {
           "x-soulcloud-project-id": installation.projectId,
           "x-soulcloud-user-id": user.user.id,
           ...(parsed.data.case_id ? { "x-soulcloud-case-id": parsed.data.case_id } : {}),
@@ -338,14 +362,16 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .post("/v1/plugin-installations/:id/state", async ({ request, body, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
       const parsed = stateBody.safeParse(body);
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
       if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
-        const result = await callManager(options, `/internal/plugins/installations/${params.id}/state`, parsed.data);
+        const result = await callManager(options, `/internal/plugins/installations/${installationId}/state`, parsed.data);
         set.status = result.status;
         return result.value;
       } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
@@ -353,14 +379,16 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .post("/v1/plugin-installations/:id/migrate", async ({ request, body, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
       const parsed = migrateBody.safeParse(body);
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
       if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
-        const result = await callManager(options, `/internal/plugins/installations/${params.id}/migrate`, {
+        const result = await callManager(options, `/internal/plugins/installations/${installationId}/migrate`, {
           pluginVersion: parsed.data.plugin_version,
           manifestHash: parsed.data.manifest_hash,
           config: parsed.data.config ?? null,
@@ -372,12 +400,14 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .post("/v1/plugin-installations/:id/reconcile", async ({ request, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true } });
       if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
       if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
-        const result = await callManager(options, `/internal/plugins/installations/${params.id}/reconcile`, {});
+        const result = await callManager(options, `/internal/plugins/installations/${installationId}/reconcile`, {});
         set.status = result.status;
         return result.value;
       } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
@@ -385,8 +415,10 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
     .get("/v1/plugin-installations/:id/ui-session/:routeId", async ({ request, params, query, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installationId = parseInstallationId(params.id);
+      if (!installationId) return invalidInstallationId(set);
       if (!options?.uiSessionSecret) { set.status = 503; return { error: "plugin_ui_unavailable", message: "plugin UI sessions are not configured" }; }
-      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true } });
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: installationId }, select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true } });
       if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
       if (installation.state !== "enabled" || !(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "plugin installation access denied" }; }
       const snapshot = await prisma.pluginManifestSnapshot.findUnique({ where: { pluginId_pluginVersion: { pluginId: installation.pluginId, pluginVersion: installation.pluginVersion } }, select: { canonicalManifest: true, manifestHash: true } });
@@ -395,9 +427,9 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       if (!snapshot || snapshot.manifestHash.trim() !== installation.manifestHash.trim() || !route) { set.status = 404; return { error: "not_found", message: "plugin UI route not found" }; }
       const locale = typeof query?.locale === "string" && query.locale.length <= 32 ? query.locale : "en";
       const ttlSeconds = options.uiSessionTtlSeconds ?? 300;
-      const session = signPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds }, { sub: user.user.id, projectId: installation.projectId, installationId: params.id, pluginId: installation.pluginId, pluginVersion: installation.pluginVersion, manifestHash: installation.manifestHash.trim(), routeId: params.routeId, permissions: [], locale });
+      const session = signPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds }, { sub: user.user.id, projectId: installation.projectId, installationId, pluginId: installation.pluginId, pluginVersion: installation.pluginVersion, manifestHash: installation.manifestHash.trim(), routeId: params.routeId, permissions: [], locale });
       const uiOrigin = options.uiOrigin?.replace(/\/$/, "");
       if (!uiOrigin) { set.status = 503; return { error: "plugin_ui_unavailable", message: "plugin UI origin is not configured" }; }
-      return { bootstrap_url: `${uiOrigin}/bootstrap`, bootstrap_token: session, path: `/plugins/${params.id}${route.path}`, expires_in: ttlSeconds };
+      return { bootstrap_url: `${uiOrigin}/bootstrap`, bootstrap_token: session, path: `/plugins/${installationId}${route.path}`, expires_in: ttlSeconds };
     });
 }

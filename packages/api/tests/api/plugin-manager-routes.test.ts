@@ -183,6 +183,24 @@ describe("POST /v1/plugin-installations/:id/bindings", () => {
     expect(res.status).toBe(400);
     expect(receivedBindingRequests).toHaveLength(forwarded);
   });
+
+  test("rejects a malformed installation path without querying Prisma or the Manager", async () => {
+    const forwarded = receivedBindingRequests.length;
+    const res = await app.handle(
+      new Request("http://localhost/v1/plugin-installations/not-a-uuid/bindings", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ device_id: deviceId, profile_id: "profile-a", profile_version: 1 }),
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_request" });
+    expect(receivedBindingRequests).toHaveLength(forwarded);
+  });
 });
 
 describe("GET /v1/plugin-installations/:id/debugger/target-configs", () => {
