@@ -92,6 +92,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   的 user/project/installation scope，严格校验 case、Soulcloud Device、target-config 三元组和
   artifact 引用，Manager 负责 execution capability、设备 lease、并发冲突和 plugin bootstrap。
   页面不会接触主站 JWT，也不会让 plugin 直接获得 execution token。
+- Plugin Manager 在每次 SSR、asset、UI action 和 plugin-origin session 创建前同时复核
+  `plugin_installation` 快照与 `user_projects` membership；用户被移出 project 后，尚未过期的旧
+  UI cookie 也会立即失效。
 - `DebugExecution` 已保存平台侧长时 capability：不可变 plugin/version/manifest snapshot、
   initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
   device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
