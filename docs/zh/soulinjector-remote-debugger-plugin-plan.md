@@ -51,6 +51,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   当前
   Human API 的人工 action 请求显式传递 approval；真正可审计的长期 approval/execution record
   仍属于后续阶段。
+- 专用 SoulInjector runtime 读取并校验 operation、WebSocket backpressure、idle timeout、
+  value/blob budget 等环境上限；Compose 会把这些上限传入 plugin，不把 Manager 的限制误当成
+  plugin 进程自身的隔离。
 
 尚未实现：SoulInjector 设备固件 command handler、HTTPS 设备文件 gateway、case/session/report
 业务表、LLM harness、长时间 device lease，以及独立 plugin-origin bootstrap/live channel。不要
@@ -489,7 +492,8 @@ artifact reference。
 5. Compose 开发部署加入 plugin 私有 DB，但不把 credential 给 Manager；
 6. 测试 plugin DB failure/crash 不影响 Manager/Broker/Human API。
 
-当前结果：target config 和 artifact 在 plugin 私有 DB 重启后可恢复；纯云端 case 尚未实现。
+当前结果：target config 和 artifact 在 plugin 私有 DB 重启后可恢复；plugin runtime 的资源上限
+可由部署环境配置；纯云端 case 尚未实现。
 
 ### 阶段 D2：设备联网与确定性 Debug Primitive
 
