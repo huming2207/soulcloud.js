@@ -4,6 +4,7 @@ import { parseTargetConfigYaml, targetConfigHash, type TargetConfig } from "./ta
 import { validateArtifact, type DebugArtifactKind, type ValidatedArtifact } from "./artifact";
 
 const schema = "soul_injector_plugin";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface TargetConfigRecord {
   id: string;
@@ -813,6 +814,8 @@ export class SoulInjectorRepository {
       ? null
       : boundedText(input.deviceFirmwareVersion, "device firmware version", 256);
     if (!/^[0-9a-f]{64}$/i.test(input.manifestHash)) throw new RangeError("manifestHash must be a SHA-256 hex digest");
+    if (!UUID.test(input.soulcloudDeviceRef)) throw new RangeError("Soulcloud Device reference must be a UUID");
+    if (input.executionRef !== null && input.executionRef !== undefined && !UUID.test(input.executionRef)) throw new RangeError("execution reference must be a UUID");
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
