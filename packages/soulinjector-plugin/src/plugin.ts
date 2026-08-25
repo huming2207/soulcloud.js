@@ -1,0 +1,171 @@
+import { definePlugin, type ActionEncoder, type EntityUpdate, type PluginDefinition, type PluginManifest } from "@soulcloud/plugin-sdk";
+import type { SoulInjectorRepository, TargetConfigRecord } from "./repository";
+
+export const SOULINJECTOR_PLUGIN_ID = "soulcloud.soulinjector-debugger";
+export const SOULINJECTOR_PLUGIN_VERSION = "0.1.0";
+const profileId = "soulinjector-debugger";
+
+const targetRevision = { type: "integer" as const, required: true, min: 1, max: Number.MAX_SAFE_INTEGER };
+const artifactId = { type: "string" as const, required: true };
+
+const actions: PluginManifest["actions"] = [
+  { id: "debug.identify", inputSchema: { targetConfigRevision: targetRevision }, wire: { command: "soulinjector.debug.identify", schemaVersion: 1 } },
+  { id: "debug.halt", inputSchema: {}, wire: { command: "soulinjector.debug.halt", schemaVersion: 1 }, requiresHumanApproval: true },
+  { id: "debug.resume", inputSchema: {}, wire: { command: "soulinjector.debug.resume", schemaVersion: 1 }, requiresHumanApproval: true },
+  { id: "debug.reset", inputSchema: {}, wire: { command: "soulinjector.debug.reset", schemaVersion: 1 }, requiresHumanApproval: true },
+  { id: "debug.read_memory", inputSchema: {
+    targetConfigRevision: targetRevision,
+    address: { type: "integer" as const, required: true, min: 0, max: Number.MAX_SAFE_INTEGER },
+    length: { type: "integer" as const, required: true, min: 1, max: 1_048_576 },
+  }, wire: { command: "soulinjector.debug.read_memory", schemaVersion: 1 } },
+  { id: "debug.read_registers", inputSchema: { targetConfigRevision: targetRevision }, wire: { command: "soulinjector.debug.read_registers", schemaVersion: 1 } },
+  { id: "debug.flash_write", inputSchema: { targetConfigRevision: targetRevision, artifactId }, wire: { command: "soulinjector.debug.flash_write", schemaVersion: 1 }, requiresHumanApproval: true },
+  { id: "debug.start", inputSchema: {
+    targetConfigRevision: targetRevision,
+    artifactId,
+    mode: { type: "string" as const, required: true, enum: ["automatic", "assisted"] },
+  }, wire: { command: "soulinjector.debug.start", schemaVersion: 1 }, requiresHumanApproval: true },
+];
+
+const entities: PluginManifest["profiles"][number]["entities"] = [
+  { key: "connection.state", valueType: "enum" as const, category: "primary" as const, enumValues: ["offline", "online", "unknown"] },
+  { key: "debug.state", valueType: "enum" as const, category: "primary" as const, enumValues: ["idle", "running", "halted", "failed", "completed", "awaiting_approval"] },
+  { key: "debug.progress", valueType: "number" as const, category: "measurement" as const, unit: "%" },
+  { key: "debug.target", valueType: "string" as const, category: "diagnostic" as const },
+  { key: "debug.session_id", valueType: "string" as const, category: "diagnostic" as const },
+  { key: "debug.error", valueType: "string" as const, category: "diagnostic" as const },
+  { key: "debug.last_message", valueType: "string" as const, category: "diagnostic" as const },
+];
+
+const events = [
+  { kind: "debug.status", schemaVersion: 1, description: "Bounded debugger state/progress update from a Soulcloud Device" },
+  { kind: "debug.log", schemaVersion: 1, description: "A bounded debugger log line from a Soulcloud Device" },
+];
+
+const manifest = {
+  id: SOULINJECTOR_PLUGIN_ID,
+  version: SOULINJECTOR_PLUGIN_VERSION,
+  apiVersion: 1 as const,
+  displayName: "SoulInjector Remote Debugger",
+  profiles: [{
+    id: profileId,
+    version: 1,
+    manufacturer: "Soulcloud",
+    model: "SoulInjector",
+    capabilities: ["debugger.swd", "debugger.uart", "debugger.elf"],
+    entities,
+  }],
+  actions,
+  events,
+  ui: {
+    routes: [{
+      id: "debugger",
+      path: "/debugger",
+      methods: ["GET", "POST"] as ("GET" | "POST")[],
+      actionSchema: { yaml: { type: "string" as const, required: true, title: "Target YAML", description: "Target architecture, chip and required debugger primitives" } },
+    }],
+  },
+};
+
+interface SoulInjectorPluginStore {
+  saveTargetConfig(input: { installationId: string; projectId: string; createdBy: string; yaml: string }): Promise<TargetConfigRecord>;
+  getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null>;
+}
+
+function value(input: unknown, key: string): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("action input must be an object");
+  const result = (input as Record<string, unknown>)[key];
+  if (result === undefined) throw new Error(`missing action field ${key}`);
+  return result;
+}
+
+function stringValue(input: unknown, key: string): string {
+  const result = value(input, key);
+  if (typeof result !== "string") throw new Error(`action field ${key} must be a string`);
+  return result;
+}
+
+function numberValue(input: unknown, key: string): number {
+  const result = value(input, key);
+  if (typeof result !== "number" || !Number.isSafeInteger(result)) throw new Error(`action field ${key} must be a safe integer`);
+  return result;
+}
+
+function one(name: string, input: unknown): Record<string, string | number> {
+  const result = value(input, name);
+  if (typeof result !== "string" && (typeof result !== "number" || !Number.isFinite(result))) throw new Error(`action field ${name} has an invalid value`);
+  return { [name]: result };
+}
+
+const encoders: Record<string, ActionEncoder> = {
+  "debug.identify": (input) => [one("targetConfigRevision", input)],
+  "debug.halt": () => [],
+  "debug.resume": () => [],
+  "debug.reset": () => [],
+  "debug.read_memory": (input) => [one("targetConfigRevision", input), one("address", input), one("length", input)],
+  "debug.read_registers": (input) => [one("targetConfigRevision", input)],
+  "debug.flash_write": (input) => [one("targetConfigRevision", input), one("artifactId", input)],
+  "debug.start": (input) => [one("targetConfigRevision", input), one("artifactId", input), one("mode", input)],
+};
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function updateIf<T extends EntityUpdate["value"]>(updates: EntityUpdate[], key: string, value: T): void {
+  if (value !== undefined) updates.push({ entityKey: key, value });
+}
+
+function eventUpdates(payload: unknown): EntityUpdate[] {
+  const record = asObject(payload);
+  if (!record) return [];
+  const updates: EntityUpdate[] = [];
+  const state = record.state;
+  if (typeof state === "string" && ["idle", "running", "halted", "failed", "completed", "awaiting_approval"].includes(state)) updateIf(updates, "debug.state", state);
+  const progress = record.progress;
+  if (typeof progress === "number" && Number.isFinite(progress) && progress >= 0 && progress <= 100) updateIf(updates, "debug.progress", progress);
+  const target = record.target;
+  if (typeof target === "string" && target.length <= 128) updateIf(updates, "debug.target", target);
+  const sessionId = record.sessionId;
+  if (typeof sessionId === "string" && sessionId.length <= 128) updateIf(updates, "debug.session_id", sessionId);
+  const error = record.error;
+  if (typeof error === "string" && error.length <= 4096) updateIf(updates, "debug.error", error);
+  const message = record.message;
+  if (typeof message === "string" && message.length <= 4096) updateIf(updates, "debug.last_message", message);
+  return updates;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
+}
+
+function configForm(input: { installationId: string; yaml: string }): string {
+  return `<main><h1>SoulInjector debugger</h1><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="262144" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></main>`;
+}
+
+export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {
+  return definePlugin({
+    manifest,
+    encodeAction: encoders,
+    onEvent: async (_context, event) => ({
+      updates: event.kind === "debug.status" ? eventUpdates(event.payload) : event.kind === "debug.log" ? eventUpdates({ message: asObject(event.payload)?.message }) : [],
+    }),
+    configureTarget: async (input) => {
+      const saved = await repository.saveTargetConfig({ installationId: input.installationId, projectId: input.projectId, createdBy: input.userId, yaml: input.yaml });
+      return { configId: saved.id, revision: saved.revision, sha256: saved.sha256, targetCount: saved.config.targets.length };
+    },
+    render: {
+      debugger: async (input) => {
+        const saved = await repository.getLatestTargetConfig(input.installationId);
+        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n" }), title: "SoulInjector debugger", cache: "no-store" };
+      },
+    },
+    handleAction: {
+      debugger: async (action, input) => {
+        const yaml = stringValue(action, "yaml");
+        await repository.saveTargetConfig({ installationId: input.installationId, projectId: input.projectId, createdBy: input.user.id, yaml });
+        return { redirect: `/plugins/${input.installationId}/debugger` };
+      },
+    },
+  });
+}

@@ -117,6 +117,7 @@
       "name": "@soulcloud/soulinjector-plugin",
       "version": "0.1.0",
       "dependencies": {
+        "@soulcloud/plugin-runtime": "workspace:*",
         "@soulcloud/plugin-sdk": "workspace:*",
         "pg": "^8.22.0",
         "zod": "^4.4.3",

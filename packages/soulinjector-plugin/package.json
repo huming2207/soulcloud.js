@@ -4,7 +4,15 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./plugin": "./src/plugin.ts"
+  },
+  "scripts": {
+    "start": "bun run src/runtime.ts"
+  },
   "dependencies": {
+    "@soulcloud/plugin-runtime": "workspace:*",
     "@soulcloud/plugin-sdk": "workspace:*",
     "pg": "^8.22.0",
     "zod": "^4.4.3"
