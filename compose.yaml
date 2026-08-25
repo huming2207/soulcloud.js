@@ -199,6 +199,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: ${SOULINJECTOR_PLUGIN_LOG_MAX_SIZE:-10m}
+        max-file: ${SOULINJECTOR_PLUGIN_LOG_MAX_FILES:-3}
     restart: unless-stopped
     depends_on:
       soulinjector-plugin-postgres:
