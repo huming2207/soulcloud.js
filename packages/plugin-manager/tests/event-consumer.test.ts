@@ -102,6 +102,81 @@ describe("plugin event consumer", () => {
     expect(internals.circuits.has(`${event.plugin_id}\u0000${event.installation_id}`)).toBe(false);
   });
 
+  test("classifies a malformed plugin event output as permanent plugin failure", async () => {
+    const event = leasedEvent("malformed-output");
+    event.payload = Buffer.from(encodeDeviceEvent({
+      id: Uint8Array.from({ length: 16 }, (_, index) => index),
+      seq: 1n,
+      kind: event.kind,
+      schema: event.schema,
+      data: { value: 1 },
+    }));
+    let permanent: boolean | undefined;
+    let errorMessage = "";
+    const store: PluginEventStore = {
+      lease: async () => [],
+      complete: async () => true,
+      completeWithUpdates: async () => true,
+      release: async (_id, _token, isPermanent, error) => {
+        permanent = isPermanent;
+        errorMessage = error;
+        return true;
+      },
+    };
+    const profile = {
+      id: event.profile_id,
+      version: event.profile_version,
+      manufacturer: "Soulcloud",
+      model: "fixture",
+      capabilities: [],
+      entities: [],
+    };
+    const manifest: PluginManifest = {
+      id: event.plugin_id,
+      version: event.plugin_version,
+      apiVersion: 1,
+      profiles: [profile],
+      actions: [],
+      events: [{ kind: event.kind, schemaVersion: event.schema }],
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "x".repeat(32),
+      maxFrameBytes: 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024,
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      eventStore: store,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+      connections: Map<string, PluginConnection>;
+      circuits: Map<string, unknown>;
+      dispatchEvent(value: LeasedPluginEvent): Promise<void>;
+    };
+    internals.catalog.set(`${event.plugin_id}@${event.plugin_version}`, {
+      pluginId: event.plugin_id,
+      pluginVersion: event.plugin_version,
+      manifestHash: event.manifest_hash,
+      manifest,
+      connected: true,
+    });
+    internals.connections.set(event.plugin_id, {
+      id: "connection",
+      isOpen: true,
+      manifest: { pluginVersion: event.plugin_version, manifestHash: event.manifest_hash },
+      request: async () => ({ updates: [], logs: { malformed: true } }),
+    } as unknown as PluginConnection);
+
+    await internals.dispatchEvent(event);
+
+    expect(permanent).toBe(true);
+    expect(errorMessage).toContain("INVALID_PLUGIN_OUTPUT");
+    expect(internals.circuits.has(`${event.plugin_id}\u0000${event.installation_id}`)).toBe(false);
+  });
+
   test("passes the current execution capability to events for the leased device", async () => {
     const event = leasedEvent("execution-event");
     event.payload = Buffer.from(encodeDeviceEvent({

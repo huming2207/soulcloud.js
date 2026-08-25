@@ -8,6 +8,7 @@ import {
   configureTargetOutput,
   debugSessionStartOutput,
   debugSessionAbortOutput,
+  eventOutput,
   listTargetConfigsOutput,
   listArtifactsOutput,
   uiAssetOutput,
@@ -1997,16 +1998,14 @@ export class PluginManager {
         },
         ...(execution ? { execution } : {}),
       }, this.options.eventTimeoutMs ?? 30_000);
+      let output: ReturnType<typeof eventOutput.parse>;
       try {
         assertRpcValueBudget(result, this.valueBudget);
+        output = eventOutput.parse(result);
       } catch (error) {
         throw Object.assign(new Error(`INVALID_PLUGIN_OUTPUT: ${(error as Error).message}`), { code: "INVALID_PLUGIN_OUTPUT" });
       }
       await this.sealOperation(operationId);
-      const output = result as {
-        updates?: readonly (Omit<EntityUpdateInput, "value"> & { value?: EntityUpdateInput["value"] | Blob })[];
-        logs?: readonly { level: string; message: string }[];
-      };
       const updates: EntityUpdateInput[] = await Promise.all((output.updates ?? []).map(async (update) => ({
         ...update,
         value: update.value instanceof Blob
