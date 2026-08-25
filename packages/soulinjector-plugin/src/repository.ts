@@ -131,6 +131,7 @@ export interface CreateDebugSessionInput {
 export interface DebugObservationRecord {
   id: string;
   sessionId: string;
+  eventRef: string | null;
   source: string;
   kind: string;
   structuredData: unknown;
@@ -141,6 +142,7 @@ export interface DebugObservationRecord {
 export interface AppendDebugObservationInput {
   projectId: string;
   sessionId: string;
+  eventRef?: string | null;
   source: string;
   kind: string;
   structuredData: unknown;
@@ -270,14 +272,20 @@ CREATE INDEX IF NOT EXISTS debug_sessions_device_started_idx
 CREATE TABLE IF NOT EXISTS ${schema}.debug_observations (
   id uuid PRIMARY KEY,
   session_id uuid NOT NULL REFERENCES ${schema}.debug_sessions(id) ON DELETE CASCADE,
+  event_ref varchar(128),
   source varchar(64) NOT NULL,
   kind varchar(128) NOT NULL,
   structured_data jsonb NOT NULL,
   artifact_id uuid,
   created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE ${schema}.debug_observations
+  ADD COLUMN IF NOT EXISTS event_ref varchar(128);
 CREATE INDEX IF NOT EXISTS debug_observations_session_created_idx
   ON ${schema}.debug_observations (session_id, created_at ASC, id ASC);
+CREATE UNIQUE INDEX IF NOT EXISTS debug_observations_session_event_unique
+  ON ${schema}.debug_observations (session_id, event_ref)
+  WHERE event_ref IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS ${schema}.debug_reports (
   id uuid PRIMARY KEY,
@@ -429,6 +437,7 @@ function asObservationRecord(row: QueryResultRow): DebugObservationRecord {
   return {
     id: asString(row.id, "observation id"),
     sessionId: asString(row.session_id, "observation session id"),
+    eventRef: optionalString(row.event_ref, "observation event reference"),
     source: asString(row.source, "observation source"),
     kind: asString(row.kind, "observation kind"),
     structuredData: row.structured_data,
@@ -848,6 +857,7 @@ export class SoulInjectorRepository {
   async appendDebugObservation(input: AppendDebugObservationInput): Promise<DebugObservationRecord> {
     const source = boundedText(input.source, "observation source", 64);
     const kind = boundedText(input.kind, "observation kind", 128);
+    const eventRef = input.eventRef === null || input.eventRef === undefined ? null : boundedText(input.eventRef, "observation event reference", 128);
     const structuredData = jsonValue(input.structuredData, "observation data", 512 * 1024);
     const client = await this.pool.connect();
     try {
@@ -867,10 +877,21 @@ export class SoulInjectorRepository {
         if (!artifactResult.rows[0]) throw new Error("observation artifact is not available to this project");
       }
       const result = await client.query<QueryResultRow>(
-        `INSERT INTO ${schema}.debug_observations (id, session_id, source, kind, structured_data, artifact_id)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING *`,
-        [randomUUID(), input.sessionId, source, kind, structuredData, input.artifactId ?? null],
+        `INSERT INTO ${schema}.debug_observations (id, session_id, event_ref, source, kind, structured_data, artifact_id)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+         ON CONFLICT (session_id, event_ref) WHERE event_ref IS NOT NULL DO NOTHING
+         RETURNING *`,
+        [randomUUID(), input.sessionId, eventRef, source, kind, structuredData, input.artifactId ?? null],
       );
+      if (!result.rows[0] && eventRef !== null) {
+        const existing = await client.query<QueryResultRow>(
+          `SELECT * FROM ${schema}.debug_observations WHERE session_id = $1 AND event_ref = $2`,
+          [input.sessionId, eventRef],
+        );
+        if (!existing.rows[0]) throw new Error("debug observation disappeared after idempotent insert");
+        await client.query("COMMIT");
+        return asObservationRecord(existing.rows[0]);
+      }
       await client.query("COMMIT");
       return asObservationRecord(result.rows[0]!);
     } catch (error) {

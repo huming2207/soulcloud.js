@@ -93,6 +93,37 @@ describe("SoulInjector plugin", () => {
     expect(created).toEqual([{ projectId: saved.projectId, targetUnitRef: "unit-42", title: "Overheating probe", createdBy: saved.createdBy }]);
   });
 
+  test("persists device observations idempotently by broker event id", async () => {
+    const observations: unknown[] = [];
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      appendDebugObservation: async (input) => { observations.push(input); },
+    });
+    const sessionId = "00000000-0000-4000-8000-000000000005";
+    const result = await plugin.onEvent!({
+      operationId: "operation",
+      signal: AbortSignal.timeout(1000),
+      installation: { id: saved.installationId, projectId: saved.projectId, pluginId: "debugger", pluginVersion: "1.0.0", config: null },
+      device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
+      execution: null,
+      getEntity: async () => null,
+      enqueueCommand: async () => undefined,
+      callPlugin: async () => undefined,
+      devices: null,
+    }, {
+      id: "broker-event-1",
+      seq: 1n,
+      kind: "debug.status",
+      schema: 1,
+      receivedAt: new Date(0).toISOString(),
+      payload: { state: "running", sessionId },
+      installation: { id: saved.installationId, projectId: saved.projectId, pluginId: "debugger", pluginVersion: "1.0.0", config: null },
+      device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
+    });
+    expect(result.updates).toEqual([{ entityKey: "debug.state", value: "running" }, { entityKey: "debug.session_id", value: sessionId }]);
+    expect(observations).toEqual([{ projectId: saved.projectId, sessionId, eventRef: "broker-event-1", source: "device", kind: "debug.status", structuredData: { state: "running", sessionId } }]);
+  });
+
   test("lists target configuration revision metadata without exposing YAML", async () => {
     const plugin = createSoulInjectorPlugin(store());
     const result = await plugin.listTargetConfigs!({ operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, userId: saved.createdBy }, { signal: AbortSignal.timeout(1000) });

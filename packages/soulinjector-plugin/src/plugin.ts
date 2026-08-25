@@ -1,5 +1,5 @@
 import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginManifest } from "@soulcloud/plugin-sdk";
-import type { CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary } from "./repository";
+import type { AppendDebugObservationInput, CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary } from "./repository";
 import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 import { targetSelectionArgs } from "./target-selection";
 
@@ -81,6 +81,7 @@ interface SoulInjectorPluginStore {
   saveTargetConfig(input: { installationId: string; projectId: string; createdBy: string; yaml: string }): Promise<TargetConfigRecord>;
   createDebugCase?(input: CreateDebugCaseInput): Promise<DebugCaseRecord>;
   listDebugCases?(projectId: string, limit?: number): Promise<DebugCaseRecord[]>;
+  appendDebugObservation?(input: AppendDebugObservationInput): Promise<unknown>;
   getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null>;
   getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null>;
   listTargetConfigs?(installationId: string, projectId: string): Promise<TargetConfigSummary[]>;
@@ -147,6 +148,10 @@ function eventUpdates(payload: unknown): EntityUpdate[] {
   return updates;
 }
 
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }
@@ -162,15 +167,21 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
   return definePlugin({
     manifest,
     encodeAction: createEncoders(repository),
-    onEvent: async (_context, event) => {
+    onEvent: async (context, event) => {
       if (event.kind === "debug.status") {
         const parsed = debugStatusSchema.safeParse(event.payload);
-        return parsed.success ? { updates: eventUpdates(parsed.data) } : { logs: [{ level: "warn", message: "ignored malformed SoulInjector debug.status event" }] };
+        if (!parsed.success) return { logs: [{ level: "warn", message: "ignored malformed SoulInjector debug.status event" }] };
+        if (parsed.data.sessionId && repository.appendDebugObservation && isUuid(parsed.data.sessionId)) {
+          await repository.appendDebugObservation({ projectId: context.installation.projectId, sessionId: parsed.data.sessionId, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
+        }
+        return { updates: eventUpdates(parsed.data) };
       }
       const parsed = debugLogSchema.safeParse(event.payload);
-      return parsed.success
-        ? { updates: [{ entityKey: "debug.last_message", value: parsed.data.message }], logs: [{ level: parsed.data.level, message: parsed.data.message }] }
-        : { logs: [{ level: "warn", message: "ignored malformed SoulInjector debug.log event" }] };
+      if (!parsed.success) return { logs: [{ level: "warn", message: "ignored malformed SoulInjector debug.log event" }] };
+      if (parsed.data.sessionId && repository.appendDebugObservation && isUuid(parsed.data.sessionId)) {
+        await repository.appendDebugObservation({ projectId: context.installation.projectId, sessionId: parsed.data.sessionId, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
+      }
+      return { updates: [{ entityKey: "debug.last_message", value: parsed.data.message }], logs: [{ level: parsed.data.level, message: parsed.data.message }] };
     },
     configureTarget: async (input) => {
       const saved = await repository.saveTargetConfig({ installationId: input.installationId, projectId: input.projectId, createdBy: input.userId, yaml: input.yaml });
