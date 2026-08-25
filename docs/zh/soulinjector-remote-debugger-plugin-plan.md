@@ -56,6 +56,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   通过 artifact list RPC 暴露；64 KiB 分块上传不使用 S3/object storage；
 - `debugger.configureTarget`、`debugger.listTargetConfigs`、`debugger.listArtifacts`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
   路由和转发，不读取 plugin 私有业务表；SSR 配置页展示受限的 target-config revision 和 ELF/firmware artifact 元数据摘要，但不回显 YAML 或 artifact 正文；UI asset 已绑定 manifest SHA-256 并使用内容哈希路径；
+- Plugin Manager ↔ plugin 另有受限的 `debugger.readArtifactChunk` RPC：每次最多读取 64 KiB，plugin 私库使用
+  PostgreSQL `substring(bytea)` 按块返回，不把完整 artifact 读入 Manager；这是后续 device transfer gateway 的
+  基础能力，当前不开放设备端 HTTP，也不预先决定 push staging 或 controlled pull proxy。
 - artifact 上传要求 Human API 的 `Idempotency-Key`（UUID）贯穿 API → Plugin Manager → plugin 私库；响应丢失后用同一 key 重试会返回原 artifact，而不会重复创建；上传流还有可配置的绝对 wall-clock deadline，避免卡住的 body 或大量分块长期占用资源；
 - SSR target 配置表单支持 textarea 和受限的 YAML 文件载入，对非法 YAML 给出受限错误状态；Human API
   同一路由接受 JSON `{yaml}` 或原始 YAML 文本，详细 schema 校验仍由 plugin 私有 parser 执行，路径返回 400，
