@@ -93,16 +93,30 @@ function rejectAmbiguousYaml(yaml: string): void {
   // uses last-key-wins for duplicate mappings. Reject duplicate mapping keys
   // at the same indentation before parsing so an operator never signs an
   // ambiguous configuration by accident.
-  const keysByIndent = new Map<number, Set<string>>();
+  const scopes: Array<{ indent: number; listItem: boolean; keys: Set<string> }> = [];
+  const enterScope = (indent: number, listItem: boolean): Set<string> => {
+    while (scopes.length > 0 && scopes[scopes.length - 1]!.indent > indent) scopes.pop();
+    const current = scopes[scopes.length - 1];
+    if (current && current.indent === indent && listItem && current.listItem) scopes.pop();
+    const next = scopes[scopes.length - 1];
+    if (!next || next.indent !== indent) {
+      const created = { indent, listItem, keys: new Set<string>() };
+      scopes.push(created);
+      return created.keys;
+    }
+    return next.keys;
+  };
   for (const line of yaml.split(/\r?\n/)) {
     if (!line.trim() || /^\s*#/.test(line)) continue;
+    const listItem = /^(\s*)-\s*(.*)$/.exec(line);
     const match = /^(\s*)(?:-\s+)?([A-Za-z0-9_.-]+):(?:\s|$)/.exec(line);
-    if (!match) continue;
+    if (!match) {
+      if (listItem) enterScope(listItem[1]!.replace(/\t/g, "  ").length, true);
+      continue;
+    }
     const indent = match[1]!.replace(/\t/g, "  ").length;
-    for (const existing of keysByIndent.keys()) if (existing > indent) keysByIndent.delete(existing);
     const isListItem = /^\s*-\s+/.test(line);
-    let keys = isListItem ? undefined : keysByIndent.get(indent);
-    if (!keys) keysByIndent.set(indent, keys = new Set());
+    const keys = enterScope(indent, isListItem);
     if (keys.has(match[2]!)) throw new TargetConfigError(`duplicate YAML key: ${match[2]}`);
     keys.add(match[2]!);
   }
