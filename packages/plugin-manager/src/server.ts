@@ -4,7 +4,10 @@ import { coerceStringActionInput, validateActionInput, type ActionInputSchema, t
 import { z, type ZodType } from "zod";
 
 export interface PluginManagerServerOptions { hostname: string; port: number; serviceToken: string; manager: PluginManager; uiSessionSecret?: string; uiSessionTtlSeconds?: number; maxArtifactBytes?: number; }
-function json(status: number, value: unknown): Response { return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } }); }
+function jsonValueReplacer(_key: string, value: unknown): unknown {
+  return typeof value === "bigint" ? value.toString() : value;
+}
+function json(status: number, value: unknown): Response { return new Response(JSON.stringify(value, jsonValueReplacer), { status, headers: { "content-type": "application/json" } }); }
 function authorized(request: Request, token: string): boolean { return request.headers.get("authorization") === `Bearer ${token}`; }
 
 function cookie(request: Request, name: string): string | undefined {
