@@ -70,8 +70,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const commandRows = await prisma.deviceCommand.findMany({ where: { deviceId }, select: { id: true, batchId: true } });
-  await prisma.deviceCommand.deleteMany({ where: { deviceId } });
+  const testDeviceIds = [deviceId, membershipRevocationDeviceId];
+  const commandRows = await prisma.deviceCommand.findMany({ where: { deviceId: { in: testDeviceIds } }, select: { id: true, batchId: true } });
+  await prisma.deviceCommand.deleteMany({ where: { deviceId: { in: testDeviceIds } } });
   if (commandRows.length > 0) await prisma.commandBatch.deleteMany({ where: { id: { in: commandRows.map((row) => row.batchId) } } });
   await prisma.debugExecution.deleteMany({ where: { installationId } });
   await prisma.pluginDeviceBinding.deleteMany({ where: { deviceId: { in: [deviceId, membershipRevocationDeviceId] } } });
