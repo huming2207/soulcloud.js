@@ -1391,6 +1391,7 @@ export class PluginManager {
     )) {
       throw publicError("plugin UI session is no longer valid", 403, "plugin_ui_session_invalid");
     }
+    if (input.uiSession) await this.assertUiSessionCurrent(input.uiSession, installation);
     const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
     const uploadId = input.uploadId;
     const chunkTimeoutMs = input.timeoutMs ?? 30_000;
@@ -1711,9 +1712,12 @@ export class PluginManager {
     }
   }
 
-  private async assertUiSessionCurrent(session: PluginUiSession): Promise<void> {
+  private async assertUiSessionCurrent(
+    session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
+    observedInstallation?: { projectId: string; pluginId: string; pluginVersion: string; manifestHash: string; state: string },
+  ): Promise<void> {
     const [installation, membership] = await Promise.all([
-      this.options.prisma!.pluginInstallation.findUnique({
+      observedInstallation ?? this.options.prisma!.pluginInstallation.findUnique({
         where: { id: session.installationId },
         select: {
           projectId: true,
