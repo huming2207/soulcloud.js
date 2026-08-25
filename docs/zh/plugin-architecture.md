@@ -200,7 +200,7 @@ Plugin Manager 是独立 Bun 服务，不嵌入 Human API，也不是面向设�
 - 为 Human API 提供内部 plugin control/action 接口；
 - 为 plugin 提供带 project/installation/device/operation scope 的反向 RPC；
 - 为确有长时间业务需要的 plugin 提供可持久、可撤销且严格限定 installation/device/能力的
-  execution capability；它只负责授权、控制 lease 和审计，不保存 plugin 的业务步骤或 agent 状态；
+  execution capability；它只负责授权、控制 lease 和审计，不保存 plugin 的业务步骤或 LLM 调试 agent 状态；
 - 权威校验 plugin 输出，并与 event completion 原子提交；
 - 实施 deadline、并发、大小、退避、dead-letter 和 circuit breaker；
 - 承载 `/plugins/*` SSR 路由、短期 UI session 校验和有界 HTML fragment；streaming 是后续能力；
@@ -407,7 +407,7 @@ context.ui.getData
 远程 debugger 等长时间产品不能把一次 operation 延长数小时，也不能在 operation 结束后继续
 使用它的 token。此类产品使用单独持久化的 execution capability：Manager 保存最小
 installation/device/plugin/version/user/allowed-capability/expiry/lease 状态，plugin 私有数据库
-保存 case、agent 和产品状态。execution capability 不是 workflow、DAG 或后台进程管理器。
+保存 case、LLM 调试 agent 和产品状态。execution capability 不是 workflow、DAG 或后台进程管理器。
 
 ## 11. Plugin SSR UI
 
