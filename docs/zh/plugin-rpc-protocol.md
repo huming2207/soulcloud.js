@@ -333,9 +333,10 @@ debugger 纵切中冻结，详见 `soulinjector-remote-debugger-plugin-plan.md`�
 API 只把已认证的 project/user/device/case 和输入快照交给 Manager；Manager 创建 execution，
 再把原始 execution token 作为一次性字段传给同一 installation/version 的 plugin。plugin 只把
 `execution_ref` 写入自己的 session，不得持久化原始 token；若 Manager 在 bootstrap 返回后发现
-平台 execution 已失效，可调用仅 Manager 使用的 `debugger.abortSession`，按
-installation/project/device/session/execution scope 将已创建的私有 session 标为 failed；该清理
-不发送设备 command，也不绕过 Human API 的人工批准。Human API、Browser、通用
+平台 execution 已失效，可调用仅 Manager 使用的 `debugger.abortSession`。正常情况下请求携带
+`sessionId`；如果 plugin 已经提交私有 session 但 bootstrap 响应丢失，`sessionId` 可以省略或为
+`null`，plugin 必须使用 installation/project/device 与唯一 `executionId` scope 找回该 session
+并将其标为 failed。该清理不发送设备 command，也不绕过 Human API 的人工批准。Human API、Browser、通用
 `context.plugins.callScoped` 和 plugin-to-plugin procedure 都不能获得该 token。该 bootstrap
 成功后只返回 execution/session 摘要，长时 pause/cancel/take-over 仍需单独的受权入口。
 
