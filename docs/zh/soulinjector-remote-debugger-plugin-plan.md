@@ -1,6 +1,6 @@
 # SoulInjector 远程 Debugger Plugin 实施计划
 
-**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease 和受限 execution reverse RPC 基础；私有 case/session/observation/report 数据层已落地；设备固件、LLM、Human API execution 启动入口和长时设备 command 闭环尚未实现）
+**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease 和受限 execution reverse RPC 基础；私有 case/session/observation/report 数据层已落地；Human API start/session bootstrap 已有基础版本；设备固件、LLM、pause/cancel/take-over、重启恢复和长时设备 command 闭环尚未实现）
 **日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
 
