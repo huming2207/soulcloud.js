@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { validateArtifact } from "../src/artifact";
+import { ArtifactValidationError, validateArtifact } from "../src/artifact";
 
 describe("SoulInjector artifact envelope", () => {
   test("accepts ELF without copying the input view", () => {
@@ -11,7 +11,14 @@ describe("SoulInjector artifact envelope", () => {
   });
 
   test("allows raw firmware but rejects path traversal and invalid ELF", () => {
-    expect(() => validateArtifact({ kind: "elf", filename: "firmware.elf", bytes: new Uint8Array([1, 2, 3]) })).toThrow("ELF magic");
+    try {
+      validateArtifact({ kind: "elf", filename: "firmware.elf", bytes: new Uint8Array([1, 2, 3]) });
+      throw new Error("expected invalid ELF");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ArtifactValidationError);
+      expect((error as ArtifactValidationError).code).toBe("INVALID_ARTIFACT_INPUT");
+      expect((error as Error).message).toContain("ELF magic");
+    }
     expect(validateArtifact({ kind: "firmware", filename: "image.bin", bytes: new Uint8Array([1, 2, 3]) }).kind).toBe("firmware");
     expect(() => validateArtifact({ kind: "firmware", filename: "../image.bin", bytes: new Uint8Array([1]) })).toThrow("simple name");
   });

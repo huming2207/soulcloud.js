@@ -13,7 +13,8 @@ export interface ValidatedArtifact {
 }
 
 export class ArtifactValidationError extends Error {
-  readonly code = "INVALID_DEBUG_ARTIFACT" as const;
+  /** Stable boundary code consumed by the generic plugin runtime. */
+  readonly code = "INVALID_ARTIFACT_INPUT" as const;
 
   constructor(message: string) {
     super(message);

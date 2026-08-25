@@ -707,21 +707,28 @@ export class PluginManager {
       reverseSettledWaiters: new Set(),
     });
     try {
-      const output = artifactChunkOutput.parse(await connection.request("debugger.storeArtifactChunk", {
-        operationId,
-        operationToken,
-        installationId: input.installation.id,
-        projectId: input.installation.projectId,
-        userId: input.userId,
-        uploadId: input.uploadId,
-        kind: input.kind,
-        filename: input.filename,
-        contentType: input.contentType,
-        totalSize: input.totalSize,
-        offset: input.offset,
-        final: input.final,
-        chunk: input.chunk,
-      }, timeoutMs));
+      let output: ReturnType<typeof artifactChunkOutput.parse>;
+      try {
+        output = artifactChunkOutput.parse(await connection.request("debugger.storeArtifactChunk", {
+          operationId,
+          operationToken,
+          installationId: input.installation.id,
+          projectId: input.installation.projectId,
+          userId: input.userId,
+          uploadId: input.uploadId,
+          kind: input.kind,
+          filename: input.filename,
+          contentType: input.contentType,
+          totalSize: input.totalSize,
+          offset: input.offset,
+          final: input.final,
+          chunk: input.chunk,
+        }, timeoutMs));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("INVALID_ARTIFACT_INPUT")) throw publicError(message, 400, "invalid_request");
+        throw error;
+      }
       if (input.final) {
         if (!output.complete || !output.artifactId || !output.sha256) throw publicError("plugin did not complete artifact upload", 502, "invalid_plugin_output");
         return { artifactId: output.artifactId, sha256: output.sha256 };

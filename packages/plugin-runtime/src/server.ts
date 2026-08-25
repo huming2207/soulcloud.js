@@ -494,7 +494,16 @@ function createRuntimeConnection(
         try {
           const chunk = await rpcBinaryFromBlob(input.chunk);
           if (!(chunk instanceof Uint8Array)) rpcError("INVALID_EVENT_INPUT", "artifact chunk is not binary");
-          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.storeArtifactChunk!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, uploadId: input.uploadId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset: input.offset, final: input.final, chunk }, { signal }));
+          let result: unknown;
+          try {
+            result = await runWithDeadline(input.deadlineMs, (signal) => definition.storeArtifactChunk!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, uploadId: input.uploadId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset: input.offset, final: input.final, chunk }, { signal }));
+          } catch (error) {
+            const code = typeof error === "object" && error !== null && "code" in error
+              ? (error as { code?: unknown }).code
+              : undefined;
+            if (code === "INVALID_ARTIFACT_INPUT") rpcError("INVALID_ARTIFACT_INPUT", error instanceof Error ? error.message : String(error));
+            throw error;
+          }
           assertRpcValueBudget(result, budget);
           const parsed = artifactChunkOutputSchema.safeParse(result);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
