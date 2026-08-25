@@ -243,6 +243,25 @@ export async function normalizeCommandArguments(value: unknown): Promise<Command
   return result;
 }
 
+/** Convert the normalized wire argument list back to the manifest action input shape. */
+export function commandArgumentsToActionInput(args: readonly CommandArgument[]): Record<string, unknown> {
+  const input: Record<string, unknown> = {};
+  for (const argument of args) {
+    const keys = Object.keys(argument);
+    if (keys.length !== 1) throw new Error("command arguments must contain exactly one key each");
+    const key = keys[0]!;
+    if (Object.prototype.hasOwnProperty.call(input, key)) throw new Error(`command argument ${key} is duplicated`);
+    const value = argument[key];
+    if (typeof value === "bigint") {
+      if (!Number.isSafeInteger(Number(value))) throw new Error(`command argument ${key} exceeds the action schema number range`);
+      input[key] = Number(value);
+    } else {
+      input[key] = value;
+    }
+  }
+  return input;
+}
+
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
 
 interface ActiveOperation {
@@ -1983,14 +2002,24 @@ export class PluginManager {
     }
   }
 
-  private assertExecutionCommandAllowed(operation: ActiveOperation, command: string): void {
+  private assertExecutionCommandAllowed(operation: ActiveOperation, command: string, args: readonly CommandArgument[]): void {
+    const invalidCode = operation.kind === "event" ? "INVALID_EVENT_INPUT" : "INVALID_EXECUTION_INPUT";
     const manifest = this.getManifest(operation.pluginId, operation.pluginVersion);
     const actions = manifest?.actions.filter((action) => action.wire.command === command) ?? [];
     if (actions.length === 0) {
-      throw Object.assign(new Error(`execution command ${command} is not declared by the plugin manifest`), { code: "INVALID_EXECUTION_INPUT" });
+      throw Object.assign(new Error(`execution command ${command} is not declared by the plugin manifest`), { code: invalidCode });
     }
     if (actions.some((action) => action.requiresHumanApproval)) {
-      throw Object.assign(new Error(`execution command ${command} requires human approval`), { code: "INVALID_EXECUTION_INPUT" });
+      throw Object.assign(new Error(`execution command ${command} requires human approval`), { code: invalidCode });
+    }
+    let actionInput: Record<string, unknown>;
+    try {
+      actionInput = commandArgumentsToActionInput(args);
+    } catch (error) {
+      throw Object.assign(new Error(`execution command ${command} arguments are malformed: ${(error as Error).message}`), { code: invalidCode });
+    }
+    if (!actions.some((action) => validateActionInput(action.inputSchema, actionInput).ok)) {
+      throw Object.assign(new Error(`execution command ${command} arguments do not match the plugin action schema`), { code: invalidCode });
     }
   }
 
@@ -2000,9 +2029,9 @@ export class PluginManager {
     try {
       if (!this.options.prisma) throw new Error("plugin device RPC is not configured");
       assertRpcValueBudget(input.args, this.valueBudget);
-      this.assertExecutionCommandAllowed(operation, input.command);
-      const { execution, tokenHash } = await this.executionForOperation(input, operation, "device.enqueue_command");
       const args = await normalizeCommandArguments(input.args);
+      this.assertExecutionCommandAllowed(operation, input.command, args);
+      const { execution, tokenHash } = await this.executionForOperation(input, operation, "device.enqueue_command");
       return await enqueueDebugCommand(this.options.prisma, {
         executionId: execution.id,
         tokenHash,
@@ -2053,6 +2082,7 @@ export class PluginManager {
       if (!operation.deviceId) throw new Error("command enqueue requires a device scope");
       if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
       assertRpcValueBudget(input.args, this.valueBudget);
+      const args = await normalizeCommandArguments(input.args);
       reservation = commandIntentBytes(input.command, input.args);
       if (operation.stagedCommandCount >= (this.options.maxStagedCommands ?? 32)) {
         throw new Error("operation command intent limit exceeded");
@@ -2060,14 +2090,7 @@ export class PluginManager {
       if (operation.stagedCommandBytes + reservation > (this.options.maxStagedCommandBytes ?? 256 * 1024)) {
         throw new Error("operation command intent byte limit exceeded");
       }
-      const manifest = this.getManifest(operation.pluginId, operation.pluginVersion);
-      const actions = manifest?.actions.filter((candidate) => candidate.wire.command === input.command) ?? [];
-      if (actions.length === 0) {
-        throw Object.assign(new Error(`event command ${input.command} is not declared by the plugin manifest`), { code: "INVALID_EVENT_INPUT" });
-      }
-      if (actions.some((action) => action.requiresHumanApproval)) {
-        throw Object.assign(new Error(`event command ${input.command} requires human approval`), { code: "INVALID_EVENT_INPUT" });
-      }
+      this.assertExecutionCommandAllowed(operation, input.command, args);
       operation.stagedCommandCount += 1;
       operation.stagedCommandBytes += reservation;
       reserved = true;
@@ -2078,7 +2101,6 @@ export class PluginManager {
       if (!binding || binding.installationId !== operation.installationId || binding.installation.projectId !== operation.projectId || binding.installation.state !== "enabled") {
         throw new Error("device is not bound to the active plugin installation");
       }
-      const args = await normalizeCommandArguments(input.args);
       operation.stagedCommands ??= [];
       operation.stagedCommands.push({ deviceId: operation.deviceId, command: { cmd: input.command, args } });
       return { accepted: true };

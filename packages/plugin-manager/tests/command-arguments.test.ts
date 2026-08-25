@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeCommandArguments } from "../src/manager";
+import { commandArgumentsToActionInput, normalizeCommandArguments } from "../src/manager";
 
 describe("plugin command argument boundary", () => {
   test("keeps scalar values and converts Blob values to device bytes", async () => {
@@ -27,5 +27,10 @@ describe("plugin command argument boundary", () => {
     await expect(normalizeCommandArguments([{ name: "", value: 1 }])).rejects.toThrow("bounded name");
     await expect(normalizeCommandArguments([{ name: "missing" }])).rejects.toThrow("bounded name");
     await expect(normalizeCommandArguments([{ name: "same", value: 1 }, { name: "same", value: 2 }])).rejects.toThrow("duplicated");
+  });
+
+  test("reconstructs action input without allowing unsafe bigint coercion", () => {
+    expect(commandArgumentsToActionInput([{ targetConfigRevision: 3n }, { targetId: "fixture" }])).toEqual({ targetConfigRevision: 3, targetId: "fixture" });
+    expect(() => commandArgumentsToActionInput([{ length: 9_007_199_254_740_992n }])).toThrow("number range");
   });
 });

@@ -261,6 +261,36 @@ describe("plugin catalog connection state", () => {
       .rejects.toThrow("requires human approval");
   });
 
+  test("validates execution command arguments against the manifest action schema", () => {
+    const persisted: PluginManifest = {
+      ...manifest("1.0.0"),
+      actions: [{
+        id: "read",
+        inputSchema: { length: { type: "integer", required: true, min: 1, max: 32 } },
+        wire: { command: "debug.read_memory", schemaVersion: 1 },
+      }],
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+      assertExecutionCommandAllowed(operation: { kind: "event"; pluginId: string; pluginVersion: string }, command: string, args: Array<Record<string, unknown>>): void;
+    };
+    internals.catalog.set(`${persisted.id}@${persisted.version}`, {
+      pluginId: persisted.id,
+      pluginVersion: persisted.version,
+      manifestHash: "a".repeat(64),
+      manifest: persisted,
+      connected: true,
+    });
+    const operation = { kind: "event" as const, pluginId: persisted.id, pluginVersion: persisted.version };
+    expect(() => internals.assertExecutionCommandAllowed(operation, "debug.read_memory", [{ length: 32 }])).not.toThrow();
+    expect(() => internals.assertExecutionCommandAllowed(operation, "debug.read_memory", [{ length: 33 }])).toThrow("action schema");
+  });
+
   test("does not return SSR output after the installation is disabled in flight", async () => {
     const persisted: PluginManifest = {
       ...manifest("1.0.0"),
