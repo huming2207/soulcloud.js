@@ -260,6 +260,13 @@ geocoding 等 API 不属于跨 plugin 权限调用，plugin 可以直接访问�
 部署网络必须明确阻断 plugin 对 Broker、Soulcloud PostgreSQL 和设备网段的访问；允许私有
 数据库、公网 egress 不等于允许访问 Soulcloud internal service。
 
+当前 Compose 的默认网络作为 core network，连接 Human API、Device Broker、Soulcloud
+PostgreSQL、Plugin Manager 和 Web；Plugin Manager 另外加入仅用于 oRPC 的 `plugin-rpc` 网络。
+每个 plugin 只加入 `plugin-rpc` 和自己的 `plugin-private` 数据库网络，不加入默认 core network，
+因此不能按容器 DNS 访问 Soulcloud PostgreSQL、Human API 或 Device Broker。允许 plugin 访问
+公网和部署到同一 `plugin-rpc` 网络的 peer plugin；生产部署仍必须用防火墙/NetworkPolicy
+复核出站规则，而不能只依赖应用层约定。
+
 ## 7. Manifest 的唯一真相
 
 manifest 由 plugin instance 在认证 handshake 中提供，是 plugin 声明的唯一来源：

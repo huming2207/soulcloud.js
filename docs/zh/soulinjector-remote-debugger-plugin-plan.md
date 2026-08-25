@@ -54,6 +54,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - 专用 SoulInjector runtime 读取并校验 operation、WebSocket backpressure、idle timeout、
   value/blob budget 等环境上限；Compose 会把这些上限传入 plugin，不把 Manager 的限制误当成
   plugin 进程自身的隔离。
+- Compose 将 core network、plugin-rpc network 和 SoulInjector plugin-private database network
+  分开；plugin 不加入 core network，不能按服务名直连 Soulcloud PostgreSQL、Human API 或
+  Device Broker。公网/peer-plugin egress 仍需生产 NetworkPolicy 复核。
 - 未完成的分块上传由 plugin 私有 runtime 按批次、带索引地清理；这只清理临时 upload/chunk
   行，不替产品决定完整 artifact 的 retention/deletion 策略。
 
