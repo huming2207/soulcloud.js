@@ -91,6 +91,7 @@ describe("SoulInjector observation scope", () => {
 
 describe("SoulInjector debug session idempotency", () => {
   const input = {
+    installationId: "00000000-0000-4000-8000-000000000000",
     projectId: "00000000-0000-4000-8000-000000000001",
     caseId: "00000000-0000-4000-8000-000000000002",
     soulcloudDeviceRef: "00000000-0000-4000-8000-000000000003",
@@ -143,6 +144,43 @@ describe("SoulInjector debug session idempotency", () => {
     const fake = repositoryForExistingSession({ ...existing, case_id: "00000000-0000-4000-8000-000000000099" });
     await expect(fake.repository.createDebugSession(input)).rejects.toBeInstanceOf(DebugSessionConflictError);
     expect(fake.queries).toContain("ROLLBACK");
+  });
+
+  test("stores the target and artifact snapshot on session creation", async () => {
+    const targetConfigId = "00000000-0000-4000-8000-000000000007";
+    const artifactId = "00000000-0000-4000-8000-000000000008";
+    const paramsSeen: unknown[][] = [];
+    const row = {
+      ...existing,
+      id: "00000000-0000-4000-8000-000000000009",
+      target_config_id: targetConfigId,
+      target_config_revision: 2,
+      target_id: "fixture",
+      artifact_id: artifactId,
+    };
+    const client = {
+      query: async (query: string, params?: unknown[]) => {
+        if (params) paramsSeen.push(params);
+        if (query === "BEGIN" || query === "COMMIT" || query === "ROLLBACK") return { rows: [], rowCount: 0 };
+        if (query.includes("SELECT id FROM soul_injector_plugin.debug_cases")) return { rows: [{ id: input.caseId }], rowCount: 1 };
+        if (query.includes("FROM soul_injector_plugin.target_config_revisions")) return { rows: [{ id: targetConfigId }], rowCount: 1 };
+        if (query.includes("FROM soul_injector_plugin.debug_artifacts")) return { rows: [{ id: artifactId }], rowCount: 1 };
+        if (query.includes("INSERT INTO soul_injector_plugin.debug_sessions")) return { rows: [row], rowCount: 1 };
+        throw new Error(`unexpected query: ${query}`);
+      },
+      release: () => {},
+    } as unknown as PoolClient;
+    const repository = new SoulInjectorRepository({ connect: async () => client } as unknown as Pool);
+    const result = await repository.createDebugSession({
+      ...input,
+      targetConfigId,
+      targetConfigRevision: 2,
+      targetId: "fixture",
+      artifactId,
+    });
+    expect(result).toMatchObject({ targetConfigId, targetConfigRevision: 2, targetId: "fixture", artifactId });
+    const insertParams = paramsSeen.find((params) => params.length === 12);
+    expect(insertParams?.slice(7)).toEqual([targetConfigId, 2, "fixture", artifactId, input.startedBy]);
   });
 });
 

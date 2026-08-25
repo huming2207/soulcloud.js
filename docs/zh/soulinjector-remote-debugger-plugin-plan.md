@@ -71,6 +71,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - 带有效 `sessionId` 的设备 `debug.status` 事件会在验证 project/device 后更新私有 session；
   completed/failed/cancelled 等终态不会被乱序的后续设备事件回退，原始事件仍按 event id 幂等
   写入 observation。
+- session 创建时会校验并保存同一 installation/project 下的 target-config revision、target ID
+  和可选 ELF/firmware artifact 引用；后续配置或上传新 artifact 不会改变已有 session 的输入快照。
 - `DeviceCommand` 已保存平台侧 provenance：`origin_type`、发起用户、plugin installation、
   plugin version/manifest hash、execution/correlation/idempotency 字段和取消请求时间；这些
   字段不进入设备下发的 MessagePack payload。插件/LLM 来源在入队前必须带 installation、版本
@@ -196,6 +198,7 @@ debug_cases
 debug_sessions
   id, case_id, soulcloud_device_ref, execution_ref, state
   plugin_version, manifest_hash, device_firmware_version
+  target_config_id, target_config_revision, target_id, artifact_id
   started_by_ref, controller_ref, started_at, ended_at
 
 debug_artifacts

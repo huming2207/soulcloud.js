@@ -119,6 +119,10 @@ export interface DebugSessionRecord {
   pluginVersion: string;
   manifestHash: string;
   deviceFirmwareVersion: string | null;
+  targetConfigId: string | null;
+  targetConfigRevision: number | null;
+  targetId: string | null;
+  artifactId: string | null;
   startedBy: string;
   controller: string | null;
   startedAt: string;
@@ -126,6 +130,7 @@ export interface DebugSessionRecord {
 }
 
 export interface CreateDebugSessionInput {
+  installationId: string;
   projectId: string;
   caseId: string;
   soulcloudDeviceRef: string;
@@ -133,6 +138,10 @@ export interface CreateDebugSessionInput {
   pluginVersion: string;
   manifestHash: string;
   deviceFirmwareVersion?: string | null;
+  targetConfigId?: string | null;
+  targetConfigRevision?: number | null;
+  targetId?: string | null;
+  artifactId?: string | null;
   startedBy: string;
 }
 
@@ -276,11 +285,20 @@ CREATE TABLE IF NOT EXISTS ${schema}.debug_sessions (
   plugin_version varchar(128) NOT NULL,
   manifest_hash char(64) NOT NULL CHECK (manifest_hash ~ '^[0-9a-fA-F]{64}$'),
   device_firmware_version varchar(256),
+  target_config_id uuid,
+  target_config_revision integer CHECK (target_config_revision IS NULL OR target_config_revision > 0),
+  target_id varchar(64),
+  artifact_id uuid,
   started_by uuid NOT NULL,
   controller uuid,
   started_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   ended_at timestamptz
 );
+ALTER TABLE ${schema}.debug_sessions
+  ADD COLUMN IF NOT EXISTS target_config_id uuid,
+  ADD COLUMN IF NOT EXISTS target_config_revision integer,
+  ADD COLUMN IF NOT EXISTS target_id varchar(64),
+  ADD COLUMN IF NOT EXISTS artifact_id uuid;
 CREATE INDEX IF NOT EXISTS debug_sessions_case_started_idx
   ON ${schema}.debug_sessions (case_id, started_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS debug_sessions_device_started_idx
@@ -446,6 +464,10 @@ function asSessionRecord(row: QueryResultRow): DebugSessionRecord {
     pluginVersion: asString(row.plugin_version, "plugin version"),
     manifestHash: asString(row.manifest_hash, "manifest hash").trim().toLowerCase(),
     deviceFirmwareVersion: optionalString(row.device_firmware_version, "device firmware version"),
+    targetConfigId: optionalString(row.target_config_id, "target configuration id"),
+    targetConfigRevision: row.target_config_revision === null || row.target_config_revision === undefined ? null : Number(row.target_config_revision),
+    targetId: optionalString(row.target_id, "target id"),
+    artifactId: optionalString(row.artifact_id, "artifact id"),
     startedBy: asString(row.started_by, "session starter"),
     controller: optionalString(row.controller, "session controller"),
     startedAt: new Date(row.started_at as string | Date).toISOString(),
@@ -833,18 +855,44 @@ export class SoulInjectorRepository {
     if (!/^[0-9a-f]{64}$/i.test(input.manifestHash)) throw new RangeError("manifestHash must be a SHA-256 hex digest");
     if (!UUID.test(input.soulcloudDeviceRef)) throw new RangeError("Soulcloud Device reference must be a UUID");
     if (input.executionRef !== null && input.executionRef !== undefined && !UUID.test(input.executionRef)) throw new RangeError("execution reference must be a UUID");
+    const targetConfigId = input.targetConfigId === null || input.targetConfigId === undefined ? null : input.targetConfigId;
+    if (targetConfigId !== null && !UUID.test(targetConfigId)) throw new RangeError("target configuration id must be a UUID");
+    const targetConfigRevision = input.targetConfigRevision === null || input.targetConfigRevision === undefined ? null : input.targetConfigRevision;
+    if (targetConfigRevision !== null && (!Number.isSafeInteger(targetConfigRevision) || targetConfigRevision < 1)) throw new RangeError("target configuration revision must be a positive safe integer");
+    const targetId = input.targetId === null || input.targetId === undefined ? null : boundedText(input.targetId, "target id", 64);
+    const artifactId = input.artifactId === null || input.artifactId === undefined ? null : input.artifactId;
+    if (artifactId !== null && !UUID.test(artifactId)) throw new RangeError("artifact id must be a UUID");
+    if ((targetConfigId === null) !== (targetConfigRevision === null) || (targetConfigRevision === null) !== (targetId === null)) throw new RangeError("target configuration id, revision and target id must be provided together");
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const caseResult = await client.query(`SELECT id FROM ${schema}.debug_cases WHERE id = $1 AND project_id = $2 FOR UPDATE`, [input.caseId, input.projectId]);
       if (!caseResult.rows[0]) throw new Error("debug case is not available to this project");
+      if (targetConfigId !== null) {
+        const targetResult = await client.query(
+          `SELECT id FROM ${schema}.target_config_revisions
+           WHERE id = $1 AND installation_id = $2 AND project_id = $3 AND revision = $4`,
+          [targetConfigId, input.installationId, input.projectId, targetConfigRevision],
+        );
+        if (!targetResult.rows[0]) throw new Error("target configuration revision is not available to this installation");
+      }
+      if (artifactId !== null) {
+        const artifactResult = await client.query(
+          `SELECT id FROM ${schema}.debug_artifacts
+           WHERE id = $1 AND installation_id = $2 AND project_id = $3
+             AND (case_id = $4 OR case_id IS NULL)`,
+          [artifactId, input.installationId, input.projectId, input.caseId],
+        );
+        if (!artifactResult.rows[0]) throw new Error("debug artifact is not available to this session");
+      }
       const result = await client.query<QueryResultRow>(
         `INSERT INTO ${schema}.debug_sessions
-         (id, case_id, soulcloud_device_ref, execution_ref, plugin_version, manifest_hash, device_firmware_version, started_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (id, case_id, soulcloud_device_ref, execution_ref, plugin_version, manifest_hash, device_firmware_version,
+          target_config_id, target_config_revision, target_id, artifact_id, started_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          ON CONFLICT (execution_ref) WHERE execution_ref IS NOT NULL DO NOTHING
          RETURNING *`,
-        [randomUUID(), input.caseId, input.soulcloudDeviceRef, input.executionRef ?? null, pluginVersion, input.manifestHash.toLowerCase(), deviceFirmwareVersion, input.startedBy],
+        [randomUUID(), input.caseId, input.soulcloudDeviceRef, input.executionRef ?? null, pluginVersion, input.manifestHash.toLowerCase(), deviceFirmwareVersion, targetConfigId, targetConfigRevision, targetId, artifactId, input.startedBy],
       );
       if (!result.rows[0] && input.executionRef) {
         const existingResult = await client.query<QueryResultRow>(
@@ -861,6 +909,10 @@ export class SoulInjectorRepository {
           && existing.plugin_version === pluginVersion
           && String(existing.manifest_hash).trim().toLowerCase() === input.manifestHash.toLowerCase()
           && (existing.device_firmware_version ?? null) === deviceFirmwareVersion
+          && (existing.target_config_id ?? null) === targetConfigId
+          && (existing.target_config_revision === null || existing.target_config_revision === undefined ? null : Number(existing.target_config_revision)) === targetConfigRevision
+          && (existing.target_id ?? null) === targetId
+          && (existing.artifact_id ?? null) === artifactId
           && existing.started_by === input.startedBy;
         if (!sameSession) throw new DebugSessionConflictError();
         await client.query("COMMIT");
