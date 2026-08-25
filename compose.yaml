@@ -34,6 +34,8 @@ services:
       retries: 15
     volumes:
       - soulinjector-plugin-postgres-data:/var/lib/postgresql
+    networks:
+      - soulcloud-plugin-private
 
   api:
     build:
@@ -147,6 +149,9 @@ services:
         condition: service_healthy
       soulinjector-plugin:
         condition: service_started
+    networks:
+      - default
+      - soulcloud-plugin-rpc
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8091/health/ready | grep -q ready"]
       interval: 5s
@@ -181,6 +186,9 @@ services:
     depends_on:
       soulinjector-plugin-postgres:
         condition: service_healthy
+    networks:
+      - soulcloud-plugin-rpc
+      - soulcloud-plugin-private
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/health | grep -q soulcloud.soulinjector-debugger"]
       interval: 5s
@@ -205,3 +213,8 @@ services:
 volumes:
   postgres-data:
   soulinjector-plugin-postgres-data:
+
+networks:
+  default:
+  soulcloud-plugin-rpc:
+  soulcloud-plugin-private:
