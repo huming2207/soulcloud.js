@@ -77,6 +77,25 @@ describe("SoulInjector plugin", () => {
     expect(calls).toEqual([saved.createdBy, saved.createdBy]);
   });
 
+  test("persists report drafts, revisions and finalization through the SSR action path", async () => {
+    const calls: unknown[] = [];
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      createDebugReport: async (input) => { calls.push({ kind: "create", input }); return {} as never; },
+      appendDebugReportRevision: async (input) => { calls.push({ kind: "append", input }); return {}; },
+      finalizeDebugReport: async (reportId, projectId) => { calls.push({ kind: "finalize", reportId, projectId }); return null; },
+    });
+    const context = { requestId: "request", installationId: saved.installationId, projectId: saved.projectId, user: { id: saved.createdBy, locale: "en", permissions: [] }, routeId: "debugger", params: {} };
+    await plugin.handleAction!["debugger"]!({ intent: "create_report", caseId: saved.id, reportTitle: "Initial diagnosis", reportContent: "Target halted unexpectedly" }, context);
+    await plugin.handleAction!["debugger"]!({ intent: "append_report", reportId: saved.id, reportContent: "Additional register evidence" }, context);
+    await plugin.handleAction!["debugger"]!({ intent: "finalize_report", reportId: saved.id }, context);
+    expect(calls).toEqual([
+      { kind: "create", input: { projectId: saved.projectId, caseId: saved.id, title: "Initial diagnosis", content: "Target halted unexpectedly", createdBy: saved.createdBy } },
+      { kind: "append", input: { projectId: saved.projectId, reportId: saved.id, content: "Additional register evidence", createdBy: saved.createdBy } },
+      { kind: "finalize", reportId: saved.id, projectId: saved.projectId },
+    ]);
+  });
+
   test("shows a bounded error state when the SSR target YAML is invalid", async () => {
     const plugin = createSoulInjectorPlugin({
       ...store(),
@@ -326,6 +345,7 @@ describe("SoulInjector plugin", () => {
     expect(result.html).toContain('id="debug-actions"');
     expect(result.html).toContain('id="debug-session-create"');
     expect(result.html).toContain('id="debug-session-device"');
+    expect(result.html).toContain("Reports");
     expect(result.html).toContain('data-debug-action="debug.identify"');
     expect(result.html).toContain('data-debug-action="debug.reset"');
     expect(result.html).toContain('data-debug-action="debug.read_memory"');

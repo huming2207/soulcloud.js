@@ -1,6 +1,6 @@
 import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginEventOutput, type PluginManifest } from "@soulcloud/plugin-sdk";
 import { DebugSessionNotAvailableError } from "./repository";
-import type { AppendDebugObservationInput, CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, DebugObservationRecord, DebugSessionRecord, ReadArtifactChunkOutput, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary, UpdateDebugSessionStateInput } from "./repository";
+import type { AppendDebugObservationInput, AppendDebugReportRevisionInput, CreateDebugCaseInput, CreateDebugReportInput, DebugArtifactRecord, DebugCaseRecord, DebugObservationRecord, DebugReportRecord, DebugSessionRecord, ReadArtifactChunkOutput, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary, UpdateDebugSessionStateInput } from "./repository";
 import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 import { targetSelectionArgs } from "./target-selection";
 import { TargetConfigError } from "./target-config";
@@ -112,10 +112,14 @@ const manifest = {
         error: { type: "string" as const, enum: ["invalid_target_config"], title: "UI error" },
       },
       actionSchema: {
-        intent: { type: "string" as const, required: true, enum: ["save_target", "create_case"], title: "Action" },
+        intent: { type: "string" as const, required: true, enum: ["save_target", "create_case", "create_report", "append_report", "finalize_report"], title: "Action" },
         yaml: { type: "string" as const, maxLength: 65_536, title: "Target YAML", description: "Target architecture, chip and required debugger primitives" },
         title: { type: "string" as const, maxLength: 256, title: "Case title" },
         targetUnitRef: { type: "string" as const, maxLength: 256, title: "Target unit reference" },
+        caseId: { type: "string" as const, maxLength: 64, title: "Debugger case" },
+        reportId: { type: "string" as const, maxLength: 64, title: "Debug report" },
+        reportTitle: { type: "string" as const, maxLength: 256, title: "Report title" },
+        reportContent: { type: "string" as const, maxLength: 65_536, title: "Report content" },
       },
     }],
     assets: [{ path: CLIENT_BUNDLE_PATH, contentType: "text/javascript; charset=utf-8", sha256: CLIENT_BUNDLE_SHA256 }],
@@ -126,6 +130,10 @@ interface SoulInjectorPluginStore {
   saveTargetConfig(input: { installationId: string; projectId: string; createdBy: string; yaml: string }): Promise<TargetConfigRecord>;
   createDebugCase?(input: CreateDebugCaseInput): Promise<DebugCaseRecord>;
   listDebugCases?(projectId: string, limit?: number): Promise<DebugCaseRecord[]>;
+  createDebugReport?(input: CreateDebugReportInput): Promise<DebugReportRecord>;
+  appendDebugReportRevision?(input: AppendDebugReportRevisionInput): Promise<unknown>;
+  finalizeDebugReport?(reportId: string, projectId: string): Promise<DebugReportRecord | null>;
+  listDebugReports?(projectId: string, limit?: number): Promise<DebugReportRecord[]>;
   listDebugSessions?(installationId: string, projectId: string, limit?: number): Promise<DebugSessionRecord[]>;
   getDebugSession?(id: string, installationId: string, projectId: string): Promise<DebugSessionRecord | null>;
   listDebugObservations?(sessionId: string, installationId: string, projectId: string, limit?: number): Promise<DebugObservationRecord[]>;
@@ -245,7 +253,7 @@ function debuggerActionControls(input: { selectedSession: DebugSessionRecord | n
   return `<section><h2>Manual debugger actions</h2><p>Every button sends one bounded action through the authenticated plugin UI session. Actions marked approval require this human click; the LLM cannot use this route.</p><form id="debug-actions" data-device-id="${escapeHtml(session.soulcloudDeviceRef)}" data-target-config-revision="${session.targetConfigRevision}" data-target-id="${escapeHtml(session.targetId)}">${buttons}<label for="debug-memory-address">Memory address</label><input id="debug-memory-address" inputmode="text" maxlength="18" placeholder="0x20000000"><label for="debug-memory-length">Memory length (bytes)</label><input id="debug-memory-length" type="number" min="1" max="1048576" value="16"><button type="submit" data-debug-action="debug.read_memory">Read memory</button><label for="debug-start-mode">Start mode</label><select id="debug-start-mode"><option value="automatic">Automatic</option><option value="assisted">Assisted</option></select><button type="submit" data-debug-action="debug.start">Start target (approval)</button><p id="debug-action-status" role="status" aria-live="polite"></p></form></section>`;
 }
 
-function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[]; selectedSession: DebugSessionRecord | null; observations: DebugObservationRecord[]; targetConfigs: TargetConfigSummary[]; artifacts: DebugArtifactRecord[]; error?: string }): string {
+function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[]; selectedSession: DebugSessionRecord | null; observations: DebugObservationRecord[]; targetConfigs: TargetConfigSummary[]; artifacts: DebugArtifactRecord[]; reports: DebugReportRecord[]; error?: string }): string {
   const cases = input.cases.length === 0
     ? "<p>No debugger cases yet.</p>"
     : `<ul>${input.cases.map((item) => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(item.state)}${item.targetUnitRef ? ` — ${escapeHtml(item.targetUnitRef)}` : ""}</li>`).join("")}</ul>`;
@@ -268,8 +276,14 @@ function configForm(input: { installationId: string; yaml: string; cases: DebugC
   const sessionTargets = `<option value="">No target snapshot</option>${input.targetConfigs.map((item) => `<option value="${escapeHtml(item.configId)}" data-revision="${item.revision}">Revision ${item.revision} (${item.targetCount} target(s))</option>`).join("")}`;
   const sessionArtifacts = `<option value="">No artifact</option>${input.artifacts.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.kind)} — ${escapeHtml(item.filename)}</option>`).join("")}`;
   const sessionForm = `<section><h2>Start debugger session</h2><p>This creates one human-scoped device lease; it does not send a debugger command.</p><form id="debug-session-create"><label for="debug-session-device">Soulcloud Device ID</label><br><input id="debug-session-device" maxlength="36" required><br><label for="debug-session-case">Case</label><br><select id="debug-session-case" required>${sessionCases}</select><br><label for="debug-session-target-config">Target configuration (optional)</label><br><select id="debug-session-target-config">${sessionTargets}</select><br><label for="debug-session-target-id">Target ID</label><br><input id="debug-session-target-id" maxlength="64"><br><label for="debug-session-artifact">Artifact (optional)</label><br><select id="debug-session-artifact">${sessionArtifacts}</select><br><button type="submit">Start debugger session</button><p id="debug-session-status" role="status" aria-live="polite"></p></form></section>`;
+  const reports = input.reports.length === 0
+    ? "<p>No report drafts yet.</p>"
+    : `<ul>${input.reports.map((item) => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(item.state)} — revision ${item.currentRevision} — case <code>${escapeHtml(item.caseId)}</code><form method="post"><input type="hidden" name="intent" value="finalize_report"><input type="hidden" name="reportId" value="${escapeHtml(item.id)}"><button type="submit"${item.state === "final" ? " disabled" : ""}>Finalize report</button></form></li>`).join("")}</ul>`;
+  const reportCases = `<option value="">Select a case</option>${input.cases.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
+  const reportOptions = `<option value="">Select a draft report</option>${input.reports.filter((item) => item.state === "draft").map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
+  const reportForm = `<section><h2>Reports</h2>${reports}<form method="post"><input type="hidden" name="intent" value="create_report"><label for="report-case">Case</label><br><select id="report-case" name="caseId" required>${reportCases}</select><br><label for="report-title">Report title</label><br><input id="report-title" name="reportTitle" maxlength="256" required><br><label for="report-content">Initial report content (max 64 KiB)</label><br><textarea id="report-content" name="reportContent" rows="12" cols="100" maxlength="65536"></textarea><br><button type="submit">Create report draft</button></form><form method="post"><input type="hidden" name="intent" value="append_report"><label for="report-revision">Draft report</label><br><select id="report-revision" name="reportId" required>${reportOptions}</select><br><label for="report-revision-content">New revision (max 64 KiB)</label><br><textarea id="report-revision-content" name="reportContent" rows="12" cols="100" maxlength="65536" required></textarea><br><button type="submit">Save report revision</button></form></section>`;
   const error = input.error === "invalid_target_config" ? "<p role=\"alert\">Target configuration is invalid. Review the YAML schema and try again.</p>" : "";
-  return `<main><h1>SoulInjector debugger</h1>${error}<section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section>${sessionForm}<section><h2>Sessions</h2>${sessions}</section><section><h2>Session timeline</h2>${timeline}</section>${debuggerActionControls({ selectedSession: input.selectedSession })}<section><h2>Artifacts</h2>${artifacts}<form id="artifact-upload" method="post" action="/plugins/${encodeURIComponent(input.installationId)}/debugger/artifacts"><label for="artifact-kind">Artifact type</label><br><select id="artifact-kind"><option value="elf">ELF</option><option value="firmware">Firmware</option></select><br><label for="artifact-case">Debugger case</label><br><select id="artifact-case">${artifactCases}</select><br><label for="artifact-file">Artifact file (max 64 MiB)</label><br><input id="artifact-file" type="file" accept=".elf,.bin,.img,application/octet-stream,application/x-elf" required><br><button type="submit">Upload artifact</button><p id="artifact-upload-status" role="status" aria-live="polite"></p></form></section><section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><h3>Saved revisions</h3>${targetConfigs}<form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml-file">Load YAML file (最大 64 KiB)</label><br><input id="yaml-file" type="file" accept=".yaml,.yml,text/yaml,text/plain"><br><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
+  return `<main><h1>SoulInjector debugger</h1>${error}<section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section>${sessionForm}<section><h2>Sessions</h2>${sessions}</section><section><h2>Session timeline</h2>${timeline}</section>${debuggerActionControls({ selectedSession: input.selectedSession })}<section><h2>Artifacts</h2>${artifacts}<form id="artifact-upload" method="post" action="/plugins/${encodeURIComponent(input.installationId)}/debugger/artifacts"><label for="artifact-kind">Artifact type</label><br><select id="artifact-kind"><option value="elf">ELF</option><option value="firmware">Firmware</option></select><br><label for="artifact-case">Debugger case</label><br><select id="artifact-case">${artifactCases}</select><br><label for="artifact-file">Artifact file (max 64 MiB)</label><br><input id="artifact-file" type="file" accept=".elf,.bin,.img,application/octet-stream,application/x-elf" required><br><button type="submit">Upload artifact</button><p id="artifact-upload-status" role="status" aria-live="polite"></p></form></section>${reportForm}<section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><h3>Saved revisions</h3>${targetConfigs}<form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml-file">Load YAML file (最大 64 KiB)</label><br><input id="yaml-file" type="file" accept=".yaml,.yml,text/yaml,text/plain"><br><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
 }
 
 export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {
@@ -375,12 +389,13 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
     },
     render: {
       debugger: async (input) => {
-        const [saved, cases, sessions, targetConfigs, artifacts] = await Promise.all([
+        const [saved, cases, sessions, targetConfigs, artifacts, reports] = await Promise.all([
           repository.getLatestTargetConfig(input.installationId),
           repository.listDebugCases ? repository.listDebugCases(input.projectId, 64) : Promise.resolve([] as DebugCaseRecord[]),
           repository.listDebugSessions ? repository.listDebugSessions(input.installationId, input.projectId, 64) : Promise.resolve([] as DebugSessionRecord[]),
           repository.listTargetConfigs ? repository.listTargetConfigs(input.installationId, input.projectId) : Promise.resolve([] as TargetConfigSummary[]),
           repository.listArtifacts ? repository.listArtifacts(input.installationId, input.projectId) : Promise.resolve([] as DebugArtifactRecord[]),
+          repository.listDebugReports ? repository.listDebugReports(input.projectId, 64) : Promise.resolve([] as DebugReportRecord[]),
         ]);
         const selectedId = typeof input.params.session_id === "string" && isUuid(input.params.session_id) ? input.params.session_id : null;
         const selectedSession = selectedId && repository.getDebugSession
@@ -390,7 +405,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
           ? await repository.listDebugObservations(selectedSession.id, input.installationId, input.projectId, MAX_TIMELINE_OBSERVATIONS)
           : [];
         const error = typeof input.params.error === "string" ? input.params.error : undefined;
-        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions, selectedSession, observations, targetConfigs, artifacts, error }), title: "SoulInjector debugger", cache: "no-store" };
+        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions, selectedSession, observations, targetConfigs, artifacts, reports, error }), title: "SoulInjector debugger", cache: "no-store" };
       },
     },
     handleAction: {
@@ -403,6 +418,20 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
             ? (action as Record<string, unknown>).targetUnitRef as string
             : null;
           await repository.createDebugCase({ projectId: input.projectId, targetUnitRef, title, createdBy: input.user.id });
+        } else if (intent === "create_report") {
+          if (!repository.createDebugReport) throw new Error("debug report persistence is not available");
+          const caseId = stringValue(action, "caseId");
+          const reportTitle = stringValue(action, "reportTitle");
+          const reportContent = typeof action === "object" && action !== null && !Array.isArray(action) && typeof (action as Record<string, unknown>).reportContent === "string"
+            ? (action as Record<string, unknown>).reportContent as string
+            : "";
+          await repository.createDebugReport({ projectId: input.projectId, caseId, title: reportTitle, content: reportContent, createdBy: input.user.id });
+        } else if (intent === "append_report") {
+          if (!repository.appendDebugReportRevision) throw new Error("debug report persistence is not available");
+          await repository.appendDebugReportRevision({ projectId: input.projectId, reportId: stringValue(action, "reportId"), content: stringValue(action, "reportContent"), createdBy: input.user.id });
+        } else if (intent === "finalize_report") {
+          if (!repository.finalizeDebugReport) throw new Error("debug report persistence is not available");
+          await repository.finalizeDebugReport(stringValue(action, "reportId"), input.projectId);
         } else if (intent === "save_target") {
           const yaml = stringValue(action, "yaml");
           try {

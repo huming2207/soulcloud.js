@@ -885,6 +885,19 @@ export class SoulInjectorRepository {
     return result.rows.map(asCaseRecord);
   }
 
+  async listDebugReports(projectId: string, limit = 64): Promise<DebugReportRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("report limit must be between 1 and 256");
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT r.* FROM ${schema}.debug_reports r
+       JOIN ${schema}.debug_cases c ON c.id = r.case_id
+       WHERE c.project_id = $1
+       ORDER BY r.updated_at DESC, r.id DESC
+       LIMIT $2`,
+      [projectId, limit],
+    );
+    return result.rows.map(asReportRecord);
+  }
+
   async setDebugCaseState(id: string, projectId: string, state: DebugCaseState): Promise<DebugCaseRecord | null> {
     const result = await this.pool.query<QueryResultRow>(
       `UPDATE ${schema}.debug_cases
