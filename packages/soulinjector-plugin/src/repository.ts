@@ -644,10 +644,12 @@ export class SoulInjectorRepository {
     }
   }
 
-  async getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null> {
+  async getLatestTargetConfig(installationId: string, projectId: string): Promise<TargetConfigRecord | null> {
     const result = await this.pool.query<QueryResultRow>(
-      `SELECT * FROM ${schema}.target_config_revisions WHERE installation_id = $1 ORDER BY revision DESC LIMIT 1`,
-      [installationId],
+      `SELECT * FROM ${schema}.target_config_revisions
+       WHERE installation_id = $1 AND project_id = $2
+       ORDER BY revision DESC LIMIT 1`,
+      [installationId, projectId],
     );
     return result.rows[0] ? asRecord(result.rows[0]) : null;
   }

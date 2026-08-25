@@ -40,6 +40,37 @@ describe("SoulInjector private repository migration", () => {
   });
 });
 
+describe("SoulInjector target configuration scope", () => {
+  test("scopes the latest target config by installation and project", async () => {
+    const calls: unknown[][] = [];
+    const row = {
+      id: "00000000-0000-4000-8000-000000000010",
+      installation_id: "00000000-0000-4000-8000-000000000011",
+      project_id: "00000000-0000-4000-8000-000000000012",
+      revision: 1,
+      yaml_content: "version: 1\ntargets:\n  - id: fixture\n    displayName: Fixture\n    architecture: cortex-m\n    chip: fixture\n    transport: swd\n    requiredPrimitives: [identify]",
+      config_json: { version: 1, targets: [{ id: "fixture", displayName: "Fixture", architecture: "cortex-m", chip: "fixture", transport: "swd", requiredPrimitives: ["identify"] }] },
+      sha256: "a".repeat(64),
+      created_by: "00000000-0000-4000-8000-000000000013",
+      created_at: new Date(0),
+    };
+    const repository = new SoulInjectorRepository({
+      query: async (query: string, params?: unknown[]) => {
+        calls.push(params ?? []);
+        expect(query).toContain("installation_id = $1 AND project_id = $2");
+        return { rows: [row], rowCount: 1 };
+      },
+    } as unknown as Pool);
+
+    await expect(repository.getLatestTargetConfig(row.installation_id, row.project_id)).resolves.toMatchObject({
+      installationId: row.installation_id,
+      projectId: row.project_id,
+      revision: 1,
+    });
+    expect(calls).toEqual([[row.installation_id, row.project_id]]);
+  });
+});
+
 describe("SoulInjector artifact chunk assembly", () => {
   test("validates chunks in bounded fetches and assembles the bytea in PostgreSQL", async () => {
     const queries: string[] = [];

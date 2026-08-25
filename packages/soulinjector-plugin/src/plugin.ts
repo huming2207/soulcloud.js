@@ -156,7 +156,7 @@ interface SoulInjectorPluginStore {
   updateDebugSessionState?(input: UpdateDebugSessionStateInput): Promise<DebugSessionRecord>;
   createDebugSession?(input: Parameters<SoulInjectorRepository["createDebugSession"]>[0]): Promise<DebugSessionRecord>;
   abortDebugSession?(id: string | null, executionRef: string, installationId: string, projectId: string, soulcloudDeviceRef: string): Promise<DebugSessionRecord | null>;
-  getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null>;
+  getLatestTargetConfig(installationId: string, projectId: string): Promise<TargetConfigRecord | null>;
   getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null>;
   listTargetConfigs?(installationId: string, projectId: string): Promise<TargetConfigSummary[]>;
   listArtifacts?(installationId: string, projectId: string): Promise<DebugArtifactRecord[]>;
@@ -450,7 +450,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
     render: {
       debugger: async (input) => {
         const [saved, cases, sessions, targetConfigs, artifacts, reports] = await Promise.all([
-          repository.getLatestTargetConfig(input.installationId),
+          repository.getLatestTargetConfig(input.installationId, input.projectId),
           repository.listDebugCases ? repository.listDebugCases(input.projectId, 64) : Promise.resolve([] as DebugCaseRecord[]),
           repository.listDebugSessions ? repository.listDebugSessions(input.installationId, input.projectId, 64) : Promise.resolve([] as DebugSessionRecord[]),
           repository.listTargetConfigs ? repository.listTargetConfigs(input.installationId, input.projectId) : Promise.resolve([] as TargetConfigSummary[]),
