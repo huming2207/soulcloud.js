@@ -84,12 +84,16 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   Human API 的人工 action 请求显式传递 approval；真正可审计的长期 approval/execution record
   仍属于后续阶段。
 - Plugin Manager 提供绑定短期 plugin-origin UI session 的
-  `/plugins/{installation}/actions/{actionId}` 人工 action route；SoulInjector SSR 页面在选中的
-  active/paused session 上提供 bounded identify/read-registers/read_memory/halt/resume/reset/start
-  按钮，其中 read_memory 的地址和长度在浏览器端先做有界校验，服务端仍会再次按 manifest/schema
-  与设备能力校验。
-  每次点击都走 manifest/schema、设备绑定和 provenance 校验，destructive action 仍只能由该次
-  人工点击批准，plugin/LLM 没有同一入口。
+  `/plugins/{installation}/actions/{actionId}` 人工 action route；SoulInjector SSR 页面只在选中的
+  active session 上提供 bounded identify/read-registers/read_memory/halt/resume/reset/start
+  按钮，paused/终态或没有 execution lease 的 session 不渲染可执行按钮，其中 read_memory 的地址
+  和长度在浏览器端先做有界校验，服务端仍会再次按 manifest/schema 与设备能力校验。
+  每次点击都携带当前 session 的 `executionRef`；Manager 在 installation → device → execution
+  的同一事务中用数据库时钟锁定并检查 execution 仍属于该 installation/device、处于 active 且
+  device lease 和 TTL 均未过期，之后才允许入队，并把 execution ID 写入 command provenance。
+  lease 失效或 session 被迁移/禁用后，旧页面的请求会得到冲突而不会继续控制设备。destructive
+  action 仍只能由该次人工点击批准，plugin/LLM 没有同一入口；不带 executionRef 的通用 Human
+  API action 兼容路径不因此自动获得 debugger execution 控制权。
 - Plugin-origin debugger 页面还可以通过
   `/plugins/{installation}/debugger/sessions` 创建 session；该 POST 只接受当前短期 UI session
   的 user/project/installation scope，严格校验 case、Soulcloud Device、target-config 三元组和
