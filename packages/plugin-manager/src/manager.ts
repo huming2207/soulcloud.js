@@ -506,14 +506,21 @@ export class PluginManager {
       reverseSettledWaiters: new Set(),
     });
     try {
-      const result = await connection.request("debugger.configureTarget", {
-        operationId,
-        operationToken,
-        installationId: installation.id,
-        projectId: installation.projectId,
-        userId: input.userId,
-        yaml: input.yaml,
-      }, timeoutMs);
+      let result: unknown;
+      try {
+        result = await connection.request("debugger.configureTarget", {
+          operationId,
+          operationToken,
+          installationId: installation.id,
+          projectId: installation.projectId,
+          userId: input.userId,
+          yaml: input.yaml,
+        }, timeoutMs);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("INVALID_TARGET_CONFIG")) throw publicError(message, 400, "invalid_request");
+        throw error;
+      }
       try {
         assertRpcValueBudget(result, this.valueBudget);
         return configureTargetOutput.parse(result);

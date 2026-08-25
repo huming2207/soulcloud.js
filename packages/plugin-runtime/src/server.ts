@@ -449,6 +449,11 @@ function createRuntimeConnection(
           const parsed = configureTargetOutputSchema.safeParse(result);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
+        } catch (error) {
+          if (typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "INVALID_TARGET_CONFIG") {
+            rpcError("INVALID_TARGET_CONFIG", error instanceof Error ? error.message : String(error));
+          }
+          throw error;
         } finally {
           operations.running -= 1;
         }
