@@ -87,6 +87,11 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   与设备能力校验。
   每次点击都走 manifest/schema、设备绑定和 provenance 校验，destructive action 仍只能由该次
   人工点击批准，plugin/LLM 没有同一入口。
+- Plugin-origin debugger 页面还可以通过
+  `/plugins/{installation}/debugger/sessions` 创建 session；该 POST 只接受当前短期 UI session
+  的 user/project/installation scope，严格校验 case、Soulcloud Device、target-config 三元组和
+  artifact 引用，Manager 负责 execution capability、设备 lease、并发冲突和 plugin bootstrap。
+  页面不会接触主站 JWT，也不会让 plugin 直接获得 execution token。
 - `DebugExecution` 已保存平台侧长时 capability：不可变 plugin/version/manifest snapshot、
   initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
   device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
@@ -674,9 +679,9 @@ MQTT/oRPC 热路径。
 
 1. case 创建、device/target/artifact 关联；**已完成私有 case 创建、artifact→case、target-config
    revision 存储，以及 execution→session 输入快照关联基础**；
-2. SSR case/debugger 页面；**已完成最小 case 列表/创建、session 摘要、installation-scoped
-   observation timeline、target 配置页面和基于 plugin-origin session 的人工 action 控件；
-   session 创建/控制闭环和实时状态 UI 仍待实现**；
+2. SSR case/debugger 页面；**已完成最小 case 列表/创建、plugin-origin session 创建入口、session
+   摘要、installation-scoped observation timeline、target 配置页面和基于 plugin-origin session
+   的人工 action 控件；session 控制闭环和实时状态 UI 仍待实现**；
 3. 人工执行 identify/halt/read/reset/capture/close；
 4. command timeline、observation、错误与报告草稿；
 5. overseas guided view 和国内工程师 take-over；
