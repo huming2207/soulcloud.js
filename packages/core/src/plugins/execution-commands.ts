@@ -184,6 +184,14 @@ export async function enqueueDebugCommand(
       !capabilitiesOf(execution.allowed_capabilities).includes("device.enqueue_command")) {
       throw new DebugExecutionCapabilityError();
     }
+    const userProjectRows = await tx.$queryRaw<Array<{ user_id: string }>>`
+      SELECT user_id
+      FROM user_projects
+      WHERE user_id = ${input.initiatingUserId}::uuid
+        AND project_id = ${installation.project_id}::uuid
+      FOR SHARE
+    `;
+    if (!userProjectRows[0]) throw new DebugExecutionCapabilityError("debug execution initiating user is no longer a project member");
     if (input.idempotencyKey) {
       const existingRows = await tx.$queryRaw<RawCommandRow[]>`
         SELECT id, batch_id, device_id, sequence, state, result_code, cancel_requested_at,
