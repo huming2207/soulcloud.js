@@ -367,7 +367,7 @@ ui.handleAction
 
 ```text
 context.entities.get
-context.commands.enqueue
+context.commands.enqueue（仅允许 manifest 已声明且不需要人工审批的 wire command）
 context.plugins.callScoped（受限显式 procedure）
 ```
 

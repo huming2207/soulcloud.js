@@ -270,8 +270,10 @@ profile revision、deprecated 状态、结果 schema 和 reverse call budget。
 ### 6.2 Command enqueue
 
 plugin 只传 command + arguments，不传 target device。Manager 固定使用父 operation device，
-验证 DeviceCommand，并先暂存 intent。只有父 operation 成功时才提交；失败、timeout 或 socket
-关闭时全部丢弃 staged intent。
+验证 DeviceCommand，并要求 command 对应当前 manifest 已声明的 wire command。标记
+`requiresHumanApproval` 的 command 不能从后台 event staged；它必须走 Human API 的人工审批
+入口。Manager 先暂存 intent，只有父 operation 成功时才提交；失败、timeout 或 socket 关闭时
+全部丢弃 staged intent。
 
 ### 6.3 Scoped plugin-to-plugin
 
