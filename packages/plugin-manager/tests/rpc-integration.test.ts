@@ -13,6 +13,7 @@ let reverseEntityValue: unknown;
 let uiInputHasOperationProof = false;
 let eventPayloadValue: unknown;
 let executionRpcCalls = 0;
+let deviceRpcCalls = 0;
 
 function executionRecord(state: "active" | "paused" | "completed") {
   return {
@@ -30,6 +31,21 @@ function executionRecord(state: "active" | "paused" | "completed") {
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(1_000).toISOString(),
     finishedAt: state === "completed" ? new Date(1_000).toISOString() : null,
+  };
+}
+
+function commandRecord() {
+  return {
+    id: "00000000-0000-4000-8000-000000000005",
+    batchId: "00000000-0000-4000-8000-000000000006",
+    deviceId: "00000000-0000-4000-8000-000000000003",
+    sequence: 1n,
+    state: "queued" as const,
+    resultCode: null,
+    cancelRequestedAt: null,
+    brokerAcceptedAt: null,
+    deviceCompletedAt: null,
+    createdAt: new Date(0).toISOString(),
   };
 }
 
@@ -67,6 +83,9 @@ beforeAll(async () => {
         expect((await context.execution.renewLease(5_000)).state).toBe("active");
         expect((await context.execution.release()).state).toBe("paused");
         expect((await context.execution.complete("completed")).state).toBe("completed");
+        expect((await context.devices?.enqueueCommand("acknowledge"))?.state).toBe("queued");
+        expect((await context.devices?.getCommand(randomUUID()))?.state).toBe("queued");
+        expect((await context.devices?.cancelCommand(randomUUID()))?.state).toBe("queued");
       }
       return {
         updates: [
@@ -124,6 +143,9 @@ beforeAll(async () => {
       executionRenewLease: async () => { executionRpcCalls += 1; return executionRecord("active"); },
       executionRelease: async () => { executionRpcCalls += 1; return executionRecord("paused"); },
       executionComplete: async () => { executionRpcCalls += 1; return executionRecord("completed"); },
+      deviceEnqueue: async () => { deviceRpcCalls += 1; return commandRecord(); },
+      deviceGet: async () => { deviceRpcCalls += 1; return commandRecord(); },
+      deviceCancel: async () => { deviceRpcCalls += 1; return commandRecord(); },
     },
   });
   await connection.connect();
@@ -221,6 +243,7 @@ describe("plugin oRPC WebSocket transport", () => {
     }, 1_000) as { updates: unknown[] };
     expect(output.updates).toHaveLength(2);
     expect(executionRpcCalls).toBe(4);
+    expect(deviceRpcCalls).toBe(3);
   });
 
   test("routes target configuration revision metadata through the typed plugin procedure", async () => {

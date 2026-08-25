@@ -23,6 +23,10 @@ import {
   type ExecutionReleaseInput,
   type ExecutionCompleteInput,
   type ExecutionOutput,
+  type DeviceEnqueueInput,
+  type DeviceGetInput,
+  type DeviceCancelInput,
+  type DeviceCommandOutput,
 } from "@soulcloud/plugin-rpc-contract";
 
 export interface ReverseHandlers {
@@ -34,6 +38,9 @@ export interface ReverseHandlers {
   executionRenewLease?(input: ExecutionRenewLeaseInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput>;
   executionRelease?(input: ExecutionReleaseInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput>;
   executionComplete?(input: ExecutionCompleteInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput>;
+  deviceEnqueue?(input: DeviceEnqueueInput, signal: AbortSignal, connectionId: string): Promise<DeviceCommandOutput>;
+  deviceGet?(input: DeviceGetInput, signal: AbortSignal, connectionId: string): Promise<DeviceCommandOutput | null>;
+  deviceCancel?(input: DeviceCancelInput, signal: AbortSignal, connectionId: string): Promise<DeviceCommandOutput>;
 }
 
 export interface PluginConnectionOptions {
@@ -140,6 +147,11 @@ export class PluginConnection {
               renewLease: reverseImpl.context.executions.renewLease.handler(({ input, context }) => this.options.reverseHandlers.executionRenewLease ? this.options.reverseHandlers.executionRenewLease(input, context.signal, this.connectionId) : Promise.reject(new Error("execution RPC is not configured"))),
               release: reverseImpl.context.executions.release.handler(({ input, context }) => this.options.reverseHandlers.executionRelease ? this.options.reverseHandlers.executionRelease(input, context.signal, this.connectionId) : Promise.reject(new Error("execution RPC is not configured"))),
               complete: reverseImpl.context.executions.complete.handler(({ input, context }) => this.options.reverseHandlers.executionComplete ? this.options.reverseHandlers.executionComplete(input, context.signal, this.connectionId) : Promise.reject(new Error("execution RPC is not configured"))),
+            },
+            devices: {
+              enqueueCommand: reverseImpl.context.devices.enqueueCommand.handler(({ input, context }) => this.options.reverseHandlers.deviceEnqueue ? this.options.reverseHandlers.deviceEnqueue(input, context.signal, this.connectionId) : Promise.reject(new Error("device RPC is not configured"))),
+              getCommand: reverseImpl.context.devices.getCommand.handler(({ input, context }) => this.options.reverseHandlers.deviceGet ? this.options.reverseHandlers.deviceGet(input, context.signal, this.connectionId) : Promise.reject(new Error("device RPC is not configured"))),
+              cancelCommand: reverseImpl.context.devices.cancelCommand.handler(({ input, context }) => this.options.reverseHandlers.deviceCancel ? this.options.reverseHandlers.deviceCancel(input, context.signal, this.connectionId) : Promise.reject(new Error("device RPC is not configured"))),
             },
           },
         };

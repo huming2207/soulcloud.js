@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PluginManifest } from "@soulcloud/plugin-sdk";
 import type { PluginUiSession } from "@soulcloud/core";
 import type { PluginConnection } from "../src/connection";
@@ -220,6 +220,45 @@ describe("plugin catalog connection state", () => {
     row.allowed_capabilities = ["execution.release"];
     await expect(internals.reverseExecutionGet({ operationId: "operation", operationToken, deadlineMs: 1_000, executionId, executionToken }, new AbortController().signal, "connection"))
       .rejects.toThrow("execution.get is not granted");
+  });
+
+  test("does not let an execution capability bypass manifest human approval", async () => {
+    const persisted: PluginManifest = {
+      ...manifest("1.0.0"),
+      actions: [{ id: "reset", inputSchema: {}, wire: { command: "debug.reset", schemaVersion: 1 }, requiresHumanApproval: true }],
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000,
+      prisma: { $queryRaw: async () => { throw new Error("database must not be reached"); } } as never,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+      operations: Map<string, { kind: "event"; operationTokenHash: Buffer; connectionId: string; installationId: string; projectId: string; pluginId: string; pluginVersion: string; deviceId: string; deadline: number; state: "active"; reverseCalls: number; inFlightReverseCalls: number; stagedCommandCount: number; stagedCommandBytes: number; reverseSettledWaiters: Set<() => void> }>;
+      reverseDeviceEnqueue(input: object, signal: AbortSignal, connectionId: string): Promise<unknown>;
+    };
+    internals.catalog.set(`${persisted.id}@${persisted.version}`, { pluginId: persisted.id, pluginVersion: persisted.version, manifestHash: "a".repeat(64), manifest: persisted, connected: true });
+    const operationToken = "operation-token-for-device";
+    internals.operations.set("operation", {
+      kind: "event",
+      operationTokenHash: createHash("sha256").update(operationToken).digest(),
+      connectionId: "connection",
+      installationId: "00000000-0000-4000-8000-000000000001",
+      projectId: "00000000-0000-4000-8000-000000000002",
+      pluginId: persisted.id,
+      pluginVersion: persisted.version,
+      deviceId: "00000000-0000-4000-8000-000000000003",
+      deadline: performance.now() + 1_000,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set(),
+    });
+    await expect(internals.reverseDeviceEnqueue({ operationId: "operation", operationToken, deadlineMs: 1_000, executionId: "00000000-0000-4000-8000-000000000004", executionToken: `${randomUUID()}${randomUUID()}`, command: "debug.reset", args: [] }, new AbortController().signal, "connection"))
+      .rejects.toThrow("requires human approval");
   });
 
   test("does not return SSR output after the installation is disabled in flight", async () => {

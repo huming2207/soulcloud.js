@@ -128,6 +128,22 @@ export const executionGetInput = operation.extend(executionCapability.shape).str
 export const executionRenewLeaseInput = operation.extend({ ...executionCapability.shape, leaseMs: z.number().int().positive().max(900_000) }).strict();
 export const executionReleaseInput = operation.extend(executionCapability.shape).strict();
 export const executionCompleteInput = operation.extend({ ...executionCapability.shape, state: z.enum(["completed", "failed"]) }).strict();
+const deviceCommandState = z.enum(["queued", "leased", "broker_accepted", "device_completed", "delivery_failed"]);
+export const deviceCommandOutput = z.object({
+  id: z.string().uuid(),
+  batchId: z.string().uuid(),
+  deviceId: z.string().uuid(),
+  sequence: uint64,
+  state: deviceCommandState,
+  resultCode: z.number().int().nullable(),
+  cancelRequestedAt: z.string().datetime({ offset: true }).nullable(),
+  brokerAcceptedAt: z.string().datetime({ offset: true }).nullable(),
+  deviceCompletedAt: z.string().datetime({ offset: true }).nullable(),
+  createdAt: z.string().datetime({ offset: true }),
+}).strict();
+export const deviceEnqueueInput = operation.extend({ ...executionCapability.shape, command: z.string().min(1).max(256), args: z.array(commandArgument).max(256), idempotencyKey: z.string().min(1).max(128).optional() }).strict();
+export const deviceGetInput = operation.extend({ ...executionCapability.shape, commandId: z.string().uuid() }).strict();
+export const deviceCancelInput = operation.extend({ ...executionCapability.shape, commandId: z.string().uuid() }).strict();
 
 const procedure = <Input extends z.ZodTypeAny, Output extends z.ZodTypeAny>(input: Input, output: Output, path: string[]) => oc.input(input).output(output).meta(meta.path(path));
 
@@ -167,6 +183,11 @@ export const pluginToManagerContract = {
       release: procedure(executionReleaseInput, executionOutput, ["context", "executions", "release"]),
       complete: procedure(executionCompleteInput, executionOutput, ["context", "executions", "complete"]),
     },
+    devices: {
+      enqueueCommand: procedure(deviceEnqueueInput, deviceCommandOutput, ["context", "devices", "enqueueCommand"]),
+      getCommand: procedure(deviceGetInput, deviceCommandOutput.nullable(), ["context", "devices", "getCommand"]),
+      cancelCommand: procedure(deviceCancelInput, deviceCommandOutput, ["context", "devices", "cancelCommand"]),
+    },
   },
 };
 
@@ -180,6 +201,10 @@ export type ExecutionGetInput = z.infer<typeof executionGetInput>;
 export type ExecutionRenewLeaseInput = z.infer<typeof executionRenewLeaseInput>;
 export type ExecutionReleaseInput = z.infer<typeof executionReleaseInput>;
 export type ExecutionCompleteInput = z.infer<typeof executionCompleteInput>;
+export type DeviceEnqueueInput = z.infer<typeof deviceEnqueueInput>;
+export type DeviceGetInput = z.infer<typeof deviceGetInput>;
+export type DeviceCancelInput = z.infer<typeof deviceCancelInput>;
+export type DeviceCommandOutput = z.infer<typeof deviceCommandOutput>;
 export type ActionInput = z.infer<typeof actionInput>;
 export type ActionOutput = z.infer<typeof actionOutput>;
 export type UiRenderInput = z.infer<typeof uiRenderInput>;

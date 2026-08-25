@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, artifactChunkInput, canonicalJson, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
+import { assertRpcValueBudget, artifactChunkInput, canonicalJson, deviceCancelInput, deviceCommandOutput, deviceEnqueueInput, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
   test("sorts object keys without changing array order", async () => {
@@ -74,6 +74,29 @@ describe("debug execution RPC contract", () => {
       execution: { executionId: base.executionId, executionToken: base.executionToken },
     });
     expect(result.success).toBe(true);
+  });
+
+  test("keeps device command capability inputs scoped to an execution", () => {
+    const input = deviceEnqueueInput.safeParse({
+      ...base,
+      command: "debug.identify",
+      args: [],
+      idempotencyKey: "identify-1",
+    });
+    expect(input.success).toBe(true);
+    expect(deviceCancelInput.safeParse({ ...base, commandId: "00000000-0000-4000-8000-000000000005" }).success).toBe(true);
+    expect(deviceCommandOutput.safeParse({
+      id: "00000000-0000-4000-8000-000000000005",
+      batchId: "00000000-0000-4000-8000-000000000006",
+      deviceId: "00000000-0000-4000-8000-000000000003",
+      sequence: 1n,
+      state: "queued",
+      resultCode: null,
+      cancelRequestedAt: null,
+      brokerAcceptedAt: null,
+      deviceCompletedAt: null,
+      createdAt: new Date(0).toISOString(),
+    }).success).toBe(true);
   });
 });
 

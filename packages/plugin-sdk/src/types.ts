@@ -147,12 +147,32 @@ export interface PluginExecutionContext {
   complete(state: "completed" | "failed"): Promise<PluginExecutionState>;
 }
 
+export interface PluginDeviceCommand {
+  id: string;
+  batchId: string;
+  deviceId: string;
+  sequence: bigint | number;
+  state: "queued" | "leased" | "broker_accepted" | "device_completed" | "delivery_failed";
+  resultCode: number | null;
+  cancelRequestedAt: string | null;
+  brokerAcceptedAt: string | null;
+  deviceCompletedAt: string | null;
+  createdAt: string;
+}
+
+export interface PluginDeviceContext {
+  enqueueCommand(command: string, args?: CommandArgument[], idempotencyKey?: string): Promise<PluginDeviceCommand>;
+  getCommand(commandId: string): Promise<PluginDeviceCommand | null>;
+  cancelCommand(commandId: string): Promise<PluginDeviceCommand>;
+}
+
 export interface PluginContext {
   readonly operationId: string;
   readonly signal: AbortSignal;
   readonly installation: PluginEventInput["installation"];
   readonly device: PluginEventInput["device"];
   readonly execution: PluginExecutionContext | null;
+  readonly devices: PluginDeviceContext | null;
   getEntity(entityKey: string): Promise<PluginEntityState | null>;
   enqueueCommand(command: string, args?: CommandArgument[]): Promise<void>;
   callPlugin(pluginId: string, procedure: string, input?: unknown): Promise<unknown>;

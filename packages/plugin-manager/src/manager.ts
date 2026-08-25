@@ -16,6 +16,10 @@ import {
   type ExecutionOutput,
   type ExecutionReleaseInput,
   type ExecutionRenewLeaseInput,
+  type DeviceEnqueueInput,
+  type DeviceGetInput,
+  type DeviceCancelInput,
+  type DeviceCommandOutput,
   type HandshakeOutput,
   type PluginCallInput,
   type RpcValueBudget,
@@ -30,12 +34,15 @@ import {
   completeDebugExecution,
   createPluginInstallation,
   createDebugExecution,
+  enqueueDebugCommand,
   expireDebugExecutions,
   getDebugExecutionCapability,
+  getDebugCommand,
   getDebugExecution,
   migratePluginInstallation,
   reconcilePluginInstallation,
   releaseDebugExecution,
+  requestDebugCommandCancellation,
   renewDebugExecutionLease,
   setPluginInstallationState,
   leasePluginEvents,
@@ -980,6 +987,9 @@ export class PluginManager {
       executionRenewLease: this.options.reverseHandlers?.executionRenewLease ?? ((input, signal, connectionId) => this.reverseExecutionRenewLease(input, signal, connectionId)),
       executionRelease: this.options.reverseHandlers?.executionRelease ?? ((input, signal, connectionId) => this.reverseExecutionRelease(input, signal, connectionId)),
       executionComplete: this.options.reverseHandlers?.executionComplete ?? ((input, signal, connectionId) => this.reverseExecutionComplete(input, signal, connectionId)),
+      deviceEnqueue: this.options.reverseHandlers?.deviceEnqueue ?? ((input, signal, connectionId) => this.reverseDeviceEnqueue(input, signal, connectionId)),
+      deviceGet: this.options.reverseHandlers?.deviceGet ?? ((input, signal, connectionId) => this.reverseDeviceGet(input, signal, connectionId)),
+      deviceCancel: this.options.reverseHandlers?.deviceCancel ?? ((input, signal, connectionId) => this.reverseDeviceCancel(input, signal, connectionId)),
     };
     const config: PluginConnectionOptions = {
       pluginId,
@@ -1520,6 +1530,66 @@ export class PluginManager {
     try {
       const { execution, tokenHash } = await this.executionForOperation(input, operation, "execution.complete");
       return completeDebugExecution(this.options.prisma!, execution.id, tokenHash, input.state);
+    } finally {
+      this.releaseOperation(operation);
+    }
+  }
+
+  private assertExecutionCommandAllowed(operation: ActiveOperation, command: string): void {
+    const manifest = this.getManifest(operation.pluginId, operation.pluginVersion);
+    const actions = manifest?.actions.filter((action) => action.wire.command === command) ?? [];
+    if (actions.length === 0) {
+      throw Object.assign(new Error(`execution command ${command} is not declared by the plugin manifest`), { code: "INVALID_EXECUTION_INPUT" });
+    }
+    if (actions.some((action) => action.requiresHumanApproval)) {
+      throw Object.assign(new Error(`execution command ${command} requires human approval`), { code: "INVALID_EXECUTION_INPUT" });
+    }
+  }
+
+  private async reverseDeviceEnqueue(input: DeviceEnqueueInput, signal: AbortSignal, connectionId: string): Promise<DeviceCommandOutput> {
+    if (signal.aborted) throw new Error("operation aborted");
+    const operation = this.acquireOperation(input, connectionId);
+    try {
+      if (!this.options.prisma) throw new Error("plugin device RPC is not configured");
+      assertRpcValueBudget(input.args, this.valueBudget);
+      this.assertExecutionCommandAllowed(operation, input.command);
+      const { execution, tokenHash } = await this.executionForOperation(input, operation, "device.enqueue_command");
+      const args = await normalizeCommandArguments(input.args);
+      return await enqueueDebugCommand(this.options.prisma, {
+        executionId: execution.id,
+        tokenHash,
+        pluginId: operation.pluginId,
+        pluginVersion: operation.pluginVersion,
+        manifestHash: execution.manifestHash,
+        initiatingUserId: execution.initiatingUserId,
+        command: { cmd: input.command, args },
+        correlationId: execution.id,
+        idempotencyKey: input.idempotencyKey,
+      });
+    } finally {
+      this.releaseOperation(operation);
+    }
+  }
+
+  private async reverseDeviceGet(input: DeviceGetInput, signal: AbortSignal, connectionId: string): Promise<DeviceCommandOutput | null> {
+    if (signal.aborted) throw new Error("operation aborted");
+    const operation = this.acquireOperation(input, connectionId);
+    try {
+      if (!this.options.prisma) throw new Error("plugin device RPC is not configured");
+      const { execution, tokenHash } = await this.executionForOperation(input, operation, "device.get_command");
+      return getDebugCommand(this.options.prisma, execution.id, tokenHash, input.commandId);
+    } finally {
+      this.releaseOperation(operation);
+    }
+  }
+
+  private async reverseDeviceCancel(input: DeviceCancelInput, signal: AbortSignal, connectionId: string): Promise<DeviceCommandOutput> {
+    if (signal.aborted) throw new Error("operation aborted");
+    const operation = this.acquireOperation(input, connectionId);
+    try {
+      if (!this.options.prisma) throw new Error("plugin device RPC is not configured");
+      const { execution, tokenHash } = await this.executionForOperation(input, operation, "device.cancel_command");
+      return requestDebugCommandCancellation(this.options.prisma, execution.id, tokenHash, input.commandId);
     } finally {
       this.releaseOperation(operation);
     }
