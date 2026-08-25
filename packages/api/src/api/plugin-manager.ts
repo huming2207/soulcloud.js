@@ -244,7 +244,7 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
       const url = new URL(request.url);
-      const parsed = debuggerArtifactQuery.safeParse({ kind: url.searchParams.get("kind"), filename: url.searchParams.get("filename"), content_type: url.searchParams.get("content_type") ?? undefined });
+      const parsed = debuggerArtifactQuery.safeParse({ kind: url.searchParams.get("kind"), filename: url.searchParams.get("filename"), case_id: url.searchParams.get("case_id") ?? undefined, content_type: url.searchParams.get("content_type") ?? undefined });
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
       const totalSize = Number(request.headers.get("content-length") ?? "0");
       if (!Number.isSafeInteger(totalSize) || totalSize < 1 || totalSize > 64 * 1024 * 1024) { set.status = totalSize > 64 * 1024 * 1024 ? 413 : 411; return { error: totalSize > 64 * 1024 * 1024 ? "payload_too_large" : "length_required", message: "artifact content-length must be between 1 and 67108864 bytes" }; }
