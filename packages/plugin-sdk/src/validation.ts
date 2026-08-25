@@ -61,7 +61,7 @@ export const manifestSchema = z.object({
       .refine((path) => !path.split("/").some((segment) => segment === "." || segment === ".."), "path traversal is not allowed"),
     contentType: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value), "invalid content type"),
     sha256: z.string().regex(/^[0-9a-f]{64}$/, "asset sha256 must be a lowercase SHA-256 hex digest"),
-  }).strict()).max(64).optional() }).strict().optional(),
+  }).strict().refine((asset) => asset.path.includes(asset.sha256), "asset path must contain its SHA-256 digest")).max(64).optional() }).strict().optional(),
 }).strict();
 
 export function validateManifest(value: unknown): PluginManifest {

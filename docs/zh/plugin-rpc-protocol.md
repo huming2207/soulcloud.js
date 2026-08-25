@@ -224,9 +224,10 @@ action route，再调用 `ui.handleAction`。该 procedure 返回 redirect inten
 MIME、Blob 大小、manifest SHA-256 双端校验和同源代理校验；独立 origin bootstrap 和 live
 channel 尚未实现完整生产闭环。
 
-目标协议允许 manifest 声明 immutable、content-hashed JavaScript/CSS asset。Manager 按需从
-plugin 获取有界 Blob，校验路径、MIME、大小和（后续加入的）hash 后缓存，并只从 plugin UI origin 的
-`/plugins/{installation}/assets/{hash}/...` 返回。该 origin 必须与 Human Web/API origin
+目标协议允许 manifest 声明 immutable、content-hashed JavaScript/CSS asset。每个 asset 的 URL
+路径必须包含 manifest 声明的完整 SHA-256（例如 `/main/app.<sha256>.js`），避免升级后同一路径
+永久缓存旧内容。Manager 按需从 plugin 获取有界 Blob，校验路径、MIME、大小和 hash 后缓存，并
+只从 plugin UI origin 的 `/plugins/{installation}/assets/...` 返回。该 origin 必须与 Human Web/API origin
 分离，不能读取主站浏览器存储或携带主站 refresh/access token。Browser 不直连 plugin；
 Manager 不执行 bundle。动态 UI 使用由 Manager 终止并鉴权的
 `/plugins/{installation}/live` channel，再通过同一 plugin connection 上的有界 oRPC

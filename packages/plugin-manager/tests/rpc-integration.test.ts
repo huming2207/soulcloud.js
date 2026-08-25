@@ -32,7 +32,7 @@ beforeAll(async () => {
       }],
       actions: [{ id: "reboot", inputSchema: {}, wire: { command: "reboot", schemaVersion: 1 } }],
       events: [{ kind: "reading", schemaVersion: 1 }],
-      ui: { routes: [{ id: "main", path: "/main" }], assets: [{ path: "/main/app.js", contentType: "text/javascript; charset=utf-8", sha256: "f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631" }] },
+      ui: { routes: [{ id: "main", path: "/main" }], assets: [{ path: "/main/app.f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631.js", contentType: "text/javascript; charset=utf-8", sha256: "f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631" }] },
     },
     encodeAction: { reboot: () => [{ delay: 3n }] },
     onEvent: async (context, event) => {
@@ -53,7 +53,7 @@ beforeAll(async () => {
       },
     },
     assets: {
-      "/main/app.js": async () => ({ body: Uint8Array.of(99, 111, 110, 115, 116), contentType: "text/javascript; charset=utf-8", cache: "no-store" }),
+      "/main/app.f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631.js": async () => ({ body: Uint8Array.of(99, 111, 110, 115, 116), contentType: "text/javascript; charset=utf-8", cache: "no-store" }),
     },
     configureTarget: async () => ({ configId: randomUUID(), revision: 1, sha256: "a".repeat(64), targetCount: 1 }),
     storeArtifactChunk: async (input) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? randomUUID() : null, sha256: input.final ? "b".repeat(64) : null }),
@@ -260,7 +260,7 @@ describe("plugin oRPC WebSocket transport", () => {
       operationToken: `${randomUUID()}${randomUUID()}`,
       requestId: randomUUID(),
       routeId: "main",
-      assetPath: "/main/app.js",
+      assetPath: "/main/app.f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631.js",
       installationId: randomUUID(),
       projectId: randomUUID(),
       user: { id: randomUUID(), locale: "en", permissions: [] },
