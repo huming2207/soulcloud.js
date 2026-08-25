@@ -1205,6 +1205,9 @@ export class PluginManager {
         if (message.includes("INVALID_ARTIFACT_INPUT")) throw publicError(message, 400, "invalid_request");
         throw error;
       }
+      if (output.uploadId !== input.uploadId) {
+        throw publicError("plugin returned an artifact upload ID that does not match the request", 502, "invalid_plugin_output");
+      }
       if (input.final) {
         if (!output.complete || !output.artifactId || !output.sha256) throw publicError("plugin did not complete artifact upload", 502, "invalid_plugin_output");
         return { artifactId: output.artifactId, sha256: output.sha256 };

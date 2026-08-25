@@ -103,6 +103,57 @@ describe("plugin artifact upload body", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("rejects a plugin artifact response for a different upload", async () => {
+    const installationId = randomUUID();
+    const projectId = randomUUID();
+    const pluginId = "fixture.plugin";
+    const pluginVersion = "1.0.0";
+    const manifestHash = "a".repeat(64);
+    const uploadId = randomUUID();
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "test-plugin-rpc-token-that-is-long-enough",
+      maxFrameBytes: 1024 * 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024 * 1024,
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      prisma: {
+        pluginInstallation: {
+          findUnique: async () => ({ id: installationId, projectId, pluginId, pluginVersion, manifestHash, state: "enabled" }),
+        },
+      } as never,
+    });
+    const connection = {
+      id: "connection-1",
+      isOpen: true,
+      manifest: { pluginVersion, manifestHash },
+      request: async () => ({ uploadId: randomUUID(), receivedBytes: 1, complete: true, artifactId: randomUUID(), sha256: "b".repeat(64) }),
+    };
+    const managerState = manager as unknown as { connections: Map<string, unknown>; catalog: Map<string, unknown> };
+    managerState.connections.set(pluginId, connection);
+    managerState.catalog.set(`${pluginId}@${pluginVersion}`, {
+      pluginId,
+      pluginVersion,
+      manifestHash,
+      manifest: { id: pluginId, version: pluginVersion, apiVersion: 1, profiles: [], actions: [], events: [] },
+      connected: true,
+    });
+
+    await expect(manager.uploadArtifact({
+      installationId,
+      projectId,
+      userId: randomUUID(),
+      uploadId,
+      kind: "firmware",
+      filename: "fixture.bin",
+      contentType: "application/octet-stream",
+      totalSize: 1,
+      body: new ReadableStream({ start(controller) { controller.enqueue(Uint8Array.of(1)); controller.close(); } }),
+    })).rejects.toMatchObject({ status: 502, publicCode: "invalid_plugin_output" });
+  });
+
   test("pins a UI upload to the session's plugin snapshot", async () => {
     const installationId = randomUUID();
     const projectId = randomUUID();
