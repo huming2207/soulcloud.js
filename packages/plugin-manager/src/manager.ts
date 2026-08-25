@@ -1390,6 +1390,14 @@ export class PluginManager {
       if (!operation.deviceId) throw new Error("command enqueue requires a device scope");
       if (!this.options.prisma) throw new Error("plugin reverse RPC is not configured");
       assertRpcValueBudget(input.args, this.valueBudget);
+      const manifest = this.getManifest(operation.pluginId, operation.pluginVersion);
+      const actions = manifest?.actions.filter((candidate) => candidate.wire.command === input.command) ?? [];
+      if (actions.length === 0) {
+        throw Object.assign(new Error(`event command ${input.command} is not declared by the plugin manifest`), { code: "INVALID_EVENT_INPUT" });
+      }
+      if (actions.some((action) => action.requiresHumanApproval)) {
+        throw Object.assign(new Error(`event command ${input.command} requires human approval`), { code: "INVALID_EVENT_INPUT" });
+      }
       reservation = commandIntentBytes(input.command, input.args);
       if (operation.stagedCommandCount >= (this.options.maxStagedCommands ?? 32)) {
         throw new Error("operation command intent limit exceeded");

@@ -30,11 +30,14 @@ beforeAll(async () => {
           { key: "capture", valueType: "binary", category: "diagnostic" },
         ],
       }],
-      actions: [{ id: "reboot", inputSchema: {}, wire: { command: "reboot", schemaVersion: 1 } }],
+      actions: [
+        { id: "reboot", inputSchema: {}, wire: { command: "reboot", schemaVersion: 1 } },
+        { id: "acknowledge", inputSchema: {}, wire: { command: "acknowledge", schemaVersion: 1 } },
+      ],
       events: [{ kind: "reading", schemaVersion: 1 }],
       ui: { routes: [{ id: "main", path: "/main" }], assets: [{ path: "/main/app.f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631.js", contentType: "text/javascript; charset=utf-8", sha256: "f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631" }] },
     },
-    encodeAction: { reboot: () => [{ delay: 3n }] },
+    encodeAction: { reboot: () => [{ delay: 3n }], acknowledge: () => [] },
     onEvent: async (context, event) => {
       eventPayloadValue = event.payload;
       reverseEntityValue = await context.getEntity("temperature");
