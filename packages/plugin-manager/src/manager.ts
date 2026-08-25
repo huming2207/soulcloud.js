@@ -2,6 +2,7 @@ import { validateActionInput, validateEntityUpdates, validateManifest, type Plug
 import {
   DEFAULT_RPC_VALUE_BUDGET,
   assertRpcValueBudget,
+  artifactChunkOutput,
   canonicalJson,
   configureTargetOutput,
   sha256Hex,
@@ -466,6 +467,96 @@ export class PluginManager {
       } catch (error) {
         throw publicError(`plugin target configuration output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
       }
+    } finally {
+      this.finishOperation(operationId);
+    }
+  }
+
+  async uploadArtifact(input: {
+    installationId: string;
+    projectId: string;
+    userId: string;
+    kind: "elf" | "firmware";
+    filename: string;
+    contentType: string;
+    totalSize: number;
+    body: ReadableStream<Uint8Array>;
+    timeoutMs?: number;
+  }): Promise<{ uploadId: string; artifactId: string; sha256: string; size: number; kind: "elf" | "firmware"; filename: string }> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    if (!Number.isSafeInteger(input.totalSize) || input.totalSize <= 0 || input.totalSize > 64 * 1024 * 1024) throw publicError("artifact size is invalid", 413, "payload_too_large");
+    const installation = await this.options.prisma.pluginInstallation.findUnique({
+      where: { id: input.installationId },
+      select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
+    });
+    if (!installation) throw Object.assign(new Error("plugin installation not found"), { status: 404 });
+    if (installation.projectId !== input.projectId) throw Object.assign(new Error("plugin installation project mismatch"), { status: 403 });
+    if (installation.state !== "enabled") throw Object.assign(new Error("plugin installation is disabled"), { status: 409 });
+    const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
+    const uploadId = crypto.randomUUID();
+    const timeoutMs = input.timeoutMs ?? 30_000;
+    let offset = 0;
+    let previous: Uint8Array | null = null;
+    for await (const chunk of splitArtifactBody(input.body)) {
+      if (previous) {
+        const progress = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: false, chunk: previous }, timeoutMs);
+        if (typeof progress !== "number") throw publicError("plugin completed an artifact before the final chunk", 502, "invalid_plugin_output");
+        offset = progress;
+      }
+      previous = chunk;
+    }
+    if (!previous) throw Object.assign(new Error("artifact body is empty"), { status: 400 });
+    const result = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: true, chunk: previous }, timeoutMs, true);
+    if (typeof result === "number") throw publicError("plugin did not complete artifact upload", 502, "invalid_plugin_output");
+    return { uploadId, artifactId: result.artifactId, sha256: result.sha256, size: input.totalSize, kind: input.kind, filename: input.filename };
+  }
+
+  private async sendArtifactChunk(
+    connection: PluginConnection,
+    input: { installation: { id: string; projectId: string; pluginId: string; pluginVersion: string }; uploadId: string; userId: string; kind: "elf" | "firmware"; filename: string; contentType: string; totalSize: number; offset: number; final: boolean; chunk: Uint8Array },
+    timeoutMs: number,
+    expectFinal = false,
+  ): Promise<number | { artifactId: string; sha256: string }> {
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    this.registerOperation(operationId, {
+      kind: "configure",
+      operationTokenHash: hashOperationToken(operationToken),
+      connectionId: connection.id,
+      installationId: input.installation.id,
+      projectId: input.installation.projectId,
+      pluginId: input.installation.pluginId,
+      pluginVersion: input.installation.pluginVersion,
+      deadline: performance.now() + timeoutMs,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set(),
+    });
+    try {
+      const output = artifactChunkOutput.parse(await connection.request("debugger.storeArtifactChunk", {
+        operationId,
+        operationToken,
+        installationId: input.installation.id,
+        projectId: input.installation.projectId,
+        userId: input.userId,
+        uploadId: input.uploadId,
+        kind: input.kind,
+        filename: input.filename,
+        contentType: input.contentType,
+        totalSize: input.totalSize,
+        offset: input.offset,
+        final: input.final,
+        chunk: input.chunk,
+      }, timeoutMs));
+      if (input.final) {
+        if (!output.complete || !output.artifactId || !output.sha256) throw publicError("plugin did not complete artifact upload", 502, "invalid_plugin_output");
+        return { artifactId: output.artifactId, sha256: output.sha256 };
+      }
+      if (expectFinal || output.complete || output.receivedBytes !== input.offset + input.chunk.byteLength) throw publicError("plugin returned an invalid artifact upload progress", 502, "invalid_plugin_output");
+      return output.receivedBytes;
     } finally {
       this.finishOperation(operationId);
     }
@@ -1135,6 +1226,38 @@ function commandIntentBytes(command: string, args: CommandEnqueueInput["args"]):
     else bytes += 8;
   }
   return bytes;
+}
+
+async function* splitArtifactBody(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = body.getReader();
+  let carry: Uint8Array | null = null;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      const value = next.value;
+      if (!value || value.byteLength === 0) continue;
+      let current: Uint8Array;
+      if (carry) {
+        const previous = carry;
+        current = new Uint8Array(previous.byteLength + value.byteLength);
+        current.set(previous);
+        current.set(value, previous.byteLength);
+      } else {
+        current = value;
+      }
+      carry = null;
+      let offset = 0;
+      while (current.byteLength - offset > 64 * 1024) {
+        yield current.subarray(offset, offset + 64 * 1024);
+        offset += 64 * 1024;
+      }
+      if (offset < current.byteLength) carry = current.subarray(offset);
+    }
+    if (carry && carry.byteLength > 0) yield carry;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function hashOperationToken(token: string): Buffer {

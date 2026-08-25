@@ -41,6 +41,24 @@ async function callManager(options: PluginManagerOptions, path: string, body: un
   } finally { clearTimeout(timer); }
 }
 
+async function callManagerBinary(options: PluginManagerOptions, path: string, request: Request, headers: Record<string, string>): Promise<{ status: number; value: unknown }> {
+  if (!options.serviceToken) throw new PluginManagerUnavailableError("plugin manager service credential is not configured");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(options.requestTimeoutMs ?? 5_000, 60_000));
+  try {
+    const response = await fetch(`${options.internalUrl.replace(/\/$/, "")}${path}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${options.serviceToken}`, "content-type": request.headers.get("content-type") ?? "application/octet-stream", ...(request.headers.get("content-length") ? { "content-length": request.headers.get("content-length")! } : {}), ...headers },
+      body: request.body,
+      signal: controller.signal,
+    });
+    const value = await response.json().catch(() => null);
+    return { status: response.status, value };
+  } catch {
+    throw new PluginManagerUnavailableError("plugin manager is unavailable");
+  } finally { clearTimeout(timer); }
+}
+
 export function pluginManagerOperationTimeoutMs(requestTimeoutMs = 5_000): number {
   return Math.min(30_000, Math.max(100, requestTimeoutMs - 1_000));
 }
@@ -51,6 +69,7 @@ const actionBody = z.object({ device_id: z.string().uuid(), input: z.unknown() }
 const stateBody = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
 const migrateBody = z.object({ plugin_version: z.string().min(1).max(128), manifest_hash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown().optional() }).strict();
 const targetConfigBody = z.object({ yaml: z.string().min(1).max(262_144) }).strict();
+const debuggerArtifactQuery = z.object({ kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), content_type: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)).default("application/octet-stream") }).strict();
 
 /** Human API is the only browser-facing authority for plugin metadata. */
 export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, options?: PluginManagerOptions) {
@@ -133,6 +152,30 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
           userId: user.user.id,
           yaml: parsed.data.yaml,
           timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
+        });
+        set.status = result.status;
+        return result.value;
+      } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
+    })
+    .post("/v1/plugin-installations/:id/debugger/artifacts", async ({ request, params, set }) => {
+      const user = await authenticateRequest(prisma, jwt, request);
+      if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const url = new URL(request.url);
+      const parsed = debuggerArtifactQuery.safeParse({ kind: url.searchParams.get("kind"), filename: url.searchParams.get("filename"), content_type: url.searchParams.get("content_type") ?? undefined });
+      if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
+      const totalSize = Number(request.headers.get("content-length") ?? "0");
+      if (!Number.isSafeInteger(totalSize) || totalSize < 1 || totalSize > 64 * 1024 * 1024) { set.status = totalSize > 64 * 1024 * 1024 ? 413 : 411; return { error: totalSize > 64 * 1024 * 1024 ? "payload_too_large" : "length_required", message: "artifact content-length must be between 1 and 67108864 bytes" }; }
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
+      if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
+      if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
+      try {
+        const result = await callManagerBinary(options, `/internal/plugins/debugger/installations/${params.id}/artifacts`, request, {
+          "x-soulcloud-project-id": installation.projectId,
+          "x-soulcloud-user-id": user.user.id,
+          "x-soulcloud-artifact-kind": parsed.data.kind,
+          "x-soulcloud-artifact-filename": parsed.data.filename,
+          "x-soulcloud-artifact-content-type": parsed.data.content_type,
         });
         set.status = result.status;
         return result.value;

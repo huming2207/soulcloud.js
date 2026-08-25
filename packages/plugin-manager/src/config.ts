@@ -33,6 +33,7 @@ const envSchema = z.object({
   PLUGIN_MANAGER_RECONNECT_MS: z.coerce.number().int().positive().default(2_000),
   PLUGIN_MANAGER_UI_SESSION_SECRET: z.string().min(32).optional(),
   PLUGIN_UI_SESSION_TTL_SECONDS: z.coerce.number().int().positive().max(900).default(300),
+  PLUGIN_ARTIFACT_MAX_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(64 * 1024 * 1024),
   PLUGIN_EVENT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   PLUGIN_EVENT_LEASE_MS: z.coerce.number().int().min(1_000).default(60_000),
   PLUGIN_EVENT_BATCH_SIZE: z.coerce.number().int().positive().max(256).default(32),

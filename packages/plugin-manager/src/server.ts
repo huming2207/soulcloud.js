@@ -3,7 +3,7 @@ import { pluginUiSessionCookieName, verifyPluginUiSession } from "@soulcloud/cor
 import { coerceStringActionInput, validateActionInput, type ActionInputSchema, type PluginUiRoute } from "@soulcloud/plugin-sdk";
 import { z, type ZodType } from "zod";
 
-export interface PluginManagerServerOptions { hostname: string; port: number; serviceToken: string; manager: PluginManager; uiSessionSecret?: string; uiSessionTtlSeconds?: number; }
+export interface PluginManagerServerOptions { hostname: string; port: number; serviceToken: string; manager: PluginManager; uiSessionSecret?: string; uiSessionTtlSeconds?: number; maxArtifactBytes?: number; }
 function json(status: number, value: unknown): Response { return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } }); }
 function authorized(request: Request, token: string): boolean { return request.headers.get("authorization") === `Bearer ${token}`; }
 
@@ -83,7 +83,7 @@ function failure(error: unknown): Response {
           : message.includes("disabled") || message.includes("changed concurrently") || message.includes("changed while") ? 409
             : 500;
   const publicMessage = mapped >= 500 && mapped !== 502 ? "plugin manager operation failed" : message;
-  const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "human_approval_required", "invalid_plugin_output", "plugin_ui_invalid_input", "plugin_ui_invalid_output", "plugin_ui_session_invalid", "plugin_manager_overloaded"].includes(explicitCode)
+  const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "human_approval_required", "invalid_plugin_output", "payload_too_large", "plugin_ui_invalid_input", "plugin_ui_invalid_output", "plugin_ui_session_invalid", "plugin_manager_overloaded"].includes(explicitCode)
     ? explicitCode
     : mapped === 400 ? "invalid_request" : mapped === 404 ? "not_found" : mapped === 409 ? "conflict" : mapped === 502 ? "plugin_output_invalid" : mapped === 503 ? "plugin_unavailable" : "plugin_manager_error";
   return json(mapped, { error: code, message: publicMessage });
@@ -121,7 +121,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
   const server = Bun.serve({
     hostname: options.hostname,
     port: options.port,
-    maxRequestBodySize: 1_048_576,
+    maxRequestBodySize: Math.max(1_048_576, options.maxArtifactBytes ?? 64 * 1024 * 1024),
     async fetch(request) {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health/live") return json(200, { status: "ok" });
@@ -167,6 +167,24 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
       if (!authorized(request, options.serviceToken)) return json(401, { error: "unauthorized" });
       if (request.method === "GET" && url.pathname === "/internal/plugins/catalog") return json(200, { plugins: options.manager.listCatalog() });
       if (request.method !== "POST") return json(404, { error: "not_found" });
+      const artifact = url.pathname.match(/^\/internal\/plugins\/debugger\/installations\/([^/]+)\/artifacts$/);
+      if (artifact) {
+        try {
+          const installationId = parseInstallationId(artifact[1]!);
+          const totalSize = Number(request.headers.get("content-length") ?? "0");
+          const metadata = {
+            projectId: request.headers.get("x-soulcloud-project-id") ?? "",
+            userId: request.headers.get("x-soulcloud-user-id") ?? "",
+            kind: request.headers.get("x-soulcloud-artifact-kind") ?? "",
+            filename: request.headers.get("x-soulcloud-artifact-filename") ?? "",
+            contentType: request.headers.get("x-soulcloud-artifact-content-type") ?? "application/octet-stream",
+          };
+          const parsed = parseBody(z.object({ projectId: z.string().uuid(), userId: z.string().uuid(), kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), contentType: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)) }).strict(), metadata);
+          if (!request.body || !Number.isSafeInteger(totalSize) || totalSize < 1) throw Object.assign(new Error("content-length is required for artifact upload"), { status: 411 });
+          if (totalSize > (options.maxArtifactBytes ?? 64 * 1024 * 1024)) throw Object.assign(new Error("artifact is too large"), { status: 413 });
+          return json(201, await options.manager.uploadArtifact({ installationId, ...parsed, totalSize, body: request.body as ReadableStream<Uint8Array> }));
+        } catch (error) { return failure(error); }
+      }
       try {
         const body = await requestJson(request) as Record<string, unknown>;
         if (url.pathname === "/internal/plugins/installations") {

@@ -104,7 +104,8 @@ export function createApp(
       // uploads are multipart and streamed with their own caps — exempt
       // here; Bun's global maxRequestBodySize bounds those separately.
       const contentType = request.headers.get("content-type") ?? "";
-      if (contentType.includes("multipart/form-data")) return;
+      const pluginArtifactUpload = contentType.startsWith("application/octet-stream") && new URL(request.url).pathname.includes("/debugger/artifacts");
+      if (contentType.includes("multipart/form-data") || pluginArtifactUpload) return;
       const declared = Number(request.headers.get("content-length") ?? "0");
       if (declared > maxJsonBodyBytes) {
         set.status = 413;
