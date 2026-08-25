@@ -266,14 +266,21 @@ export async function getDebugExecutionCapability(
 ): Promise<DebugExecutionRecord | null> {
   if (!UUID.test(executionId) || !SHA256.test(tokenHash)) return null;
   const rows = await prisma.$queryRaw<RawExecutionRow[]>`
-    SELECT id, installation_id, device_id, initiating_user_id, plugin_id, plugin_version,
-      manifest_hash, allowed_capabilities, state, device_lease_expires_at, expires_at,
-      created_at, updated_at, finished_at
-    FROM debug_executions
-    WHERE id = ${executionId}::uuid
-      AND token_hash = ${tokenHash}
-      AND state IN ('active', 'paused', 'cancelling')
-      AND expires_at > CURRENT_TIMESTAMP
+    SELECT e.id, e.installation_id, e.device_id, e.initiating_user_id, e.plugin_id, e.plugin_version,
+      e.manifest_hash, e.allowed_capabilities, e.state, e.device_lease_expires_at, e.expires_at,
+      e.created_at, e.updated_at, e.finished_at
+    FROM debug_executions e
+    JOIN plugin_installations i ON i.id = e.installation_id
+    WHERE e.id = ${executionId}::uuid
+      AND e.token_hash = ${tokenHash}
+      AND e.state IN ('active', 'paused', 'cancelling')
+      AND e.expires_at > CURRENT_TIMESTAMP
+      AND EXISTS (
+        SELECT 1
+        FROM user_projects up
+        WHERE up.user_id = e.initiating_user_id
+          AND up.project_id = i.project_id
+      )
     LIMIT 1
   `;
   return rows[0] ? mapExecution(rows[0]) : null;

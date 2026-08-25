@@ -119,6 +119,7 @@ describe("durable debug execution capability", () => {
     const execution = await createDebugExecution(prisma, input(tokenHashG));
     await prisma.userProject.delete({ where: { userId_projectId: { userId, projectId } } });
     try {
+      expect(await getDebugExecutionCapability(prisma, execution.id, tokenHashG)).toBeNull();
       await expect(revalidateDebugSessionExecution(prisma, {
         executionId: execution.id,
         tokenHash: tokenHashG,
