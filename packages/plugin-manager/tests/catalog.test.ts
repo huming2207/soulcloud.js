@@ -383,4 +383,61 @@ describe("plugin catalog connection state", () => {
     await expect(manager.getPluginUiAsset(session, "request", `/main/app.${assetHash}.js`))
       .rejects.toThrow("content type differs from its manifest");
   });
+
+  test("rejects malformed SSR output at the Manager boundary", async () => {
+    const persisted: PluginManifest = {
+      ...manifest("1.0.0"),
+      ui: { routes: [{ id: "main", path: "/main" }] },
+    };
+    const manifestHash = await sha256Hex(canonicalJson(persisted));
+    const installationId = randomUUID();
+    const projectId = randomUUID();
+    const prisma = {
+      pluginInstallation: {
+        findUnique: async () => ({
+          projectId,
+          pluginId: persisted.id,
+          pluginVersion: persisted.version,
+          manifestHash,
+          state: "enabled",
+        }),
+      },
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000, prisma: prisma as never,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+      connections: Map<string, PluginConnection>;
+    };
+    internals.catalog.set(`${persisted.id}@${persisted.version}`, {
+      pluginId: persisted.id,
+      pluginVersion: persisted.version,
+      manifestHash,
+      manifest: persisted,
+      connected: true,
+    });
+    internals.connections.set(persisted.id, {
+      id: "connection",
+      isOpen: true,
+      manifest: { pluginVersion: persisted.version, manifestHash },
+      request: async () => ({ html: "<p>bad</p>", status: 302 }),
+    } as unknown as PluginConnection);
+    const session: PluginUiSession = {
+      sub: randomUUID(),
+      projectId,
+      installationId,
+      pluginId: persisted.id,
+      pluginVersion: persisted.version,
+      manifestHash,
+      routeId: "main",
+      permissions: [],
+      locale: "en",
+      nonce: randomUUID(),
+    };
+
+    await expect(manager.renderPluginUi(session, "request", {})).rejects.toThrow("plugin UI output is invalid");
+  });
 });

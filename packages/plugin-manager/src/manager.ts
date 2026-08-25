@@ -10,6 +10,8 @@ import {
   listTargetConfigsOutput,
   listArtifactsOutput,
   uiAssetOutput,
+  uiRenderOutput,
+  uiActionOutput,
   sha256BytesHex,
   sha256Hex,
   type CommandEnqueueInput,
@@ -1162,11 +1164,17 @@ export class PluginManager {
         if (/INVALID_PLUGIN_OUTPUT/.test(message)) throw publicError(message, 502, "plugin_ui_invalid_output");
         throw error;
       }
+      let parsed: ReturnType<typeof uiRenderOutput.parse> | ReturnType<typeof uiActionOutput.parse>;
+      try {
+        parsed = method === "ui.render" ? uiRenderOutput.parse(result) : uiActionOutput.parse(result);
+      } catch (error) {
+        throw publicError(`plugin UI output is invalid: ${(error as Error).message}`, 502, "plugin_ui_invalid_output");
+      }
       await this.sealOperation(operationId);
       // Do not return a page rendered from a snapshot that was disabled or
       // migrated while the plugin call was in flight.
       await this.assertUiSessionCurrent(session);
-      return result;
+      return parsed;
     } finally {
       this.finishOperation(operationId);
     }
