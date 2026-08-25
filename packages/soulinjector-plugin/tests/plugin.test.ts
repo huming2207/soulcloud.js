@@ -83,6 +83,24 @@ describe("SoulInjector plugin", () => {
     expect(page.html).toContain("Target configuration is invalid");
   });
 
+  test("renders a maximum-size target YAML within the SSR RPC budget", async () => {
+    const largeYaml = `${saved.yaml}\n# ${"target-config ".repeat(4_300)}`.slice(0, 65_536);
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      getLatestTargetConfig: async () => ({ ...saved, yaml: largeYaml }),
+    });
+    const page = await plugin.render!["debugger"]!({
+      requestId: "request",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      user: { id: saved.createdBy, locale: "en", permissions: [] },
+      routeId: "debugger",
+      params: {},
+    });
+    expect(new TextEncoder().encode(page.html).byteLength).toBeLessThan(512 * 1024);
+    expect(page.html).toContain("target-config target-config");
+  });
+
   test("creates a private debugger case through the SSR action path", async () => {
     const created: unknown[] = [];
     const plugin = createSoulInjectorPlugin({
