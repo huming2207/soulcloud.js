@@ -53,6 +53,7 @@ import {
   reconcilePluginInstallation,
   releaseDebugExecution,
   releaseDebugExecutionForUser,
+  renewDebugExecutionLeaseForUser,
   requestDebugCommandCancellation,
   renewDebugExecutionLease,
   setPluginInstallationState,
@@ -816,7 +817,14 @@ export class PluginManager {
       this.forgetExecutionCapability(execution.id);
       throw publicError("debug execution capability is no longer available", 409, "conflict");
     }
-    return renewDebugExecutionLease(this.options.prisma, execution.id, hashCapabilityToken(cached.token), leaseMs);
+    return renewDebugExecutionLeaseForUser(this.options.prisma, {
+      executionId: execution.id,
+      tokenHash: hashCapabilityToken(cached.token),
+      installationId: session.installationId,
+      projectId: session.projectId,
+      userId: session.sub,
+      leaseMs,
+    });
   }
 
   async renewDebugExecution(executionId: string, executionToken: string, leaseMs: number): Promise<DebugExecutionRecord> {

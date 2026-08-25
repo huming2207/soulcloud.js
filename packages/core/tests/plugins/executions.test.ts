@@ -12,6 +12,7 @@ import {
   releaseDebugExecution,
   releaseDebugExecutionForUser,
   renewDebugExecutionLease,
+  renewDebugExecutionLeaseForUser,
 } from "../../src/plugins/executions";
 import { setPluginInstallationState } from "../../src/plugins/installations";
 import {
@@ -196,6 +197,14 @@ describe.serial("durable debug execution capability", () => {
         installationId,
         projectId,
         userId,
+      })).rejects.toBeInstanceOf(DebugExecutionCapabilityError);
+      await expect(renewDebugExecutionLeaseForUser(prisma, {
+        executionId: execution.id,
+        tokenHash: tokenHashJ,
+        installationId,
+        projectId,
+        userId,
+        leaseMs: 10_000,
       })).rejects.toBeInstanceOf(DebugExecutionCapabilityError);
       expect(await prisma.debugExecution.findUniqueOrThrow({ where: { id: execution.id }, select: { state: true } })).toEqual({ state: "active" });
     } finally {
