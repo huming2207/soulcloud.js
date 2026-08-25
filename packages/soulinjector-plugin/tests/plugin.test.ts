@@ -297,7 +297,7 @@ describe("SoulInjector plugin", () => {
       caseId: saved.id,
       installationId: saved.installationId,
       soulcloudDeviceRef: "soulinjector-device-1",
-      executionRef: null,
+      executionRef: "00000000-0000-4000-8000-000000000008",
       state: "active" as const,
       pluginVersion: "0.1.0",
       manifestHash: saved.sha256,
@@ -343,6 +343,7 @@ describe("SoulInjector plugin", () => {
     expect(result.html).toContain("&lt;target halted&gt;");
     expect(result.html).not.toContain("<target halted>");
     expect(result.html).toContain('id="debug-actions"');
+    expect(result.html).toContain('id="debug-command-timeline"');
     expect(result.html).toContain('id="debug-session-create"');
     expect(result.html).toContain('id="debug-session-device"');
     expect(result.html).toContain("Reports");

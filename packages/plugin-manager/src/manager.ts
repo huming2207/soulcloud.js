@@ -45,6 +45,7 @@ import {
   getDebugExecutionCapability,
   revalidateDebugSessionExecution,
   getDebugCommand,
+  listDebugCommands,
   getDebugExecution,
   consumePluginUiGrant,
   purgePluginUiGrants,
@@ -658,6 +659,19 @@ export class PluginManager {
     const installation = await this.options.prisma.pluginInstallation.findUnique({ where: { id: input.installationId }, select: { projectId: true } });
     if (!installation || installation.projectId !== input.projectId) return null;
     return execution;
+  }
+
+  async listDebugCommandsForUiSession(
+    session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
+    executionId: string,
+  ): Promise<ReturnType<typeof listDebugCommands>> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    await this.assertUiSessionCurrent(session as PluginUiSession);
+    const execution = await this.getDebugExecutionForScope({ executionId, installationId: session.installationId, projectId: session.projectId });
+    if (!execution || execution.pluginId !== session.pluginId || execution.pluginVersion !== session.pluginVersion || execution.manifestHash !== session.manifestHash) {
+      throw publicError("debug execution is not available to this plugin UI session", 404, "not_found");
+    }
+    return listDebugCommands(this.options.prisma, executionId, 64);
   }
 
   async renewDebugExecution(executionId: string, executionToken: string, leaseMs: number): Promise<DebugExecutionRecord> {

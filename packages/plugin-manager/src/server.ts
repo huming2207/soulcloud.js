@@ -259,6 +259,14 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
             return json(201, await options.manager.startDebugSessionFromUiSession(session, input));
           } catch (error) { return failure(error); }
         }
+        const uiCommandPathPrefix = `/plugins/${session.installationId}/debugger/executions/`;
+        if (request.method === "GET" && url.pathname.startsWith(uiCommandPathPrefix) && session.routeId === "debugger") {
+          try {
+            const executionId = parseInstallationId(url.pathname.slice(uiCommandPathPrefix.length).replace(/\/commands$/, ""));
+            if (!url.pathname.endsWith("/commands")) return json(404, { error: "not_found" });
+            return json(200, await options.manager.listDebugCommandsForUiSession(session, executionId));
+          } catch (error) { return failure(error); }
+        }
         const uiArtifactPath = `/plugins/${session.installationId}/debugger/artifacts`;
         if (request.method === "POST" && url.pathname === uiArtifactPath && session.routeId === "debugger") {
           try {

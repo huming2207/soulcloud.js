@@ -17,6 +17,7 @@ import {
   DebugCommandIdempotencyConflictError,
   enqueueDebugCommand,
   getDebugCommand,
+  listDebugCommands,
   requestDebugCommandCancellation,
 } from "../../src/plugins/execution-commands";
 import { createPluginInstallation } from "../../src/plugins/installations";
@@ -161,6 +162,7 @@ describe("durable debug execution capability", () => {
     const cancelled = await requestDebugCommandCancellation(prisma, execution.id, tokenHashE, command.id);
     expect(cancelled.cancelRequestedAt).not.toBeNull();
     expect(cancelled.state).toBe("delivery_failed");
+    expect(await listDebugCommands(prisma, execution.id)).toEqual([cancelled]);
 
     const idempotentInput = {
       executionId: execution.id,

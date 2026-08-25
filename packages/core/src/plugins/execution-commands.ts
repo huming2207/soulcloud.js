@@ -59,6 +59,8 @@ interface RawCommandRow {
   payload: Uint8Array;
 }
 
+type RawCommandSummaryRow = Omit<RawCommandRow, "payload">;
+
 function assertCapabilityInput(executionId: string, tokenHash: string): void {
   if (!UUID.test(executionId) || !SHA256.test(tokenHash)) throw new DebugExecutionCapabilityError();
 }
@@ -83,6 +85,10 @@ function mapCommand(row: RawCommandRow): DebugCommandRecord {
     deviceCompletedAt: asDate(row.device_completed_at),
     createdAt: asDate(row.created_at)!,
   };
+}
+
+function mapCommandSummary(row: RawCommandSummaryRow): DebugCommandRecord {
+  return mapCommand(row as RawCommandRow);
 }
 
 function capabilitiesOf(value: unknown): string[] {
@@ -226,6 +232,25 @@ export async function getDebugCommand(
   assertCapabilityInput(executionId, tokenHash);
   if (!UUID.test(commandId)) throw new RangeError("commandId must be a UUID");
   return findDebugCommandWithCapability(prisma, executionId, tokenHash, commandId, "device.get_command");
+}
+
+/** Return bounded command status metadata for a UI-scoped execution. */
+export async function listDebugCommands(
+  prisma: PrismaClient,
+  executionId: string,
+  limit = 64,
+): Promise<DebugCommandRecord[]> {
+  if (!UUID.test(executionId)) throw new DebugExecutionCapabilityError();
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("command limit must be between 1 and 256");
+  const rows = await prisma.$queryRaw<RawCommandSummaryRow[]>`
+    SELECT id, batch_id, device_id, sequence, state, result_code, cancel_requested_at,
+      broker_accepted_at, device_completed_at, created_at
+    FROM device_commands
+    WHERE execution_id = ${executionId}::uuid
+    ORDER BY created_at DESC, id DESC
+    LIMIT ${limit}
+  `;
+  return rows.map(mapCommandSummary);
 }
 
 async function findDebugCommandWithCapability(
