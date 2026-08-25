@@ -439,6 +439,7 @@ describe("SoulInjector plugin", () => {
     expect(result.html).toContain('id="artifact-kind"');
     expect(result.html).toContain('id="artifact-case"');
     expect(result.html).toContain('id="yaml-file"');
+    expect(result.html).toContain('id="yaml-file-status"');
     expect(result.html).not.toContain("ELF header");
     expect(result.html).not.toContain("yaml_content");
   });
@@ -467,6 +468,7 @@ describe("SoulInjector plugin", () => {
     expect(bundle).toContain("refreshDebuggerView");
     expect(bundle).toContain("debugExecutionState==='cancelling'");
     expect(bundle).toContain("Debugger execution is paused");
+    expect(bundle).toContain("YAML file must be no larger than 64 KiB.");
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", body));
     const hash = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
     expect(hash).toBe(asset!.sha256);
