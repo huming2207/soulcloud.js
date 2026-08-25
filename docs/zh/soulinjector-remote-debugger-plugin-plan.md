@@ -71,6 +71,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   Manager 在 plugin encoder 返回后再次将 args 还原为 action input 并校验 manifest schema；
   encoder 即使返回了结构正确但越界/未知字段的参数，也会以 `invalid_action_output`（502）拒绝，
   不会把 plugin bug 伪装成用户输入错误。
+  manifest 为 architecture/chip/transport/requiredPrimitives 声明可选的快照字段；用户输入的
+  同名值不会成为权威，encoder 总是从选定 revision 重新读取并覆盖它们。
   当前
   Human API 的人工 action 请求显式传递 approval；真正可审计的长期 approval/execution record
   仍属于后续阶段。
