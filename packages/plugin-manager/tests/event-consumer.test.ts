@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { encodeDeviceEvent, type LeasedPluginEvent } from "@soulcloud/core";
 import type { PluginManifest } from "@soulcloud/plugin-sdk";
-import type { PluginConnection } from "../src/connection";
+import { PluginConnectionOverloaded, type PluginConnection } from "../src/connection";
 import { PluginManager, type PluginEventStore } from "../src/manager";
 
 function leasedEvent(id: string, installationId = "installation-id"): LeasedPluginEvent {
@@ -99,6 +99,80 @@ describe("plugin event consumer", () => {
     await internals.dispatchEvent(event);
 
     expect(consumedAttempt).toBe(true);
+    expect(internals.circuits.has(`${event.plugin_id}\u0000${event.installation_id}`)).toBe(false);
+  });
+
+  test("defers local Manager overload without consuming the event attempt or opening the circuit", async () => {
+    const event = leasedEvent("manager-overload");
+    event.payload = Buffer.from(encodeDeviceEvent({
+      id: Uint8Array.from({ length: 16 }, (_, index) => index),
+      seq: 1n,
+      kind: event.kind,
+      schema: event.schema,
+      data: { value: 1 },
+    }));
+    let consumedAttempt: boolean | undefined;
+    let permanent: boolean | undefined;
+    const store: PluginEventStore = {
+      lease: async () => [],
+      complete: async () => true,
+      completeWithUpdates: async () => true,
+      release: async (_id, _token, isPermanent, _error, _retryMs, consume) => {
+        permanent = isPermanent;
+        consumedAttempt = consume;
+        return true;
+      },
+    };
+    const manifest: PluginManifest = {
+      id: event.plugin_id,
+      version: event.plugin_version,
+      apiVersion: 1,
+      profiles: [{
+        id: event.profile_id,
+        version: event.profile_version,
+        manufacturer: "Soulcloud",
+        model: "fixture",
+        capabilities: [],
+        entities: [],
+      }],
+      actions: [],
+      events: [{ kind: event.kind, schemaVersion: event.schema }],
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "x".repeat(32),
+      maxFrameBytes: 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024,
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      eventStore: store,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+      connections: Map<string, PluginConnection>;
+      circuits: Map<string, unknown>;
+      dispatchEvent(value: LeasedPluginEvent): Promise<void>;
+    };
+    internals.catalog.set(`${event.plugin_id}@${event.plugin_version}`, {
+      pluginId: event.plugin_id,
+      pluginVersion: event.plugin_version,
+      manifestHash: event.manifest_hash,
+      manifest,
+      connected: true,
+    });
+    internals.connections.set(event.plugin_id, {
+      id: "connection",
+      isOpen: true,
+      manifest: { pluginVersion: event.plugin_version, manifestHash: event.manifest_hash },
+      request: async () => { throw new PluginConnectionOverloaded("plugin Manager request limit reached"); },
+    } as unknown as PluginConnection);
+
+    await internals.dispatchEvent(event);
+
+    expect(permanent).toBe(false);
+    expect(consumedAttempt).toBe(false);
     expect(internals.circuits.has(`${event.plugin_id}\u0000${event.installation_id}`)).toBe(false);
   });
 

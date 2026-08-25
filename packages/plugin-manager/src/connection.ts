@@ -61,6 +61,11 @@ export interface PluginConnectionOptions {
 export class PluginConnectionError extends Error {
   readonly status: number = 503;
 }
+/** Local Manager capacity, not a plugin health failure. */
+export class PluginConnectionOverloaded extends PluginConnectionError {
+  readonly code = "MANAGER_OVERLOADED" as const;
+  readonly publicCode = "plugin_manager_overloaded" as const;
+}
 export class PluginConnectionTimeout extends PluginConnectionError {
   readonly status = 504;
   readonly publicCode = "plugin_timeout" as const;
@@ -223,8 +228,8 @@ export class PluginConnection {
   async request(method: "plugin.handleEvent" | "plugin.call" | "action.encode" | "ui.render" | "ui.handleAction" | "ui.asset" | "debugger.configureTarget" | "debugger.listTargetConfigs" | "debugger.listArtifacts" | "debugger.storeArtifactChunk" | "debugger.readArtifactChunk" | "debugger.startSession" | "debugger.abortSession", input: unknown, timeoutMs: number): Promise<unknown> {
     await this.connect();
     if (!this.forward || !this.socket) throw new PluginConnectionError("plugin is unavailable");
-    if (this.socket.bufferedAmount > this.options.backpressureBytes) throw new PluginConnectionError("plugin send queue is full");
-    if (this.pending >= this.options.maxPendingRequests) throw new PluginConnectionError("plugin request limit reached");
+    if (this.socket.bufferedAmount > this.options.backpressureBytes) throw new PluginConnectionOverloaded("plugin Manager send queue is full");
+    if (this.pending >= this.options.maxPendingRequests) throw new PluginConnectionOverloaded("plugin Manager request limit reached");
     this.pending += 1;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -311,7 +316,7 @@ function createClientBridge(
     send(data: string | Uint8Array<ArrayBuffer>) {
       const bytes = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
       if (bytes > maxFrameBytes) throw new PluginConnectionError("plugin RPC frame is too large");
-      if (socket.bufferedAmount > backpressureBytes) throw new PluginConnectionError("plugin send queue is full");
+      if (socket.bufferedAmount > backpressureBytes) throw new PluginConnectionOverloaded("plugin Manager send queue is full");
       return socket.send(data);
     },
     addEventListener(type: string, listener: (event: unknown) => void) {
