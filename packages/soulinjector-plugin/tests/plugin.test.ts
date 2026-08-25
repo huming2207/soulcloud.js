@@ -283,9 +283,9 @@ describe("SoulInjector plugin", () => {
       pluginVersion: "0.1.0",
       manifestHash: saved.sha256,
       deviceFirmwareVersion: null,
-      targetConfigId: null,
-      targetConfigRevision: null,
-      targetId: null,
+      targetConfigId: saved.id,
+      targetConfigRevision: saved.revision,
+      targetId: "fixture",
       artifactId: null,
       startedBy: saved.createdBy,
       controller: saved.createdBy,
@@ -323,6 +323,10 @@ describe("SoulInjector plugin", () => {
     expect(result.html).toContain("debug.log");
     expect(result.html).toContain("&lt;target halted&gt;");
     expect(result.html).not.toContain("<target halted>");
+    expect(result.html).toContain('id="debug-actions"');
+    expect(result.html).toContain('data-debug-action="debug.identify"');
+    expect(result.html).toContain('data-debug-action="debug.reset"');
+    expect(result.html).toContain(`data-device-id="${session.soulcloudDeviceRef}"`);
     expect(observationLimit).toBe(16);
   });
 
