@@ -121,10 +121,16 @@ CREATE TABLE IF NOT EXISTS ${schema}.artifact_uploads (
   content_type varchar(128) NOT NULL,
   expected_size bigint NOT NULL CHECK (expected_size > 0),
   received_size bigint NOT NULL DEFAULT 0 CHECK (received_size >= 0),
+  completed_artifact_id uuid,
+  completed_sha256 char(64),
   created_by uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   expires_at timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP + INTERVAL '1 hour')
 );
+
+ALTER TABLE ${schema}.artifact_uploads
+  ADD COLUMN IF NOT EXISTS completed_artifact_id uuid,
+  ADD COLUMN IF NOT EXISTS completed_sha256 char(64);
 
 CREATE TABLE IF NOT EXISTS ${schema}.artifact_upload_chunks (
   upload_id uuid NOT NULL REFERENCES ${schema}.artifact_uploads(id) ON DELETE CASCADE,
@@ -298,6 +304,22 @@ export class SoulInjectorRepository {
       if (asString(upload.installation_id, "installation id") !== input.installationId || asString(upload.project_id, "project id") !== input.projectId || asString(upload.created_by, "artifact uploader") !== input.userId || upload.kind !== input.kind || asString(upload.filename, "artifact filename") !== input.filename || asString(upload.content_type, "artifact content type") !== input.contentType || Number(upload.expected_size) !== input.totalSize) {
         throw new Error("artifact upload metadata changed");
       }
+      if (upload.completed_artifact_id) {
+        const completed = await client.query<QueryResultRow>(
+          `SELECT id, sha256 FROM ${schema}.debug_artifacts WHERE id = $1`,
+          [upload.completed_artifact_id],
+        );
+        const artifact = completed.rows[0];
+        if (!artifact) throw new Error("completed artifact disappeared");
+        await client.query("COMMIT");
+        return {
+          uploadId: input.uploadId,
+          receivedBytes: Number(upload.expected_size),
+          complete: true,
+          artifactId: asString(artifact.id, "artifact id"),
+          sha256: asString(artifact.sha256, "artifact hash").trim(),
+        };
+      }
       const receivedBytes = Number(upload.received_size);
       if (input.offset !== receivedBytes) {
         const existing = await client.query<QueryResultRow>(
@@ -343,7 +365,13 @@ export class SoulInjectorRepository {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [artifactId, input.installationId, input.projectId, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, bytes, input.userId],
       );
-      await client.query(`DELETE FROM ${schema}.artifact_uploads WHERE id = $1`, [input.uploadId]);
+      await client.query(
+        `UPDATE ${schema}.artifact_uploads
+         SET completed_artifact_id = $2, completed_sha256 = $3
+         WHERE id = $1`,
+        [input.uploadId, artifactId, artifact.sha256],
+      );
+      await client.query(`DELETE FROM ${schema}.artifact_upload_chunks WHERE upload_id = $1`, [input.uploadId]);
       await client.query("COMMIT");
       return { uploadId: input.uploadId, receivedBytes: nextReceivedBytes, complete: true, artifactId, sha256: artifact.sha256 };
     } catch (error) {
