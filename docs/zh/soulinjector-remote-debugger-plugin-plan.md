@@ -64,7 +64,7 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   也只累积固定上限的 header 字节，不依赖首个 chunk 的大小；
 - `debugger.configureTarget`、`debugger.listTargetConfigs`、`debugger.listArtifacts`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
   路由和转发，不读取 plugin 私有业务表；SSR 配置页展示受限的 target-config revision 和 ELF/firmware artifact 元数据摘要，已保存 YAML 会经过 HTML escaping 后放入配置编辑器，artifact 正文不回显；UI asset 已绑定 manifest SHA-256 并使用内容哈希路径；
-  configure/list/read 返回前会复核 installation 的 project、plugin/version、manifest hash 和 enabled 状态；最新 target-config 读取同时限定 installation/project，迁移或禁用竞态不会把旧 plugin 的只读结果当作当前安装数据返回；
+  configure/list/read 返回前会复核 installation 的 project、plugin/version、manifest hash 和 enabled 状态；最新和指定 revision 的 target-config 读取都同时限定 installation/project，迁移或禁用竞态不会把旧 plugin 的只读结果当作当前安装数据返回；
 - Plugin Manager ↔ plugin 另有受限的 `debugger.readArtifactChunk` RPC：每次最多读取 64 KiB，plugin 私库使用
   PostgreSQL `substring(bytea)` 按块返回，不把完整 artifact 读入 Manager；这是后续 device transfer gateway 的
   基础能力；Manager 另提供仅限 service token 的内部二进制读取端点并返回 offset/total/hash/final 元数据，
