@@ -341,6 +341,28 @@ describe("SoulInjector plugin", () => {
     expect(result.html).not.toContain("yaml_content");
   });
 
+  test("keeps the client bundle bytes aligned with its manifest hash", async () => {
+    const plugin = createSoulInjectorPlugin(store());
+    const asset = plugin.manifest.ui?.assets?.[0];
+    expect(asset).toBeDefined();
+    const renderAsset = plugin.assets?.[asset!.path];
+    expect(renderAsset).toBeDefined();
+    const result = await renderAsset!({
+      requestId: "request",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      user: { id: saved.createdBy, locale: "en", permissions: [] },
+      routeId: "debugger",
+      assetPath: asset!.path,
+      signal: AbortSignal.timeout(1000),
+    });
+    const body = new Uint8Array(result.body.byteLength);
+    body.set(result.body);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", body));
+    const hash = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    expect(hash).toBe(asset!.sha256);
+  });
+
   test("persists device observations idempotently by broker event id", async () => {
     const observations: unknown[] = [];
     const sessionStates: unknown[] = [];
