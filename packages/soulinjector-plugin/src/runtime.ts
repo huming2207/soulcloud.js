@@ -2,19 +2,43 @@ import { startPluginRuntime } from "@soulcloud/plugin-runtime/server";
 import { createSoulInjectorPlugin } from "./plugin";
 import { SoulInjectorRepository } from "./repository";
 
+function positiveInteger(name: string, fallback: number, maximum: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  if (!/^\d+$/.test(raw)) throw new Error(`${name} must be a positive integer`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new Error(`${name} must be between 1 and ${maximum}`);
+  }
+  return value;
+}
+
 const repository = SoulInjectorRepository.fromEnv();
 await repository.migrate();
 const authToken = process.env.PLUGIN_RPC_AUTH_TOKEN;
 if (!authToken || authToken.length < 32) throw new Error("PLUGIN_RPC_AUTH_TOKEN must be at least 32 characters");
-const rawPort = process.env.PLUGIN_PORT ?? "8090";
-if (!/^\d+$/.test(rawPort)) throw new Error("PLUGIN_PORT must be a positive integer");
-const port = Number(rawPort);
-if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) throw new Error("PLUGIN_PORT must be between 1 and 65535");
+const port = positiveInteger("PLUGIN_PORT", 8090, 65_535);
+const maxFrameBytes = positiveInteger("PLUGIN_RPC_MAX_FRAME_BYTES", 1024 * 1024, 64 * 1024 * 1024);
+const maxBlobBytes = positiveInteger("PLUGIN_RPC_MAX_BLOB_BYTES", 65_536, 64 * 1024 * 1024);
+const maxTotalBlobBytes = positiveInteger("PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES", 256 * 1024, 64 * 1024 * 1024);
+if (maxBlobBytes > maxTotalBlobBytes) throw new Error("PLUGIN_RPC_MAX_BLOB_BYTES cannot exceed PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES");
 const runtime = await startPluginRuntime(createSoulInjectorPlugin(repository), {
   hostname: process.env.PLUGIN_BIND ?? "0.0.0.0",
   port,
   authToken,
-  maxFrameBytes: Number(process.env.PLUGIN_RPC_MAX_FRAME_BYTES ?? 1024 * 1024),
+  maxFrameBytes,
+  maxConcurrentOperations: positiveInteger("PLUGIN_RPC_MAX_OPERATIONS", 8, 1024),
+  backpressureBytes: positiveInteger("PLUGIN_RPC_BACKPRESSURE_BYTES", 4 * 1024 * 1024, 256 * 1024 * 1024),
+  idleTimeoutSeconds: positiveInteger("PLUGIN_RPC_IDLE_TIMEOUT_SECONDS", 60, 960),
+  valueBudget: {
+    maxDepth: positiveInteger("PLUGIN_RPC_MAX_VALUE_DEPTH", 32, 128),
+    maxNodes: positiveInteger("PLUGIN_RPC_MAX_VALUE_NODES", 4096, 1_000_000),
+    maxArrayItems: positiveInteger("PLUGIN_RPC_MAX_ARRAY_ITEMS", 4096, 1_000_000),
+    maxStringBytes: positiveInteger("PLUGIN_RPC_MAX_STRING_BYTES", 65_536, 64 * 1024 * 1024),
+    maxBlobs: positiveInteger("PLUGIN_RPC_MAX_BLOBS", 16, 4096),
+    maxBlobBytes,
+    maxTotalBlobBytes,
+  },
 });
 console.log(`[soulcloud-soulinjector-plugin] ready url=${runtime.url}`);
 let stopping = false;
