@@ -864,6 +864,7 @@ export class PluginManager {
               AND installation_id = ${installation.id}::uuid
               AND device_id = ${input.deviceId}::uuid
               AND initiating_user_id = ${input.userId}::uuid
+              AND allowed_capabilities ? 'device.enqueue_command'
               AND state = 'active'
               AND device_lease_expires_at > CURRENT_TIMESTAMP
               AND expires_at > CURRENT_TIMESTAMP
