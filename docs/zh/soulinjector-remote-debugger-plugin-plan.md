@@ -198,6 +198,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - execution command 的取消请求不会新增 MQTT 控制 topic：尚未投递的 queued command 直接进入
   `delivery_failed` 终态并释放队列；已经被 broker 接受的 command 只记录取消请求，最终能否在硬件阶段
   停止仍取决于设备固件的取消点，不能伪装成云端已经撤回。
+- Plugin Manager 在 `plugin.handleEvent` 返回边界再次解析 `eventOutput` schema；malformed
+  `updates/logs` 会作为永久 `INVALID_PLUGIN_OUTPUT` 处理，不进入数据库提交或 installation
+  circuit breaker，也不会因异常返回形状触发内部 TypeError。
 - `device.cancel_command` 的 reverse RPC 与 enqueue 使用相同的 installation → device → execution
   锁顺序，并在 mutation 事务内重新检查 execution token、cancel capability、有效 lease 和发起人
   project membership；撤权或生命周期变更后不会继续标记 command。
