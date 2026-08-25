@@ -21,6 +21,7 @@ describe("device command provenance", () => {
       pluginInstallationId: "00000000-0000-4000-8000-000000000002",
       pluginVersion: "0.1.0",
       manifestHash: "a".repeat(64),
+      executionId: "00000000-0000-7000-8000-000000000005",
     };
     expect(() => validateCommandProvenance({ originType: "plugin" })).toThrow("require plugin installation");
     expect(() => validateCommandProvenance({ ...validPluginProvenance, correlationId: "not-a-uuid" })).toThrow(CommandQueueError);

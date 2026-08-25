@@ -156,7 +156,9 @@ export async function enqueueBatchInTransaction(
   return { id: batchId, deviceCount };
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Accept UUID versions beyond v1-v5 (for example UUIDv7) while still
+// requiring the RFC variant used by PostgreSQL UUID values.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function validateCommandProvenance(provenance: CommandProvenance | undefined): void {
   if (!provenance) return;
