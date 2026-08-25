@@ -9,6 +9,7 @@ import {
   debugSessionAbortOutput,
   listTargetConfigsOutput,
   listArtifactsOutput,
+  uiAssetOutput,
   sha256BytesHex,
   sha256Hex,
   type CommandEnqueueInput,
@@ -1087,15 +1088,21 @@ export class PluginManager {
         user: { id: session.sub, locale: session.locale, permissions: session.permissions },
       }, 30_000);
       assertRpcValueBudget(result, this.valueBudget);
-      if (!(result instanceof Object) || !((result as { body?: unknown }).body instanceof Blob)) {
-        throw publicError("plugin UI asset output is invalid", 502, "plugin_ui_invalid_output");
+      let parsed: ReturnType<typeof uiAssetOutput.parse>;
+      try {
+        parsed = uiAssetOutput.parse(result);
+      } catch (error) {
+        throw publicError(`plugin UI asset output is invalid: ${(error as Error).message}`, 502, "plugin_ui_invalid_output");
       }
-      if (await sha256BytesHex((result as { body: Blob }).body) !== descriptor.sha256) {
+      if (parsed.contentType !== descriptor.contentType) {
+        throw publicError("plugin UI asset content type differs from its manifest", 502, "plugin_ui_invalid_output");
+      }
+      if (await sha256BytesHex(parsed.body) !== descriptor.sha256) {
         throw publicError("plugin UI asset bytes differ from its manifest hash", 502, "plugin_ui_invalid_output");
       }
       await this.sealOperation(operationId);
       await this.assertUiSessionCurrent(session);
-      return result;
+      return parsed;
     } finally {
       this.finishOperation(operationId);
     }
