@@ -82,7 +82,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   仍属于后续阶段。
 - Plugin Manager 提供绑定短期 plugin-origin UI session 的
   `/plugins/{installation}/actions/{actionId}` 人工 action route；SoulInjector SSR 页面在选中的
-  active/paused session 上提供 bounded identify/read-registers/halt/resume/reset/start 按钮。
+  active/paused session 上提供 bounded identify/read-registers/read_memory/halt/resume/reset/start
+  按钮，其中 read_memory 的地址和长度在浏览器端先做有界校验，服务端仍会再次按 manifest/schema
+  与设备能力校验。
   每次点击都走 manifest/schema、设备绑定和 provenance 校验，destructive action 仍只能由该次
   人工点击批准，plugin/LLM 没有同一入口。
 - `DebugExecution` 已保存平台侧长时 capability：不可变 plugin/version/manifest snapshot、
