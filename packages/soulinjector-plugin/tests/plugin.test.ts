@@ -333,6 +333,10 @@ describe("SoulInjector plugin", () => {
     expect(result.html).toContain("Saved revisions");
     expect(result.html).toContain(`Revision ${saved.revision}`);
     expect(result.html).toContain(saved.sha256);
+    expect(result.html).toContain("Artifacts");
+    expect(result.html).toContain("fixture.elf");
+    expect(result.html).toContain("&quot;elfClass&quot;:&quot;ELF64&quot;");
+    expect(result.html).not.toContain("ELF header");
     expect(result.html).not.toContain("yaml_content");
   });
 
