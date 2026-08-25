@@ -1,6 +1,6 @@
 # SoulInjector 远程 Debugger Plugin 实施计划
 
-**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease、事件侧 execution capability 传递、受限 execution reverse RPC 和已绑定 session 终态关闭平台 execution 的同步；私有 case/session/observation/report 数据层已落地；Human API start/session/bootstrap，以及由 execution 发起人触发的显式 pause（释放 device lease）已有基础版本；设备固件、LLM、整个 execution 的 cancel/take-over、重启恢复和完整设备 command 闭环尚未实现）
+**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease、事件侧 execution capability 传递、受限 execution reverse RPC 和已绑定 session 终态关闭平台 execution 的同步；私有 case/session/observation/report 数据层已落地；Human API start/session/bootstrap，以及由 execution 发起人触发的显式 pause（释放 device lease）已有基础版本；设备固件、LLM、整个 execution 的 cancel/take-over、重启恢复和完整设备 command 闭环尚未实现。cancel 的状态和 abort 失败语义仍未冻结，不能按现有 `cancelling` 字段自行扩展）
 **日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
 
@@ -842,6 +842,9 @@ MQTT/oRPC 热路径。
 3. plugin UI 独立 origin 的具体域名、bootstrap 和 CSRF 方案；
 4. case/artifact/LLM trace/report 的 retention 与客户删除语义；
 5. 是否需要同时在线多个 plugin version 处理长时间未结束的历史 case。
+6. execution cancel 的终态名称和审计语义（复用 `failed` 还是新增 cancelled）；plugin abort
+   超时/断线时保持 `cancelling`、重试还是直接终态化；以及已经被 Device Broker 接受的命令是否
+   只记录“无法保证停止”还是需要设备侧额外取消协议。实施者不能自行选择这些语义。
 
 已确认且不再阻塞当前实现的决定：第一版输入为 ELF/firmware，source archive/VCS 后置；所有
 destructive operation 均需人工逐次批准；plugin 私有 blob 先存独立 PostgreSQL `bytea`，不
