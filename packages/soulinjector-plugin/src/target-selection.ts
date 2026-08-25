@@ -11,10 +11,8 @@ export async function targetSelectionArgs(
   input: TargetSelectionInput,
   context: ActionEncodingContext,
 ): Promise<CommandArgument[]> {
-  const config = await repository.getTargetConfig(context.installationId, input.targetConfigRevision);
-  const target = config?.projectId === context.projectId
-    ? config.config.targets.find((candidate) => candidate.id === input.targetId)
-    : undefined;
+  const config = await repository.getTargetConfig(context.installationId, context.projectId, input.targetConfigRevision);
+  const target = config?.config.targets.find((candidate) => candidate.id === input.targetId);
   if (!target) throw new Error("target configuration revision or target id is not available");
   return [
     { targetConfigRevision: input.targetConfigRevision },

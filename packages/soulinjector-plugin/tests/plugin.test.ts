@@ -58,7 +58,7 @@ describe("SoulInjector plugin", () => {
   test("does not encode a target from another project or missing revision", async () => {
     const plugin = createSoulInjectorPlugin({
       ...store(),
-      getTargetConfig: async () => ({ ...saved, projectId: "00000000-0000-4000-8000-000000000099" }),
+      getTargetConfig: async () => null,
     });
     await expect(plugin.encodeAction!["debug.identify"]!({ targetConfigRevision: 3, targetId: "fixture" }, {
       operationId: "operation",

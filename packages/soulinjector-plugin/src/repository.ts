@@ -654,10 +654,11 @@ export class SoulInjectorRepository {
     return result.rows[0] ? asRecord(result.rows[0]) : null;
   }
 
-  async getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null> {
+  async getTargetConfig(installationId: string, projectId: string, revision: number): Promise<TargetConfigRecord | null> {
     const result = await this.pool.query<QueryResultRow>(
-      `SELECT * FROM ${schema}.target_config_revisions WHERE installation_id = $1 AND revision = $2`,
-      [installationId, revision],
+      `SELECT * FROM ${schema}.target_config_revisions
+       WHERE installation_id = $1 AND project_id = $2 AND revision = $3`,
+      [installationId, projectId, revision],
     );
     return result.rows[0] ? asRecord(result.rows[0]) : null;
   }

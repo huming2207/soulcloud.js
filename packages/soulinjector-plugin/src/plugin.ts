@@ -157,7 +157,7 @@ interface SoulInjectorPluginStore {
   createDebugSession?(input: Parameters<SoulInjectorRepository["createDebugSession"]>[0]): Promise<DebugSessionRecord>;
   abortDebugSession?(id: string | null, executionRef: string, installationId: string, projectId: string, soulcloudDeviceRef: string): Promise<DebugSessionRecord | null>;
   getLatestTargetConfig(installationId: string, projectId: string): Promise<TargetConfigRecord | null>;
-  getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null>;
+  getTargetConfig(installationId: string, projectId: string, revision: number): Promise<TargetConfigRecord | null>;
   listTargetConfigs?(installationId: string, projectId: string): Promise<TargetConfigSummary[]>;
   listArtifacts?(installationId: string, projectId: string): Promise<DebugArtifactRecord[]>;
   storeArtifactChunk(input: { installationId: string; projectId: string; userId: string; uploadId: string; caseId?: string; kind: "elf" | "firmware"; filename: string; contentType: string; totalSize: number; offset: number; final: boolean; chunk: Uint8Array }): Promise<StoreArtifactChunkOutput>;
