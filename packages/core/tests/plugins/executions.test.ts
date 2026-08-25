@@ -10,6 +10,7 @@ import {
   releaseDebugExecution,
   renewDebugExecutionLease,
 } from "../../src/plugins/executions";
+import { enqueueDebugCommand, getDebugCommand, requestDebugCommandCancellation } from "../../src/plugins/execution-commands";
 import { createPluginInstallation } from "../../src/plugins/installations";
 
 const projectId = randomUUID();
@@ -21,6 +22,7 @@ const tokenHashA = "b".repeat(64);
 const tokenHashB = "c".repeat(64);
 const tokenHashC = "d".repeat(64);
 const tokenHashD = "e".repeat(64);
+const tokenHashE = "f".repeat(64);
 let installationId: string;
 
 beforeAll(async () => {
@@ -49,6 +51,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  const commandRows = await prisma.deviceCommand.findMany({ where: { deviceId }, select: { id: true, batchId: true } });
+  await prisma.deviceCommand.deleteMany({ where: { deviceId } });
+  if (commandRows.length > 0) await prisma.commandBatch.deleteMany({ where: { id: { in: commandRows.map((row) => row.batchId) } } });
   await prisma.debugExecution.deleteMany({ where: { installationId } });
   await prisma.pluginDeviceBinding.deleteMany({ where: { deviceId } });
   await prisma.pluginInstallation.delete({ where: { id: installationId } });
@@ -59,7 +64,7 @@ afterAll(async () => {
   await prisma.project.delete({ where: { id: projectId } });
 });
 
-function input(tokenHash: string, ttlMs = 60_000) {
+function input(tokenHash: string, ttlMs = 60_000, allowedCapabilities: readonly string[] = ["debug.read", "debug.read", "debug.observe"]) {
   return {
     installationId,
     deviceId,
@@ -67,7 +72,7 @@ function input(tokenHash: string, ttlMs = 60_000) {
     pluginId,
     pluginVersion: "1.0.0",
     manifestHash,
-    allowedCapabilities: ["debug.read", "debug.read", "debug.observe"],
+    allowedCapabilities,
     tokenHash,
     leaseMs: 5_000,
     ttlMs,
@@ -118,6 +123,24 @@ describe("durable debug execution capability", () => {
     const paused = await prisma.debugExecution.findUniqueOrThrow({ where: { id: fourth.id } });
     expect(paused.state).toBe("paused");
     expect(paused.deviceLeaseExpiresAt).toBeNull();
+  });
+
+  test("enqueues, reads and requests cancellation for a command under the execution lease", async () => {
+    const execution = await createDebugExecution(prisma, input(tokenHashE, 60_000, ["device.enqueue_command", "device.get_command", "device.cancel_command"]));
+    const command = await enqueueDebugCommand(prisma, {
+      executionId: execution.id,
+      tokenHash: tokenHashE,
+      pluginId,
+      pluginVersion: "1.0.0",
+      manifestHash,
+      initiatingUserId: userId,
+      command: { cmd: "debug.identify", args: [] },
+    });
+    expect(command.state).toBe("queued");
+    expect(command.sequence).toBeGreaterThan(0n);
+    expect(await getDebugCommand(prisma, execution.id, tokenHashE, command.id)).toMatchObject({ id: command.id, deviceId });
+    const cancelled = await requestDebugCommandCancellation(prisma, execution.id, tokenHashE, command.id);
+    expect(cancelled.cancelRequestedAt).not.toBeNull();
   });
 });
 

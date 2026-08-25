@@ -194,6 +194,7 @@ model DeviceCommand {
   @@index([originType, createdAt], map: "device_commands_origin_created_idx")
   @@index([pluginInstallationId, createdAt], map: "device_commands_plugin_created_idx")
   @@index([executionId], map: "device_commands_execution_idx")
+  @@index([executionId, idempotencyKey], map: "device_commands_execution_idempotency_idx")
   @@map("device_commands")
 }
 
