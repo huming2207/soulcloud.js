@@ -64,9 +64,33 @@ describe("SoulInjector plugin", () => {
     const plugin = createSoulInjectorPlugin(repository);
     const configured = await plugin.configureTarget!({ operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, userId: saved.createdBy, yaml: saved.yaml }, { signal: AbortSignal.timeout(1000) });
     expect(configured).toMatchObject({ configId: saved.id, revision: 1, targetCount: 1 });
-    const result = await plugin.handleAction!["debugger"]!({ yaml: saved.yaml }, { requestId: "request", installationId: saved.installationId, projectId: saved.projectId, user: { id: saved.createdBy, locale: "en", permissions: [] }, routeId: "debugger", params: {} });
+    const result = await plugin.handleAction!["debugger"]!({ intent: "save_target", yaml: saved.yaml }, { requestId: "request", installationId: saved.installationId, projectId: saved.projectId, user: { id: saved.createdBy, locale: "en", permissions: [] }, routeId: "debugger", params: {} });
     expect(result).toEqual({ redirect: `/plugins/${saved.installationId}/debugger` });
     expect(calls).toEqual([saved.createdBy, saved.createdBy]);
+  });
+
+  test("creates a private debugger case through the SSR action path", async () => {
+    const created: unknown[] = [];
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      createDebugCase: async (input) => {
+        created.push(input);
+        return {
+          id: saved.id,
+          projectId: saved.projectId,
+          targetUnitRef: input.targetUnitRef ?? null,
+          state: "open",
+          title: input.title,
+          createdBy: input.createdBy,
+          assignedTo: null,
+          createdAt: saved.createdAt,
+          updatedAt: saved.createdAt,
+        };
+      },
+    });
+    const result = await plugin.handleAction!["debugger"]!({ intent: "create_case", title: "Overheating probe", targetUnitRef: "unit-42" }, { requestId: "request", installationId: saved.installationId, projectId: saved.projectId, user: { id: saved.createdBy, locale: "en", permissions: [] }, routeId: "debugger", params: {} });
+    expect(result).toEqual({ redirect: `/plugins/${saved.installationId}/debugger` });
+    expect(created).toEqual([{ projectId: saved.projectId, targetUnitRef: "unit-42", title: "Overheating probe", createdBy: saved.createdBy }]);
   });
 
   test("lists target configuration revision metadata without exposing YAML", async () => {

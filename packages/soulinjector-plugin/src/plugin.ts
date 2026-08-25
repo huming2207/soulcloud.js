@@ -1,5 +1,5 @@
 import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginManifest } from "@soulcloud/plugin-sdk";
-import type { DebugArtifactRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary } from "./repository";
+import type { CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary } from "./repository";
 import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 import { targetSelectionArgs } from "./target-selection";
 
@@ -66,7 +66,12 @@ const manifest = {
       id: "debugger",
       path: "/debugger",
       methods: ["GET", "POST"] as ("GET" | "POST")[],
-      actionSchema: { yaml: { type: "string" as const, required: true, maxLength: 65_536, title: "Target YAML", description: "Target architecture, chip and required debugger primitives" } },
+      actionSchema: {
+        intent: { type: "string" as const, required: true, enum: ["save_target", "create_case"], title: "Action" },
+        yaml: { type: "string" as const, maxLength: 65_536, title: "Target YAML", description: "Target architecture, chip and required debugger primitives" },
+        title: { type: "string" as const, maxLength: 256, title: "Case title" },
+        targetUnitRef: { type: "string" as const, maxLength: 256, title: "Target unit reference" },
+      },
     }],
     assets: [{ path: CLIENT_BUNDLE_PATH, contentType: "text/javascript; charset=utf-8", sha256: CLIENT_BUNDLE_SHA256 }],
   },
@@ -74,6 +79,8 @@ const manifest = {
 
 interface SoulInjectorPluginStore {
   saveTargetConfig(input: { installationId: string; projectId: string; createdBy: string; yaml: string }): Promise<TargetConfigRecord>;
+  createDebugCase?(input: CreateDebugCaseInput): Promise<DebugCaseRecord>;
+  listDebugCases?(projectId: string, limit?: number): Promise<DebugCaseRecord[]>;
   getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null>;
   getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null>;
   listTargetConfigs?(installationId: string, projectId: string): Promise<TargetConfigSummary[]>;
@@ -144,8 +151,11 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }
 
-function configForm(input: { installationId: string; yaml: string }): string {
-  return `<main><h1>SoulInjector debugger</h1><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
+function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[] }): string {
+  const cases = input.cases.length === 0
+    ? "<p>No debugger cases yet.</p>"
+    : `<ul>${input.cases.map((item) => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(item.state)}${item.targetUnitRef ? ` — ${escapeHtml(item.targetUnitRef)}` : ""}</li>`).join("")}</ul>`;
+  return `<main><h1>SoulInjector debugger</h1><section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section><section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
 }
 
 export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {
@@ -185,13 +195,26 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
     render: {
       debugger: async (input) => {
         const saved = await repository.getLatestTargetConfig(input.installationId);
-        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n" }), title: "SoulInjector debugger", cache: "no-store" };
+        const cases = repository.listDebugCases ? await repository.listDebugCases(input.projectId, 64) : [];
+        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases }), title: "SoulInjector debugger", cache: "no-store" };
       },
     },
     handleAction: {
       debugger: async (action, input) => {
-        const yaml = stringValue(action, "yaml");
-        await repository.saveTargetConfig({ installationId: input.installationId, projectId: input.projectId, createdBy: input.user.id, yaml });
+        const intent = stringValue(action, "intent");
+        if (intent === "create_case") {
+          if (!repository.createDebugCase) throw new Error("debug case persistence is not available");
+          const title = stringValue(action, "title");
+          const targetUnitRef = typeof action === "object" && action !== null && !Array.isArray(action) && typeof (action as Record<string, unknown>).targetUnitRef === "string"
+            ? (action as Record<string, unknown>).targetUnitRef as string
+            : null;
+          await repository.createDebugCase({ projectId: input.projectId, targetUnitRef, title, createdBy: input.user.id });
+        } else if (intent === "save_target") {
+          const yaml = stringValue(action, "yaml");
+          await repository.saveTargetConfig({ installationId: input.installationId, projectId: input.projectId, createdBy: input.user.id, yaml });
+        } else {
+          throw new Error("unknown debugger UI action");
+        }
         return { redirect: `/plugins/${input.installationId}/debugger` };
       },
     },
