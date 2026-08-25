@@ -1973,6 +1973,7 @@ function commandIntentBytes(command: string, args: CommandEnqueueInput["args"]):
 async function* splitArtifactBody(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
   const reader = body.getReader();
   let carry: Uint8Array | null = null;
+  let completed = false;
   try {
     for (;;) {
       const next = await reader.read();
@@ -1997,7 +1998,9 @@ async function* splitArtifactBody(body: ReadableStream<Uint8Array>): AsyncGenera
       if (offset < current.byteLength) carry = current.subarray(offset);
     }
     if (carry && carry.byteLength > 0) yield carry;
+    completed = true;
   } finally {
+    if (!completed) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }
