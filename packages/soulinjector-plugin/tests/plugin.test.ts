@@ -22,7 +22,7 @@ function store() {
     getLatestTargetConfig: async () => saved,
     getTargetConfig: async () => saved,
     listTargetConfigs: async () => [{ configId: saved.id, revision: saved.revision, sha256: saved.sha256, targetCount: saved.config.targets.length, createdAt: saved.createdAt }],
-    listArtifacts: async () => [{ id: saved.id, installationId: saved.installationId, projectId: saved.projectId, kind: "elf" as const, filename: "fixture.elf", contentType: "application/octet-stream", size: 4, sha256: saved.sha256, createdBy: saved.createdBy, createdAt: saved.createdAt }],
+    listArtifacts: async () => [{ id: saved.id, installationId: saved.installationId, projectId: saved.projectId, kind: "elf" as const, filename: "fixture.elf", contentType: "application/octet-stream", size: 4, sha256: saved.sha256, metadata: { format: "elf", elfClass: "ELF64", machine: 243 }, createdBy: saved.createdBy, createdAt: saved.createdAt }],
     storeArtifactChunk: async (input: { uploadId: string; offset: number; chunk: Uint8Array; final: boolean }) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? saved.id : null, sha256: input.final ? saved.sha256 : null }),
   };
 }
@@ -394,7 +394,7 @@ describe("SoulInjector plugin", () => {
   test("lists artifact metadata without exposing artifact bytes", async () => {
     const plugin = createSoulInjectorPlugin(store());
     const result = await plugin.listArtifacts!({ operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, userId: saved.createdBy }, { signal: AbortSignal.timeout(1000) });
-    expect(result).toEqual([{ artifactId: saved.id, kind: "elf", filename: "fixture.elf", contentType: "application/octet-stream", size: 4, sha256: saved.sha256, createdAt: saved.createdAt }]);
+    expect(result).toEqual([{ artifactId: saved.id, kind: "elf", filename: "fixture.elf", contentType: "application/octet-stream", size: 4, sha256: saved.sha256, metadata: { format: "elf", elfClass: "ELF64", machine: 243 }, createdAt: saved.createdAt }]);
     expect(result[0]).not.toHaveProperty("content");
   });
 

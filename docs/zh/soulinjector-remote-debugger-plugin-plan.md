@@ -46,8 +46,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - target architecture/chip、transport 和 required debugger primitives 的受限 YAML schema，
   可通过 Human API/Plugin Manager 配置并在 plugin 私有 PostgreSQL 保存 revision；首批目标不
   在代码中写死；
-- ELF/firmware 的大小、文件名、ELF magic、SHA-256 校验，以及 64 KiB 分块上传、私有
-  PostgreSQL `bytea` 最终存储；不使用 S3/object storage；
+- ELF/firmware 的大小、文件名、ELF magic、SHA-256 校验，以及 ELF32/ELF64、字节序、machine、
+  entry/header table 等固定头元数据解析；元数据与正文一起在私有 PostgreSQL `bytea`/JSONB 中保存，
+  通过 artifact list RPC 暴露；64 KiB 分块上传不使用 S3/object storage；
 - `debugger.configureTarget`、`debugger.listTargetConfigs`、`debugger.listArtifacts`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
   路由和转发，不读取 plugin 私有业务表；UI asset 已绑定 manifest SHA-256 并使用内容哈希路径；
 - artifact 上传要求 Human API 的 `Idempotency-Key`（UUID）贯穿 API → Plugin Manager → plugin 私库；响应丢失后用同一 key 重试会返回原 artifact，而不会重复创建；上传流还有可配置的绝对 wall-clock deadline，避免卡住的 body 或大量分块长期占用资源；

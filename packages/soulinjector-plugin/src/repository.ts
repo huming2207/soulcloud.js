@@ -35,6 +35,7 @@ export interface DebugArtifactRecord {
   contentType: string;
   size: number;
   sha256: string;
+  metadata: Record<string, string | number>;
   createdBy: string;
   createdAt: string;
 }
@@ -258,6 +259,7 @@ CREATE TABLE IF NOT EXISTS ${schema}.debug_artifacts (
   content_type varchar(128) NOT NULL,
   size bigint NOT NULL CHECK (size > 0),
   sha256 char(64) NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   content bytea NOT NULL,
   created_by uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -268,7 +270,8 @@ CREATE INDEX IF NOT EXISTS debug_artifacts_installation_sha256_idx
   ON ${schema}.debug_artifacts (installation_id, sha256);
 
 ALTER TABLE ${schema}.debug_artifacts
-  ADD COLUMN IF NOT EXISTS case_id uuid;
+  ADD COLUMN IF NOT EXISTS case_id uuid,
+  ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS debug_artifacts_case_created_idx
   ON ${schema}.debug_artifacts (case_id, created_at DESC);
 
@@ -421,6 +424,11 @@ function asRecord(row: QueryResultRow): TargetConfigRecord {
 }
 
 function asArtifactRecord(row: QueryResultRow): DebugArtifactRecord {
+  const metadata = row.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("private plugin database returned invalid artifact metadata");
+  for (const value of Object.values(metadata as Record<string, unknown>)) {
+    if (typeof value !== "string" && typeof value !== "number") throw new Error("private plugin database returned invalid artifact metadata");
+  }
   return {
     id: asString(row.id, "artifact id"),
     installationId: asString(row.installation_id, "installation id"),
@@ -430,6 +438,7 @@ function asArtifactRecord(row: QueryResultRow): DebugArtifactRecord {
     contentType: asString(row.content_type, "artifact content type"),
     size: Number(row.size),
     sha256: asString(row.sha256, "artifact hash").trim(),
+    metadata: metadata as Record<string, string | number>,
     createdBy: asString(row.created_by, "artifact creator"),
     createdAt: new Date(row.created_at as string | Date).toISOString(),
   };
@@ -667,9 +676,9 @@ export class SoulInjectorRepository {
     const id = randomUUID();
     const result = await this.pool.query<QueryResultRow>(
       `INSERT INTO ${schema}.debug_artifacts
-        (id, installation_id, project_id, case_id, kind, filename, content_type, size, sha256, content, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, installation_id, project_id, kind, filename, content_type, size, sha256, created_by, created_at`,
-      [id, input.installationId, input.projectId, input.caseId ?? null, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, Buffer.isBuffer(artifact.bytes) ? artifact.bytes : Buffer.from(artifact.bytes), input.createdBy],
+        (id, installation_id, project_id, case_id, kind, filename, content_type, size, sha256, metadata, content, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id, installation_id, project_id, kind, filename, content_type, size, sha256, metadata, created_by, created_at`,
+      [id, input.installationId, input.projectId, input.caseId ?? null, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, artifact.metadata, Buffer.isBuffer(artifact.bytes) ? artifact.bytes : Buffer.from(artifact.bytes), input.createdBy],
     );
     return asArtifactRecord(result.rows[0]!);
   }
@@ -762,9 +771,9 @@ export class SoulInjectorRepository {
       const artifactId = randomUUID();
       await client.query(
         `INSERT INTO ${schema}.debug_artifacts
-          (id, installation_id, project_id, case_id, kind, filename, content_type, size, sha256, content, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [artifactId, input.installationId, input.projectId, input.caseId ?? null, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, bytes, input.userId],
+          (id, installation_id, project_id, case_id, kind, filename, content_type, size, sha256, metadata, content, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [artifactId, input.installationId, input.projectId, input.caseId ?? null, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, artifact.metadata, bytes, input.userId],
       );
       await client.query(
         `UPDATE ${schema}.artifact_uploads
@@ -797,7 +806,7 @@ export class SoulInjectorRepository {
 
   async listArtifacts(installationId: string, projectId: string): Promise<DebugArtifactRecord[]> {
     const result = await this.pool.query<QueryResultRow>(
-      `SELECT id, installation_id, project_id, kind, filename, content_type, size, sha256, created_by, created_at
+      `SELECT id, installation_id, project_id, kind, filename, content_type, size, sha256, metadata, created_by, created_at
        FROM ${schema}.debug_artifacts
        WHERE installation_id = $1 AND project_id = $2
        ORDER BY created_at DESC, id DESC

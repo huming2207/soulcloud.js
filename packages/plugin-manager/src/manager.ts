@@ -918,7 +918,7 @@ export class PluginManager {
     projectId: string;
     userId: string;
     timeoutMs?: number;
-  }): Promise<Array<{ artifactId: string; kind: "elf" | "firmware"; filename: string; contentType: string; size: number; sha256: string; createdAt: string }>> {
+  }): Promise<Array<{ artifactId: string; kind: "elf" | "firmware"; filename: string; contentType: string; size: number; sha256: string; metadata: Record<string, string | number>; createdAt: string }>> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     const installation = await this.options.prisma.pluginInstallation.findUnique({
       where: { id: input.installationId },

@@ -293,6 +293,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
         contentType: artifact.contentType,
         size: artifact.size,
         sha256: artifact.sha256,
+        metadata: artifact.metadata,
         createdAt: artifact.createdAt,
       }));
     },

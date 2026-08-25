@@ -109,7 +109,7 @@ beforeAll(async () => {
     },
     configureTarget: async () => ({ configId: randomUUID(), revision: 1, sha256: "a".repeat(64), targetCount: 1 }),
     listTargetConfigs: async () => [{ configId: randomUUID(), revision: 1, sha256: "a".repeat(64), targetCount: 1, createdAt: new Date(0).toISOString() }],
-    listArtifacts: async () => [{ artifactId: randomUUID(), kind: "elf" as const, filename: "fixture.elf", contentType: "application/octet-stream", size: 4, sha256: "c".repeat(64), createdAt: new Date(0).toISOString() }],
+    listArtifacts: async () => [{ artifactId: randomUUID(), kind: "elf" as const, filename: "fixture.elf", contentType: "application/octet-stream", size: 4, sha256: "c".repeat(64), metadata: { format: "elf", elfClass: "ELF64", machine: 243 }, createdAt: new Date(0).toISOString() }],
     storeArtifactChunk: async (input) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? randomUUID() : null, sha256: input.final ? "b".repeat(64) : null }),
     startDebugSession: async (input) => {
       sessionStartInput = { executionId: input.executionId, executionToken: input.executionToken };

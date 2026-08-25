@@ -284,6 +284,7 @@ export interface ArtifactSummary {
   contentType: string;
   size: number;
   sha256: string;
+  metadata: Record<string, string | number>;
   createdAt: string;
 }
 export interface ArtifactListInput {
