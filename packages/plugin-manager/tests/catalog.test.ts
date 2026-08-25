@@ -519,6 +519,43 @@ describe("plugin catalog connection state", () => {
     await expect(manager.renderPluginUi(session, "request", {})).rejects.toThrow("no longer valid");
   });
 
+  test("does not return a scoped execution after the current user loses membership", async () => {
+    const executionId = randomUUID();
+    const installationId = randomUUID();
+    const projectId = randomUUID();
+    const userId = randomUUID();
+    const now = new Date();
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000,
+      prisma: {
+        debugExecution: {
+          findUnique: async () => ({
+            id: executionId,
+            installationId,
+            deviceId: randomUUID(),
+            initiatingUserId: userId,
+            pluginId: "example.plugin",
+            pluginVersion: "1.0.0",
+            manifestHash: "a".repeat(64),
+            allowedCapabilities: [],
+            state: "active",
+            deviceLeaseExpiresAt: new Date(now.getTime() + 60_000),
+            expiresAt: new Date(now.getTime() + 3_600_000),
+            createdAt: now,
+            updatedAt: now,
+            finishedAt: null,
+          }),
+        },
+        pluginInstallation: { findUnique: async () => ({ projectId }) },
+        userProject: { findUnique: async () => null },
+      } as never,
+    });
+
+    await expect(manager.getDebugExecutionForScope({ executionId, installationId, projectId, userId })).resolves.toBeNull();
+  });
+
   test("rejects an asset whose MIME differs from the manifest", async () => {
     const bytes = new TextEncoder().encode("console.log('asset');");
     const assetHash = createHash("sha256").update(bytes).digest("hex");

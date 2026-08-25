@@ -653,12 +653,16 @@ export class PluginManager {
     return getDebugExecution(this.options.prisma, executionId);
   }
 
-  async getDebugExecutionForScope(input: { executionId: string; installationId: string; projectId: string }): Promise<DebugExecutionRecord | null> {
+  async getDebugExecutionForScope(input: { executionId: string; installationId: string; projectId: string; userId: string }): Promise<DebugExecutionRecord | null> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
-    const execution = await getDebugExecution(this.options.prisma, input.executionId);
+    if (!UUID.test(input.userId)) return null;
+    const [execution, installation, membership] = await Promise.all([
+      getDebugExecution(this.options.prisma, input.executionId),
+      this.options.prisma.pluginInstallation.findUnique({ where: { id: input.installationId }, select: { projectId: true } }),
+      this.options.prisma.userProject.findUnique({ where: { userId_projectId: { userId: input.userId, projectId: input.projectId } }, select: { userId: true } }),
+    ]);
     if (!execution || execution.installationId !== input.installationId) return null;
-    const installation = await this.options.prisma.pluginInstallation.findUnique({ where: { id: input.installationId }, select: { projectId: true } });
-    if (!installation || installation.projectId !== input.projectId) return null;
+    if (!installation || installation.projectId !== input.projectId || !membership) return null;
     return execution;
   }
 
@@ -668,7 +672,7 @@ export class PluginManager {
   ): Promise<ReturnType<typeof listDebugCommands>> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     await this.assertUiSessionCurrent(session as PluginUiSession);
-    const execution = await this.getDebugExecutionForScope({ executionId, installationId: session.installationId, projectId: session.projectId });
+    const execution = await this.getDebugExecutionForScope({ executionId, installationId: session.installationId, projectId: session.projectId, userId: session.sub });
     if (!execution || execution.pluginId !== session.pluginId || execution.pluginVersion !== session.pluginVersion || execution.manifestHash !== session.manifestHash) {
       throw publicError("debug execution is not available to this plugin UI session", 404, "not_found");
     }
@@ -691,6 +695,7 @@ export class PluginManager {
       executionId,
       installationId: session.installationId,
       projectId: session.projectId,
+      userId: session.sub,
     });
     if (!execution || execution.pluginId !== session.pluginId || execution.pluginVersion !== session.pluginVersion || execution.manifestHash !== session.manifestHash) {
       throw publicError("debug execution is not available to this plugin UI session", 404, "not_found");
@@ -722,6 +727,7 @@ export class PluginManager {
       executionId,
       installationId: session.installationId,
       projectId: session.projectId,
+      userId: session.sub,
     });
     if (!execution || execution.pluginId !== session.pluginId || execution.pluginVersion !== session.pluginVersion || execution.manifestHash !== session.manifestHash) {
       throw publicError("debug execution is not available to this plugin UI session", 404, "not_found");
