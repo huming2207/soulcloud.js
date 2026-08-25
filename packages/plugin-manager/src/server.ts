@@ -66,9 +66,39 @@ async function parseUiAction(request: Request, schema: ActionInputSchema): Promi
   return action;
 }
 
+const MAX_JSON_BODY_BYTES = 1_048_576;
+
+function requestBodyTooLarge(): Error {
+  return Object.assign(new Error("request body too large"), { status: 413, publicCode: "payload_too_large" });
+}
+
 async function requestJson(request: Request): Promise<unknown> {
-  const body = await request.text();
-  if (Buffer.byteLength(body) > 1_048_576) throw Object.assign(new Error("request body too large"), { status: 413 });
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null) {
+    const parsedLength = Number(contentLength);
+    if (!Number.isSafeInteger(parsedLength) || parsedLength < 0) throw invalidRequest("content-length is invalid");
+    if (parsedLength > MAX_JSON_BODY_BYTES) throw requestBodyTooLarge();
+  }
+  const reader = request.body?.getReader();
+  if (!reader) throw invalidRequest("request body is required");
+  const decoder = new TextDecoder();
+  let body = "";
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_JSON_BODY_BYTES) {
+        await reader.cancel();
+        throw requestBodyTooLarge();
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
   try { return JSON.parse(body); } catch { throw Object.assign(new Error("invalid JSON body"), { status: 400 }); }
 }
 

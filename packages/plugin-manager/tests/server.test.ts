@@ -413,6 +413,16 @@ describe("plugin SSR route", () => {
     expect(await response.json()).toMatchObject({ error: "invalid_request" });
   });
 
+  test("rejects oversized JSON before parsing the full request body", async () => {
+    const response = await fetch(`${server.url}internal/plugins/installations/${installationId}/state`, {
+      method: "POST",
+      headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+      body: JSON.stringify({ state: "enabled", padding: "x".repeat(1_048_576) }),
+    });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: "payload_too_large" });
+  });
+
   test("passes the internal Action deadline to the plugin operation", async () => {
     const response = await fetch(`${server.url}internal/plugins/actions/encode`, {
       method: "POST",
