@@ -20,6 +20,7 @@ export * from "./queue/notify";
 export * from "./plugins/events";
 export * from "./plugins/entities";
 export * from "./plugins/installations";
+export * from "./plugins/executions";
 export * from "./queue/rate-limit";
 export * from "./on9log/packet";
 export * from "./on9log/render";

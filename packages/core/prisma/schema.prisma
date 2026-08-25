@@ -24,6 +24,7 @@ model User {
   projects             UserProject[]
   refreshTokens        RefreshToken[]
   deviceCommandOrigins DeviceCommand[]    @relation("device_command_origin_user")
+  debugExecutions      DebugExecution[]   @relation("debug_execution_initiating_user")
 
   @@map("users")
 }
@@ -111,6 +112,7 @@ model Device {
   pluginEvents        PluginEvent[]
   pluginEntityStates  PluginEntityState[]
   pluginEntityHistory PluginEntityHistory[]
+  debugExecutions     DebugExecution[]
 
   @@unique([projectId, assignedId], map: "devices_project_assigned_id_unique")
   @@map("devices")
@@ -163,6 +165,7 @@ model DeviceCommand {
   pluginVersion        String?             @map("plugin_version") @db.VarChar(128)
   manifestHash         String?             @map("manifest_hash") @db.Char(64)
   executionId          String?             @map("execution_id") @db.Uuid
+  debugExecution       DebugExecution?     @relation(fields: [executionId], references: [id], onDelete: SetNull)
   correlationId        String?             @map("correlation_id") @db.Uuid
   idempotencyKey       String?             @map("idempotency_key") @db.VarChar(128)
   cancelRequestedAt    DateTime?           @map("cancel_requested_at") @db.Timestamptz()
@@ -469,10 +472,45 @@ model PluginInstallation {
   entityStates      PluginEntityState[]
   entityHistory     PluginEntityHistory[]
   deviceCommands    DeviceCommand[]          @relation("plugin_command_installation")
+  debugExecutions   DebugExecution[]
 
   @@unique([projectId, pluginId], map: "plugin_installations_project_plugin_unique")
   @@index([pluginId, state])
   @@map("plugin_installations")
+}
+
+/// Durable, platform-owned capability for a long-running debugger session.
+/// Product case/session/LLM state remains in the plugin's private database.
+model DebugExecution {
+  id                   String             @id @default(uuid()) @db.Uuid
+  installationId       String             @map("installation_id") @db.Uuid
+  installation          PluginInstallation @relation(fields: [installationId], references: [id], onDelete: Restrict)
+  deviceId              String             @map("device_id") @db.Uuid
+  device                Device             @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  initiatingUserId      String             @map("initiating_user_id") @db.Uuid
+  initiatingUser        User               @relation("debug_execution_initiating_user", fields: [initiatingUserId], references: [id], onDelete: Restrict)
+  /// Immutable plugin snapshot used for command and audit provenance.
+  pluginId              String             @map("plugin_id") @db.VarChar(128)
+  pluginVersion         String             @map("plugin_version") @db.VarChar(128)
+  manifestHash          String             @map("manifest_hash") @db.Char(64)
+  /// JSON array of capability strings. The platform does not interpret
+  /// product-specific case/session data stored by the plugin.
+  allowedCapabilities   Json               @map("allowed_capabilities")
+  /// SHA-256 of the short-lived raw capability token; the raw token is never persisted.
+  tokenHash             String             @unique(map: "debug_executions_token_hash_unique") @map("token_hash") @db.Char(64)
+  /// active | paused | cancelling | completed | failed | expired
+  state                 String             @default("active") @db.VarChar(16)
+  deviceLeaseExpiresAt  DateTime?          @map("device_lease_expires_at") @db.Timestamptz()
+  expiresAt             DateTime           @map("expires_at") @db.Timestamptz()
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz()
+  finishedAt            DateTime?          @map("finished_at") @db.Timestamptz()
+  commands              DeviceCommand[]
+
+  @@index([deviceId, state], map: "debug_executions_device_state_idx")
+  @@index([installationId, state], map: "debug_executions_installation_state_idx")
+  @@index([state, expiresAt], map: "debug_executions_state_expiry_idx")
+  @@map("debug_executions")
 }
 
 /// Device-to-plugin profile binding used to route generic device events.
