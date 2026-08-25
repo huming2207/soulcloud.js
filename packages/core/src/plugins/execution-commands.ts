@@ -175,6 +175,16 @@ export async function getDebugCommand(
 ): Promise<DebugCommandRecord | null> {
   assertCapabilityInput(executionId, tokenHash);
   if (!UUID.test(commandId)) throw new RangeError("commandId must be a UUID");
+  return findDebugCommandWithCapability(prisma, executionId, tokenHash, commandId, "device.get_command");
+}
+
+async function findDebugCommandWithCapability(
+  prisma: PrismaClient,
+  executionId: string,
+  tokenHash: string,
+  commandId: string,
+  capability: "device.get_command" | "device.cancel_command",
+): Promise<DebugCommandRecord | null> {
   const rows = await prisma.$queryRaw<RawCommandRow[]>`
     SELECT c.id, c.batch_id, c.device_id, c.sequence, c.state, c.result_code,
       c.cancel_requested_at, c.broker_accepted_at, c.device_completed_at, c.created_at
@@ -184,7 +194,7 @@ export async function getDebugCommand(
       AND e.token_hash = ${tokenHash}
       AND e.state IN ('active', 'paused', 'cancelling')
       AND e.expires_at > CURRENT_TIMESTAMP
-      AND e.allowed_capabilities ? 'device.get_command'
+      AND e.allowed_capabilities ? ${capability}
       AND c.id = ${commandId}::uuid
     LIMIT 1
   `;
@@ -227,7 +237,7 @@ export async function requestDebugCommandCancellation(
       c.cancel_requested_at, c.broker_accepted_at, c.device_completed_at, c.created_at
   `;
   if (rows[0]) return mapCommand(rows[0]);
-  const existing = await getDebugCommand(prisma, executionId, tokenHash, commandId);
+  const existing = await findDebugCommandWithCapability(prisma, executionId, tokenHash, commandId, "device.cancel_command");
   if (!existing) throw new DebugExecutionCapabilityError("debug command is not available to this execution");
   return existing;
 }

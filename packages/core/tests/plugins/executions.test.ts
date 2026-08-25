@@ -23,6 +23,7 @@ const tokenHashB = "c".repeat(64);
 const tokenHashC = "d".repeat(64);
 const tokenHashD = "e".repeat(64);
 const tokenHashE = "f".repeat(64);
+const tokenHashF = "1".repeat(64);
 let installationId: string;
 
 beforeAll(async () => {
@@ -141,6 +142,25 @@ describe("durable debug execution capability", () => {
     expect(await getDebugCommand(prisma, execution.id, tokenHashE, command.id)).toMatchObject({ id: command.id, deviceId });
     const cancelled = await requestDebugCommandCancellation(prisma, execution.id, tokenHashE, command.id);
     expect(cancelled.cancelRequestedAt).not.toBeNull();
+    await completeDebugExecution(prisma, execution.id, tokenHashE, "completed");
+
+    const noReadCapability = await createDebugExecution(prisma, input(tokenHashF, 60_000, ["device.enqueue_command", "device.cancel_command"]));
+    const commandWithoutReadCapability = await enqueueDebugCommand(prisma, {
+      executionId: noReadCapability.id,
+      tokenHash: tokenHashF,
+      pluginId,
+      pluginVersion: "1.0.0",
+      manifestHash,
+      initiatingUserId: userId,
+      command: { cmd: "debug.identify", args: [] },
+    });
+    const cancelledWithoutReadCapability = await requestDebugCommandCancellation(
+      prisma,
+      noReadCapability.id,
+      tokenHashF,
+      commandWithoutReadCapability.id,
+    );
+    expect(cancelledWithoutReadCapability.cancelRequestedAt).not.toBeNull();
   });
 });
 
