@@ -27,6 +27,7 @@ describe("SoulInjector private repository migration", () => {
     await new SoulInjectorRepository(fake.pool).migrate();
     expect(fake.queries[0]).toBe("BEGIN");
     expect(fake.queries[1]).toStartWith("\nCREATE SCHEMA IF NOT EXISTS soul_injector_plugin;");
+    expect(fake.queries[1]).toContain("debug_artifacts_installation_project_created_idx");
     expect(fake.queries[2]).toBe("COMMIT");
     expect(fake.released).toBe(true);
   });

@@ -275,6 +275,8 @@ CREATE TABLE IF NOT EXISTS ${schema}.debug_artifacts (
 );
 CREATE INDEX IF NOT EXISTS debug_artifacts_installation_created_idx
   ON ${schema}.debug_artifacts (installation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS debug_artifacts_installation_project_created_idx
+  ON ${schema}.debug_artifacts (installation_id, project_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS debug_artifacts_installation_sha256_idx
   ON ${schema}.debug_artifacts (installation_id, sha256);
 
