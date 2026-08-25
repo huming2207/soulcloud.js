@@ -136,6 +136,8 @@ export interface ActionEncodingContext {
   projectId: string;
   deviceId: string;
   userId: string;
+  /** Runtime cancellation/deadline signal; optional for source compatibility with pure encoders. */
+  signal?: AbortSignal;
 }
 export type ActionEncoder = (input: unknown, context: ActionEncodingContext) => CommandArgument[] | Promise<CommandArgument[]>;
 export interface UiRenderInput {
@@ -145,6 +147,8 @@ export interface UiRenderInput {
   user: { id: string; locale: string; permissions: string[] };
   routeId: string;
   params: Record<string, string | number | boolean>;
+  /** Runtime cancellation/deadline signal; optional for pure renderers. */
+  signal?: AbortSignal;
 }
 export interface UiRenderOutput {
   html: string;
@@ -161,6 +165,8 @@ export interface UiAssetInput {
   user: UiRenderInput["user"];
   routeId: string;
   assetPath: string;
+  /** Runtime cancellation/deadline signal; optional for pure asset renderers. */
+  signal?: AbortSignal;
 }
 export interface UiAssetOutput {
   body: Uint8Array;
