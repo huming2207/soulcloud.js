@@ -230,6 +230,22 @@ export interface ArtifactChunkOutput {
   sha256: string | null;
 }
 export type ArtifactChunkHandler = (input: ArtifactChunkInput, context: { signal: AbortSignal }) => Promise<ArtifactChunkOutput>;
+export interface ArtifactSummary {
+  artifactId: string;
+  kind: "elf" | "firmware";
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+}
+export interface ArtifactListInput {
+  operationId: string;
+  installationId: string;
+  projectId: string;
+  userId: string;
+}
+export type ArtifactListHandler = (input: ArtifactListInput, context: { signal: AbortSignal }) => Promise<ArtifactSummary[]>;
 
 export interface PluginCallContext {
   operationId: string;
@@ -257,6 +273,7 @@ export interface PluginDefinition {
   configureTarget?: TargetConfigHandler;
   listTargetConfigs?: TargetConfigListHandler;
   storeArtifactChunk?: ArtifactChunkHandler;
+  listArtifacts?: ArtifactListHandler;
   /** Explicitly named procedures callable through Plugin Manager scope checks. */
   handleCall?: Record<string, PluginCallHandler>;
 }

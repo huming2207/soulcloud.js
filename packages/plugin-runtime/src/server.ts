@@ -26,6 +26,7 @@ import {
   uiActionOutput as uiActionOutputSchema,
   uiAssetOutput as uiAssetOutputSchema,
   uiRenderOutput as uiRenderOutputSchema,
+  listArtifactsOutput as listArtifactsOutputSchema,
   type RpcValueBudget,
 } from "@soulcloud/plugin-rpc-contract";
 import {
@@ -468,6 +469,19 @@ function createRuntimeConnection(
           const result = await runWithDeadline(input.deadlineMs, (signal) => definition.listTargetConfigs!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId }, { signal }));
           assertRpcValueBudget(result, budget);
           return listTargetConfigsOutputSchema.parse(result);
+        } finally {
+          operations.running -= 1;
+        }
+      }),
+      listArtifacts: implemented.debugger.listArtifacts.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        if (!definition.listArtifacts) rpcError("NOT_FOUND", "artifact listing is not supported by this plugin");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
+        try {
+          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.listArtifacts!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId }, { signal }));
+          assertRpcValueBudget(result, budget);
+          return listArtifactsOutputSchema.parse(result);
         } finally {
           operations.running -= 1;
         }

@@ -1,5 +1,5 @@
 import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginManifest } from "@soulcloud/plugin-sdk";
-import type { SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary } from "./repository";
+import type { DebugArtifactRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary } from "./repository";
 import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 import { targetSelectionArgs } from "./target-selection";
 
@@ -77,6 +77,7 @@ interface SoulInjectorPluginStore {
   getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null>;
   getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null>;
   listTargetConfigs?(installationId: string, projectId: string): Promise<TargetConfigSummary[]>;
+  listArtifacts?(installationId: string, projectId: string): Promise<DebugArtifactRecord[]>;
   storeArtifactChunk(input: { installationId: string; projectId: string; userId: string; uploadId: string; kind: "elf" | "firmware"; filename: string; contentType: string; totalSize: number; offset: number; final: boolean; chunk: Uint8Array }): Promise<StoreArtifactChunkOutput>;
 }
 
@@ -168,6 +169,18 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
     listTargetConfigs: async (input) => repository.listTargetConfigs
       ? repository.listTargetConfigs(input.installationId, input.projectId)
       : [],
+    listArtifacts: async (input) => {
+      if (!repository.listArtifacts) return [];
+      return (await repository.listArtifacts(input.installationId, input.projectId)).map((artifact) => ({
+        artifactId: artifact.id,
+        kind: artifact.kind,
+        filename: artifact.filename,
+        contentType: artifact.contentType,
+        size: artifact.size,
+        sha256: artifact.sha256,
+        createdAt: artifact.createdAt,
+      }));
+    },
     storeArtifactChunk: async (input) => repository.storeArtifactChunk(input),
     render: {
       debugger: async (input) => {

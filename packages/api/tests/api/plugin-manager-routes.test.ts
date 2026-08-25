@@ -14,6 +14,7 @@ const SERVICE_TOKEN = "test-service-token-0123456789";
 let manager: { url: URL; stop(): Promise<void> };
 let receivedBindingRequests: unknown[] = [];
 let receivedTargetConfigListRequests: unknown[] = [];
+let receivedArtifactListRequests: unknown[] = [];
 let projectId: string;
 let installationId: string;
 let deviceId: string;
@@ -36,6 +37,10 @@ beforeAll(async () => {
       if (request.method === "POST" && url.pathname.endsWith("/target-configs")) {
         receivedTargetConfigListRequests.push(await request.json());
         return new Response(JSON.stringify([{ configId: randomUUID(), revision: 2, sha256: "b".repeat(64), targetCount: 1, createdAt: new Date(0).toISOString() }]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (request.method === "POST" && url.pathname.endsWith("/artifacts") && request.headers.get("content-type") === "application/json") {
+        receivedArtifactListRequests.push(await request.json());
+        return new Response(JSON.stringify([{ artifactId: randomUUID(), kind: "elf", filename: "fixture.elf", contentType: "application/octet-stream", size: 4, sha256: "c".repeat(64), createdAt: new Date(0).toISOString() }]), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ error: "not_found" }), {
         status: 404,
@@ -162,5 +167,18 @@ describe("GET /v1/plugin-installations/:id/debugger/target-configs", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toHaveLength(1);
     expect(receivedTargetConfigListRequests).toEqual([{ installationId, projectId, userId: expect.any(String), timeoutMs: 4_000 }]);
+  });
+});
+
+describe("GET /v1/plugin-installations/:id/debugger/artifacts", () => {
+  test("forwards the authenticated project scope and returns artifact metadata", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/plugin-installations/${installationId}/debugger/artifacts`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toHaveLength(1);
+    expect(receivedArtifactListRequests).toEqual([{ installationId, projectId, userId: expect.any(String), timeoutMs: 4_000 }]);
   });
 });

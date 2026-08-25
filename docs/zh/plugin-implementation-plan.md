@@ -243,6 +243,7 @@ Entity completion 已落地。真实设备 publish/掉电 sequence 仍是退出�
 
 - Human API Action 请求经 Manager → plugin `action.encode`；
 - debugger target-config revision 元数据经受限 `debugger.listTargetConfigs` RPC 暴露；Manager 不读取 plugin 私有 YAML；
+- debugger artifact 元数据经受限 `debugger.listArtifacts` RPC 暴露；列表不包含 ELF/firmware bytes；
 - Manager 权威验证 encoded DeviceCommand 并写现有 command queue；
 - 用户 schema 错误为 400，plugin encoder 错误为 502；
 - Entity 删除 write/read_write，所有控制统一 Action；

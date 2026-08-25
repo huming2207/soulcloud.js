@@ -420,6 +420,18 @@ export class SoulInjectorRepository {
     return { ...record, bytes: new Uint8Array(row.content.buffer, row.content.byteOffset, row.content.byteLength) };
   }
 
+  async listArtifacts(installationId: string, projectId: string): Promise<DebugArtifactRecord[]> {
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT id, installation_id, project_id, kind, filename, content_type, size, sha256, created_by, created_at
+       FROM ${schema}.debug_artifacts
+       WHERE installation_id = $1 AND project_id = $2
+       ORDER BY created_at DESC, id DESC
+       LIMIT 64`,
+      [installationId, projectId],
+    );
+    return result.rows.map(asArtifactRecord);
+  }
+
   async purgeExpiredArtifactUploads(batchSize = 256): Promise<number> {
     if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 10_000) throw new RangeError("artifact upload cleanup batch size must be between 1 and 10000");
     const result = await this.pool.query(

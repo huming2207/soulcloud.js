@@ -6,6 +6,7 @@ import {
   canonicalJson,
   configureTargetOutput,
   listTargetConfigsOutput,
+  listArtifactsOutput,
   sha256BytesHex,
   sha256Hex,
   type CommandEnqueueInput,
@@ -581,6 +582,60 @@ export class PluginManager {
         return listTargetConfigsOutput.parse(result);
       } catch (error) {
         throw publicError(`plugin target configuration list output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
+      }
+    } finally {
+      this.finishOperation(operationId);
+    }
+  }
+
+  async listArtifacts(input: {
+    installationId: string;
+    projectId: string;
+    userId: string;
+    timeoutMs?: number;
+  }): Promise<Array<{ artifactId: string; kind: "elf" | "firmware"; filename: string; contentType: string; size: number; sha256: string; createdAt: string }>> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    const installation = await this.options.prisma.pluginInstallation.findUnique({
+      where: { id: input.installationId },
+      select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
+    });
+    if (!installation) throw Object.assign(new Error("plugin installation not found"), { status: 404 });
+    if (installation.projectId !== input.projectId) throw Object.assign(new Error("plugin installation project mismatch"), { status: 403 });
+    if (installation.state !== "enabled") throw Object.assign(new Error("plugin installation is disabled"), { status: 409 });
+    const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const timeoutMs = input.timeoutMs ?? 30_000;
+    this.registerOperation(operationId, {
+      kind: "configure",
+      operationTokenHash: hashOperationToken(operationToken),
+      connectionId: connection.id,
+      installationId: installation.id,
+      projectId: installation.projectId,
+      pluginId: installation.pluginId,
+      pluginVersion: installation.pluginVersion,
+      userId: input.userId,
+      deadline: performance.now() + timeoutMs,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set(),
+    });
+    try {
+      const result = await connection.request("debugger.listArtifacts", {
+        operationId,
+        operationToken,
+        installationId: installation.id,
+        projectId: installation.projectId,
+        userId: input.userId,
+      }, timeoutMs);
+      try {
+        assertRpcValueBudget(result, this.valueBudget);
+        return listArtifactsOutput.parse(result);
+      } catch (error) {
+        throw publicError(`plugin artifact list output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
       }
     } finally {
       this.finishOperation(operationId);
