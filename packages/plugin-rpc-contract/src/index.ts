@@ -69,6 +69,8 @@ export const uiRenderInput = operation.extend({ requestId: z.string().min(1).max
 export const uiRenderOutput = z.object({ html: z.string().max(2 * 1024 * 1024), title: z.string().max(256).optional(), status: z.number().int().min(200).max(599).refine((status) => status < 300 || status >= 400, "redirect status is not allowed").refine((status) => status !== 204 && status !== 205, "bodyless status is not allowed").optional(), cache: z.literal("no-store").or(z.object({ maxAgeSeconds: z.number().int().nonnegative().max(86_400) })).optional() }).strict();
 export const uiActionInput = uiRenderInput.extend({ action: z.unknown() }).strict();
 export const uiActionOutput = z.object({ redirect: z.string().max(2048).optional(), errors: z.array(z.object({ field: z.string().max(128), message: z.string().max(2048) }).strict()).max(64).optional() }).strict();
+export const configureTargetInput = operation.extend({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), yaml: z.string().min(1).max(262_144) }).strict();
+export const configureTargetOutput = z.object({ configId: z.string().uuid(), revision: z.number().int().positive(), sha256: z.string().regex(/^[0-9a-f]{64}$/), targetCount: z.number().int().positive().max(64) }).strict();
 
 export const entityGetInput = operation.extend({ entityKey: z.string().min(1).max(128) }).strict();
 export const entityGetOutput = z.object({ entityKey: z.string(), value: entityValue, quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]), sourceTimestamp: z.string().datetime({ offset: true }).nullable(), ingestedAt: z.string().datetime({ offset: true }), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string() }).strict().nullable() }).strict().nullable();
@@ -94,6 +96,7 @@ export const managerToPluginContract = {
     render: procedure(uiRenderInput, uiRenderOutput, ["ui", "render"]),
     handleAction: procedure(uiActionInput, uiActionOutput, ["ui", "handleAction"]),
   },
+  debugger: { configureTarget: procedure(configureTargetInput, configureTargetOutput, ["debugger", "configureTarget"]) },
 };
 
 export const pluginToManagerContract = {
@@ -116,6 +119,8 @@ export type ActionOutput = z.infer<typeof actionOutput>;
 export type UiRenderInput = z.infer<typeof uiRenderInput>;
 export type UiRenderOutput = z.infer<typeof uiRenderOutput>;
 export type UiActionOutput = z.infer<typeof uiActionOutput>;
+export type ConfigureTargetInput = z.infer<typeof configureTargetInput>;
+export type ConfigureTargetOutput = z.infer<typeof configureTargetOutput>;
 export type UiDataInput = z.infer<typeof uiDataInput>;
 export type EntityGetOutput = z.infer<typeof entityGetOutput>;
 export type EntityGetInput = z.infer<typeof entityGetInput>;

@@ -12,6 +12,7 @@ import {
   DEFAULT_RPC_VALUE_BUDGET,
   assertRpcValueBudget,
   canonicalJson,
+  configureTargetOutput as configureTargetOutputSchema,
   eventOutput as eventOutputSchema,
   hasRpcPrefix,
   managerToPluginContract,
@@ -321,6 +322,26 @@ function createRuntimeConnection(
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
         } finally {
+          operations.running -= 1;
+        }
+      }),
+    },
+    debugger: {
+      configureTarget: implemented.debugger.configureTarget.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        if (!definition.configureTarget) rpcError("NOT_FOUND", "target configuration is not supported by this plugin");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), input.deadlineMs);
+        try {
+          const result = await definition.configureTarget({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, yaml: input.yaml }, { signal: controller.signal });
+          assertRpcValueBudget(result, budget);
+          const parsed = configureTargetOutputSchema.safeParse(result);
+          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+          return parsed.data;
+        } finally {
+          clearTimeout(timer);
           operations.running -= 1;
         }
       }),

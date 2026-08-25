@@ -3,6 +3,7 @@ import {
   DEFAULT_RPC_VALUE_BUDGET,
   assertRpcValueBudget,
   canonicalJson,
+  configureTargetOutput,
   sha256Hex,
   type CommandEnqueueInput,
   type EntityGetInput,
@@ -162,7 +163,7 @@ function publicError(message: string, status: number, publicCode: string): Error
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
 
 interface ActiveOperation {
-  kind: "action" | "event" | "ui";
+  kind: "action" | "event" | "ui" | "configure";
   operationTokenHash: Buffer;
   connectionId: string;
   installationId: string;
@@ -405,6 +406,62 @@ export class PluginManager {
         return enqueueBatchInTransaction(tx, [input.deviceId], { cmd: encoded.command, args });
       });
       return { batchId: batch.id, deviceCount: batch.deviceCount };
+    } finally {
+      this.finishOperation(operationId);
+    }
+  }
+
+  async configureTarget(input: {
+    installationId: string;
+    projectId: string;
+    userId: string;
+    yaml: string;
+    timeoutMs?: number;
+  }): Promise<{ configId: string; revision: number; sha256: string; targetCount: number }> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    this.assertConfigurationBudget(input.yaml);
+    const installation = await this.options.prisma.pluginInstallation.findUnique({
+      where: { id: input.installationId },
+      select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
+    });
+    if (!installation) throw Object.assign(new Error("plugin installation not found"), { status: 404 });
+    if (installation.projectId !== input.projectId) throw Object.assign(new Error("plugin installation project mismatch"), { status: 403 });
+    if (installation.state !== "enabled") throw Object.assign(new Error("plugin installation is disabled"), { status: 409 });
+    const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const timeoutMs = input.timeoutMs ?? 30_000;
+    this.registerOperation(operationId, {
+      kind: "configure",
+      operationTokenHash: hashOperationToken(operationToken),
+      connectionId: connection.id,
+      installationId: installation.id,
+      projectId: installation.projectId,
+      pluginId: installation.pluginId,
+      pluginVersion: installation.pluginVersion,
+      deadline: performance.now() + timeoutMs,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set(),
+    });
+    try {
+      const result = await connection.request("debugger.configureTarget", {
+        operationId,
+        operationToken,
+        installationId: installation.id,
+        projectId: installation.projectId,
+        userId: input.userId,
+        yaml: input.yaml,
+      }, timeoutMs);
+      try {
+        assertRpcValueBudget(result, this.valueBudget);
+        return configureTargetOutput.parse(result);
+      } catch (error) {
+        throw publicError(`plugin target configuration output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
+      }
     } finally {
       this.finishOperation(operationId);
     }

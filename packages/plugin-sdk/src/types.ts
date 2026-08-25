@@ -139,6 +139,20 @@ export interface UiRenderOutput {
 }
 export type UiRenderer = (input: UiRenderInput) => Promise<UiRenderOutput>;
 export type UiActionHandler = (input: unknown, context: UiRenderInput) => Promise<unknown>;
+export interface TargetConfigInput {
+  operationId: string;
+  installationId: string;
+  projectId: string;
+  userId: string;
+  yaml: string;
+}
+export interface TargetConfigOutput {
+  configId: string;
+  revision: number;
+  sha256: string;
+  targetCount: number;
+}
+export type TargetConfigHandler = (input: TargetConfigInput, context: { signal: AbortSignal }) => Promise<TargetConfigOutput>;
 
 export interface PluginDefinition {
   manifest: PluginManifest;
@@ -146,6 +160,8 @@ export interface PluginDefinition {
   encodeAction?: Record<string, ActionEncoder>;
   render?: Record<string, UiRenderer>;
   handleAction?: Record<string, UiActionHandler>;
+  /** Optional product-specific configuration hook used by the SoulInjector plugin. */
+  configureTarget?: TargetConfigHandler;
 }
 
 export type InputSchema = z.ZodTypeAny;

@@ -52,6 +52,7 @@ beforeAll(async () => {
         return { html: "<p>Plugin</p>" };
       },
     },
+    configureTarget: async () => ({ configId: randomUUID(), revision: 1, sha256: "a".repeat(64), targetCount: 1 }),
   }), { hostname: "127.0.0.1", port: 0, authToken });
 
   connection = new PluginConnection({
@@ -126,6 +127,18 @@ describe("plugin oRPC WebSocket transport", () => {
     }, 1_000) as { command: string; args: Array<{ name: string; value: bigint }> };
     expect(output.command).toBe("reboot");
     expect(output.args).toEqual([{ name: "delay", value: 3n }]);
+  });
+
+  test("routes target configuration through the typed plugin procedure", async () => {
+    const output = await connection.request("debugger.configureTarget", {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      installationId: randomUUID(),
+      projectId: randomUUID(),
+      userId: randomUUID(),
+      yaml: "version: 1\ntargets:\n  - id: fixture\n    displayName: Fixture\n    architecture: cortex-m\n    chip: fixture\n    transport: swd\n    requiredPrimitives: [identify]",
+    }, 1_000);
+    expect(output).toMatchObject({ revision: 1, targetCount: 1 });
   });
 
   test("routes reverse calls on the same socket", async () => {

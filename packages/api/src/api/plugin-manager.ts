@@ -50,6 +50,7 @@ const bindingBody = z.object({ device_id: z.string().uuid(), profile_id: z.strin
 const actionBody = z.object({ device_id: z.string().uuid(), input: z.unknown() }).strict();
 const stateBody = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
 const migrateBody = z.object({ plugin_version: z.string().min(1).max(128), manifest_hash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown().optional() }).strict();
+const targetConfigBody = z.object({ yaml: z.string().min(1).max(262_144) }).strict();
 
 /** Human API is the only browser-facing authority for plugin metadata. */
 export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, options?: PluginManagerOptions) {
@@ -109,6 +110,27 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       try {
         const result = await callManager(options, "/internal/plugins/actions/encode", {
           installationId: params.id, deviceId: parsed.data.device_id, actionId: params.actionId, input: parsed.data.input,
+          timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
+        });
+        set.status = result.status;
+        return result.value;
+      } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
+    })
+    .post("/v1/plugin-installations/:id/debugger/target-config", async ({ request, body, params, set }) => {
+      const user = await authenticateRequest(prisma, jwt, request);
+      if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const parsed = targetConfigBody.safeParse(body);
+      if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
+      if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
+      if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
+      try {
+        const result = await callManager(options, "/internal/plugins/debugger/target-config", {
+          installationId: params.id,
+          projectId: installation.projectId,
+          userId: user.user.id,
+          yaml: parsed.data.yaml,
           timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
         });
         set.status = result.status;
