@@ -26,9 +26,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   设备软件/固件执行。该设备软件/固件可以包含 Soulcloud Client 通信组件，但低层能力的归属
   是设备，不是一个叫 Client、Station 或 Agent 的独立系统角色；云端只下发高层、有界、可取消
   的 debugger command。
-- 因此不能写“低层 SWD/UART 留在 Client”。准确表述是“低层 SWD/UART 留在 SoulInjector
-  设备的本地设备软件/固件中”；Soulcloud Client 仅是其中负责 Soulcloud 通信的组件名称，
-  不是设备身份，也不是硬件驱动的执行主体名称。
+- 低层 SWD/UART 始终归属于 SoulInjector 设备的本地设备软件/固件；Soulcloud Client 仅是
+  其中负责 Soulcloud 通信的组件名称，不是设备身份，也不是硬件驱动的执行主体名称。
 - plugin 只在云端自己的容器中运行；它不能连接 Device Broker、SoulInjector 设备、
   Soulcloud PostgreSQL 或任何 SWD/UART/JTAG/USB 硬件。
 - plugin 通过 Plugin Manager 获取所有 Soulcloud 范围内的 device、command、artifact、用户
