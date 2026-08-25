@@ -1426,7 +1426,7 @@ export class PluginManager {
   }
 
   private async assertArtifactInstallationSnapshotCurrent(
-    installation: { id: string; projectId: string; pluginId: string; pluginVersion: string; manifestHash: string },
+    installation: { id: string; projectId: string; pluginId: string; pluginVersion: string; manifestHash: string; state: string },
     uiSession?: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
   ): Promise<void> {
     await this.assertInstallationSnapshotCurrent(
@@ -1434,6 +1434,7 @@ export class PluginManager {
       uiSession ? "plugin UI session is no longer valid" : "plugin installation changed while uploading artifact",
       uiSession ? { status: 403, publicCode: "plugin_ui_session_invalid" } : undefined,
     );
+    if (uiSession) await this.assertUiSessionCurrent(uiSession, installation);
   }
 
   private async assertInstallationSnapshotCurrent(
