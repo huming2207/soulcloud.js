@@ -587,8 +587,10 @@ MQTT/oRPC 热路径。
 
 工作：
 
-1. case 创建、device/target/artifact 关联；
-2. SSR case/debugger 页面；
+1. case 创建、device/target/artifact 关联；**已完成私有 case 创建基础、artifact→case 关联和
+   target-config revision 存储；device/session 关联仍待 execution 入口**；
+2. SSR case/debugger 页面；**已完成最小 case 列表/创建和 target 配置页面；完整 timeline、
+   session 控制 UI 仍待实现**；
 3. 人工执行 identify/halt/read/reset/capture/close；
 4. command timeline、observation、错误与报告草稿；
 5. overseas guided view 和国内工程师 take-over；
