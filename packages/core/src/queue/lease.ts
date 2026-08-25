@@ -52,7 +52,23 @@ export async function expireDelayedCommands(
         SELECT id
         FROM device_commands
         WHERE state IN ('queued', 'leased', 'broker_accepted')
-          AND delivery_expires_at < now()
+          AND (
+            delivery_expires_at < now()
+            OR (
+              state = 'queued'
+              AND execution_id IS NOT NULL
+              AND (
+                cancel_requested_at IS NOT NULL
+                OR NOT EXISTS (
+                  SELECT 1 FROM debug_executions e
+                  WHERE e.id = device_commands.execution_id
+                    AND e.state = 'active'
+                    AND e.device_lease_expires_at > now()
+                    AND e.expires_at > now()
+                )
+              )
+            )
+          )
         LIMIT ${EXPIRY_BATCH_SIZE}
       )
     `;
@@ -89,10 +105,36 @@ export async function leaseNext(
         AND (dc.delivery_expires_at IS NULL OR dc.delivery_expires_at > now())
         AND (dc.state = 'queued'
              OR (dc.state = 'leased' AND dc.lease_expires_at <= now()))
+        AND (
+          dc.execution_id IS NULL
+          OR (
+            dc.cancel_requested_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM debug_executions e
+              WHERE e.id = dc.execution_id
+                AND e.state = 'active'
+                AND e.device_lease_expires_at > now()
+                AND e.expires_at > now()
+            )
+          )
+        )
         AND NOT EXISTS (
             SELECT 1 FROM device_commands earlier
             WHERE earlier.device_id = dc.device_id
               AND earlier.state IN ('queued', 'leased', 'broker_accepted')
+              AND (
+                earlier.execution_id IS NULL
+                OR (
+                  earlier.cancel_requested_at IS NULL
+                  AND EXISTS (
+                    SELECT 1 FROM debug_executions e
+                    WHERE e.id = earlier.execution_id
+                      AND e.state = 'active'
+                      AND e.device_lease_expires_at > now()
+                      AND e.expires_at > now()
+                  )
+                )
+              )
               -- M8: per-device order by sequence, NOT created_at: concurrent
               -- enqueues can commit in a different order than their
               -- transactions started, and created_at is the transaction

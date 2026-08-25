@@ -18,6 +18,39 @@ interface ManifestLike {
   profiles: ManifestProfile[];
 }
 
+async function failDebugExecutionsForInstallation(
+  tx: Prisma.TransactionClient,
+  installationId: string,
+): Promise<void> {
+  await tx.$executeRaw`
+    UPDATE debug_executions
+    SET state = 'failed',
+        device_lease_expires_at = NULL,
+        finished_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE installation_id = ${installationId}::uuid
+      AND state IN ('active', 'paused', 'cancelling')
+  `;
+}
+
+async function failDebugExecutionsForBindingChange(
+  tx: Prisma.TransactionClient,
+  deviceId: string,
+  installationIds: readonly string[],
+): Promise<void> {
+  if (installationIds.length === 0) return;
+  await tx.$executeRaw`
+    UPDATE debug_executions
+    SET state = 'failed',
+        device_lease_expires_at = NULL,
+        finished_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE device_id = ${deviceId}::uuid
+      AND installation_id IN (${Prisma.join(installationIds.map((id) => Prisma.sql`${id}::uuid`))})
+      AND state IN ('active', 'paused', 'cancelling')
+  `;
+}
+
 export interface CreateInstallationInput {
   projectId: string;
   pluginId: string;
@@ -115,6 +148,7 @@ export async function bindDeviceToPluginInstallation(
         input.installationId,
         ...(lockedBinding ? [lockedBinding.installationId] : []),
       ])];
+      await failDebugExecutionsForBindingChange(tx, input.deviceId, stateInstallationIds);
       // Current state has no profile column because a device has one active
       // binding. Never reinterpret a previous profile's values/revisions when
       // that binding changes; immutable history remains available separately.
@@ -161,6 +195,7 @@ export async function setPluginInstallationState(
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM plugin_installations WHERE id = ${installationId}::uuid FOR UPDATE`;
+    if (state === "disabled") await failDebugExecutionsForInstallation(tx, installationId);
     const result = await tx.pluginInstallation.updateMany({ where: { id: installationId }, data: { state } });
     if (result.count !== 1) throw new Error("plugin installation not found");
   });
@@ -180,6 +215,7 @@ export async function migratePluginInstallation(
     const snapshot = await getSnapshot(tx, installation.pluginId, pluginVersion, manifestHash);
     const manifest = parseManifest(snapshot.canonicalManifest);
     if (manifest.id !== installation.pluginId) throw new Error("manifest identity does not match installation");
+    await failDebugExecutionsForInstallation(tx, installationId);
     await tx.pluginInstallation.update({
       where: { id: installationId },
       data: { pluginVersion, manifestHash, config: toInputJson(config), state: "enabled" },

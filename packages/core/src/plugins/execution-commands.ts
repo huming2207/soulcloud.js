@@ -273,7 +273,9 @@ export async function requestDebugCommandCancellation(
   }
   const rows = await prisma.$queryRaw<RawCommandRow[]>`
     UPDATE device_commands c
-    SET cancel_requested_at = COALESCE(c.cancel_requested_at, CURRENT_TIMESTAMP)
+    SET cancel_requested_at = COALESCE(c.cancel_requested_at, CURRENT_TIMESTAMP),
+        state = CASE WHEN c.state = 'queued' THEN 'delivery_failed' ELSE c.state END,
+        lease_expires_at = CASE WHEN c.state = 'queued' THEN NULL ELSE c.lease_expires_at END
     FROM debug_executions e
     WHERE e.id = ${executionId}::uuid
       AND e.token_hash = ${tokenHash}

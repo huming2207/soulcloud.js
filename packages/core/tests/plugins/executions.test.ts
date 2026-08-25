@@ -10,6 +10,7 @@ import {
   releaseDebugExecution,
   renewDebugExecutionLease,
 } from "../../src/plugins/executions";
+import { setPluginInstallationState } from "../../src/plugins/installations";
 import {
   DebugCommandIdempotencyConflictError,
   enqueueDebugCommand,
@@ -147,6 +148,7 @@ describe("durable debug execution capability", () => {
     expect(await getDebugCommand(prisma, execution.id, tokenHashE, command.id)).toMatchObject({ id: command.id, deviceId });
     const cancelled = await requestDebugCommandCancellation(prisma, execution.id, tokenHashE, command.id);
     expect(cancelled.cancelRequestedAt).not.toBeNull();
+    expect(cancelled.state).toBe("delivery_failed");
 
     const idempotentInput = {
       executionId: execution.id,
@@ -186,6 +188,12 @@ describe("durable debug execution capability", () => {
       commandWithoutReadCapability.id,
     );
     expect(cancelledWithoutReadCapability.cancelRequestedAt).not.toBeNull();
+    await completeDebugExecution(prisma, noReadCapability.id, tokenHashF, "failed");
+
+    const invalidated = await createDebugExecution(prisma, input("2".repeat(64), 60_000, ["device.enqueue_command"]));
+    await setPluginInstallationState(prisma, installationId, "disabled");
+    expect((await prisma.debugExecution.findUniqueOrThrow({ where: { id: invalidated.id } })).state).toBe("failed");
+    await setPluginInstallationState(prisma, installationId, "enabled");
   });
 });
 

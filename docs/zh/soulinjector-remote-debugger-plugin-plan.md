@@ -89,6 +89,12 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   plugin version/manifest hash、execution/correlation/idempotency 字段和取消请求时间；这些
   字段不进入设备下发的 MessagePack payload。插件/LLM 来源在入队前必须带 installation、版本
   和 manifest hash，避免出现无法归属的高权限命令。
+- installation 被禁用、迁移或设备/profile 重新绑定时，同一事务会把旧的非终态 debug execution
+  置为 `failed` 并释放 lease；broker lease 查询也会跳过已失效 execution 的排队 command，避免
+  旧控制权继续触碰设备或阻塞该设备后续队列。
+- execution command 的取消请求不会新增 MQTT 控制 topic：尚未投递的 queued command 直接进入
+  `delivery_failed` 终态并释放队列；已经被 broker 接受的 command 只记录取消请求，最终能否在硬件阶段
+  停止仍取决于设备固件的取消点，不能伪装成云端已经撤回。
 - 专用 SoulInjector runtime 读取并校验 operation、WebSocket backpressure、idle timeout、
   value/blob budget 等环境上限；Compose 会把这些上限传入 plugin，不把 Manager 的限制误当成
   plugin 进程自身的隔离。
