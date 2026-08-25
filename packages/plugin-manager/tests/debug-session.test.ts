@@ -115,4 +115,59 @@ describe("debug session bootstrap cleanup", () => {
     const execution = await prisma.debugExecution.findFirstOrThrow({ where: { installationId } });
     expect(execution.state).toBe("failed");
   });
+
+  test("uses execution-scoped cleanup when the bootstrap response is lost", async () => {
+    const sessionId = randomUUID();
+    let abortInput: { sessionId?: string | null; executionId?: string } | undefined;
+    const connection = {
+      id: "debug-bootstrap-timeout-connection",
+      isOpen: true,
+      manifest: { pluginId, pluginVersion, manifestHash },
+      request: async (method: string, input: { executionId: string; sessionId?: string | null }) => {
+        if (method === "debugger.startSession") throw new Error("plugin response was lost after private commit");
+        if (method === "debugger.abortSession") {
+          abortInput = input;
+          return { sessionId, executionId: input.executionId, state: "failed" };
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "debug-bootstrap-manager-token-that-is-long-enough",
+      maxFrameBytes: 1_048_576,
+      maxPendingRequests: 8,
+      backpressureBytes: 1_048_576,
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      prisma,
+    });
+    const internals = manager as unknown as {
+      connections: Map<string, typeof connection>;
+      catalog: Map<string, unknown>;
+    };
+    internals.connections.set(pluginId, connection);
+    internals.catalog.set(`${pluginId}@${pluginVersion}`, {
+      pluginId,
+      pluginVersion,
+      manifestHash,
+      manifest: { id: pluginId, version: pluginVersion, apiVersion: 1, profiles: [], actions: [], events: [] },
+      connected: true,
+    });
+
+    await expect(manager.startDebugSession({
+      installationId,
+      projectId,
+      deviceId,
+      userId,
+      caseId: randomUUID(),
+      leaseMs: 5_000,
+      ttlMs: 60_000,
+    })).rejects.toThrow("response was lost");
+
+    expect(abortInput).toMatchObject({ sessionId: null, executionId: expect.any(String) });
+    const executions = await prisma.debugExecution.findMany({ where: { installationId }, orderBy: { createdAt: "desc" } });
+    expect(executions[0]?.state).toBe("failed");
+  });
 });
