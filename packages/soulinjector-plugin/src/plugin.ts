@@ -222,6 +222,12 @@ function sessionStateForDeviceState(state: string): Exclude<UpdateDebugSessionSt
   return null;
 }
 
+function executionStateForDeviceState(state: string): "completed" | "failed" | null {
+  if (state === "completed") return "completed";
+  if (state === "failed") return "failed";
+  return null;
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }
@@ -324,11 +330,14 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
         if (parsed.data.sessionId && isUuid(parsed.data.sessionId)) {
           const logs: NonNullable<PluginEventOutput["logs"]> = [];
           let sessionAvailable = true;
+          let sessionStateUpdated = false;
+          let updatedSession: DebugSessionRecord | null = null;
           if (repository.updateDebugSessionState) {
             const state = sessionStateForDeviceState(parsed.data.state);
             if (state) {
               try {
-                await repository.updateDebugSessionState({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, state });
+                updatedSession = await repository.updateDebugSessionState({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, state });
+                sessionStateUpdated = true;
               } catch (error) {
                 if (!(error instanceof DebugSessionNotAvailableError)) throw error;
                 sessionAvailable = false;
@@ -343,6 +352,14 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
               if (!(error instanceof DebugSessionNotAvailableError)) throw error;
               logs.push({ level: "warn", message: "ignored SoulInjector event for an unavailable debug session" });
             }
+          }
+          const executionState = executionStateForDeviceState(parsed.data.state);
+          if (sessionAvailable && sessionStateUpdated && executionState && context.execution) {
+            // The manager routes events by installation/device. A delayed
+            // terminal event from an older session must not complete a newer
+            // execution that happens to own the same device.
+            const execution = updatedSession?.executionRef ? await context.execution.get() : null;
+            if (execution && updatedSession && execution.id === updatedSession.executionRef) await context.execution.complete(executionState);
           }
           return { updates: eventUpdates(parsed.data), ...(logs.length > 0 ? { logs } : {}) };
         }

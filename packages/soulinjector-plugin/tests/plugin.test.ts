@@ -497,6 +497,82 @@ describe("SoulInjector plugin", () => {
     expect(observations).toEqual([{ installationId: saved.installationId, projectId: saved.projectId, sessionId, soulcloudDeviceRef: saved.installationId, eventRef: "broker-event-1", source: "device", kind: "debug.status", structuredData: { state: "running", sessionId } }]);
   });
 
+  test("completes the platform execution when a bound device session reaches a terminal state", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000012";
+    const completed: string[] = [];
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      updateDebugSessionState: async () => ({ executionRef: "00000000-0000-4000-8000-000000000013" }) as never,
+      appendDebugObservation: async () => ({}),
+    });
+    const result = await plugin.onEvent!({
+      operationId: "operation",
+      signal: AbortSignal.timeout(1000),
+      installation: { id: saved.installationId, projectId: saved.projectId, pluginId: "debugger", pluginVersion: "1.0.0", config: null },
+      device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
+      execution: {
+        get: async () => ({ id: "00000000-0000-4000-8000-000000000013" }) as never,
+        renewLease: async () => { throw new Error("not used"); },
+        release: async () => { throw new Error("not used"); },
+        complete: async (state) => { completed.push(state); return {} as never; },
+      },
+      getEntity: async () => null,
+      enqueueCommand: async () => undefined,
+      callPlugin: async () => undefined,
+      devices: null,
+    }, {
+      id: "broker-event-terminal",
+      seq: 2n,
+      kind: "debug.status",
+      schema: 1,
+      receivedAt: new Date(0).toISOString(),
+      payload: { state: "failed", sessionId, error: "probe disconnected" },
+      installation: { id: saved.installationId, projectId: saved.projectId, pluginId: "debugger", pluginVersion: "1.0.0", config: null },
+      device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
+    });
+    expect(result.updates).toEqual([
+      { entityKey: "debug.state", value: "failed" },
+      { entityKey: "debug.session_id", value: sessionId },
+      { entityKey: "debug.error", value: "probe disconnected" },
+    ]);
+    expect(completed).toEqual(["failed"]);
+  });
+
+  test("does not complete a newer execution for a delayed older-session event", async () => {
+    const completed: string[] = [];
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      updateDebugSessionState: async () => ({ executionRef: "00000000-0000-4000-8000-000000000014" }) as never,
+      appendDebugObservation: async () => ({}),
+    });
+    await plugin.onEvent!({
+      operationId: "operation",
+      signal: AbortSignal.timeout(1000),
+      installation: { id: saved.installationId, projectId: saved.projectId, pluginId: "debugger", pluginVersion: "1.0.0", config: null },
+      device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
+      execution: {
+        get: async () => ({ id: "00000000-0000-4000-8000-000000000015" }) as never,
+        renewLease: async () => { throw new Error("not used"); },
+        release: async () => { throw new Error("not used"); },
+        complete: async (state) => { completed.push(state); return {} as never; },
+      },
+      getEntity: async () => null,
+      enqueueCommand: async () => undefined,
+      callPlugin: async () => undefined,
+      devices: null,
+    }, {
+      id: "broker-event-old-terminal",
+      seq: 3n,
+      kind: "debug.status",
+      schema: 1,
+      receivedAt: new Date(0).toISOString(),
+      payload: { state: "completed", sessionId: "00000000-0000-4000-8000-000000000016" },
+      installation: { id: saved.installationId, projectId: saved.projectId, pluginId: "debugger", pluginVersion: "1.0.0", config: null },
+      device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
+    });
+    expect(completed).toEqual([]);
+  });
+
   test("acknowledges a stale device event when its private session is gone", async () => {
     const plugin = createSoulInjectorPlugin({
       ...store(),
