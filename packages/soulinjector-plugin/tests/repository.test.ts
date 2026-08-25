@@ -43,18 +43,25 @@ describe("SoulInjector artifact chunk assembly", () => {
   test("validates chunks in bounded fetches and assembles the bytea in PostgreSQL", async () => {
     const queries: string[] = [];
     let fetchCount = 0;
-    const content = Buffer.from([1, 2, 3]);
-    const digest = createHash("sha256").update(content).digest("hex");
+    const elf = new Uint8Array(64);
+    elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
+    const elfView = new DataView(elf.buffer);
+    elfView.setUint16(18, 243, true);
+    elfView.setUint32(20, 1, true);
+    elfView.setBigUint64(24, 0x1000n, true);
+    elfView.setUint16(52, 64, true);
+    const firstChunk = Buffer.from(elf.subarray(0, 3));
+    const finalChunk = Buffer.from(elf.subarray(3));
     const uploadRow = {
       installation_id: "installation-1",
       project_id: "project-1",
       case_id: null,
       created_by: "user-1",
-      kind: "firmware",
-      filename: "image.bin",
-      content_type: "application/octet-stream",
-      expected_size: 3,
-      received_size: 0,
+      kind: "elf",
+      filename: "image.elf",
+      content_type: "application/x-elf",
+      expected_size: 64,
+      received_size: 3,
       completed_artifact_id: null,
     };
     const client = {
@@ -66,7 +73,13 @@ describe("SoulInjector artifact chunk assembly", () => {
         if (query.startsWith("FETCH FORWARD")) {
           fetchCount += 1;
           return fetchCount === 1
-            ? { rows: [{ offset_bytes: 0, size: 3, sha256: digest, content }], rowCount: 1 }
+            ? {
+                rows: [
+                  { offset_bytes: 0, size: firstChunk.byteLength, sha256: createHash("sha256").update(firstChunk).digest("hex"), content: firstChunk },
+                  { offset_bytes: firstChunk.byteLength, size: finalChunk.byteLength, sha256: createHash("sha256").update(finalChunk).digest("hex"), content: finalChunk },
+                ],
+                rowCount: 2,
+              }
             : { rows: [], rowCount: 0 };
         }
         return { rows: [], rowCount: 0 };
@@ -80,14 +93,14 @@ describe("SoulInjector artifact chunk assembly", () => {
       projectId: "project-1",
       userId: "user-1",
       uploadId: "00000000-0000-4000-8000-000000000001",
-      kind: "firmware",
-      filename: "image.bin",
-      contentType: "application/octet-stream",
-      totalSize: 3,
-      offset: 0,
+      kind: "elf",
+      filename: "image.elf",
+      contentType: "application/x-elf",
+      totalSize: 64,
+      offset: 3,
       final: true,
-      chunk: new Uint8Array(content),
-    })).resolves.toMatchObject({ complete: true, receivedBytes: 3 });
+      chunk: new Uint8Array(finalChunk),
+    })).resolves.toMatchObject({ complete: true, receivedBytes: 64 });
     expect(queries.some((query) => query.includes("DECLARE soulinjector_artifact_"))).toBe(true);
     expect(queries.some((query) => query.includes("string_agg(content, ''::bytea ORDER BY offset_bytes)"))).toBe(true);
     expect(queries.some((query) => query.includes("Buffer.concat"))).toBe(false);
