@@ -356,6 +356,56 @@ describe("SoulInjector plugin", () => {
     expect(observationLimit).toBe(16);
   });
 
+  test("renders a bounded alert for the latest failed-session diagnostic", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000009";
+    const session = {
+      id: sessionId,
+      caseId: saved.id,
+      installationId: saved.installationId,
+      soulcloudDeviceRef: "soulinjector-device-1",
+      executionRef: "00000000-0000-4000-8000-000000000010",
+      state: "failed" as const,
+      pluginVersion: "0.1.0",
+      manifestHash: saved.sha256,
+      deviceFirmwareVersion: null,
+      targetConfigId: saved.id,
+      targetConfigRevision: saved.revision,
+      targetId: "fixture",
+      artifactId: null,
+      startedBy: saved.createdBy,
+      controller: saved.createdBy,
+      startedAt: saved.createdAt,
+      endedAt: saved.createdAt,
+    };
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      listDebugSessions: async () => [session],
+      getDebugSession: async () => session,
+      listDebugObservations: async () => [{
+        id: "00000000-0000-4000-8000-000000000011",
+        sessionId,
+        eventRef: "broker-event-error",
+        source: "device",
+        kind: "debug.status",
+        structuredData: { state: "failed", error: "target <halted>\nprobe disconnected" },
+        artifactId: null,
+        createdAt: saved.createdAt,
+      }],
+    });
+    const result = await plugin.render!["debugger"]!({
+      requestId: "request",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      user: { id: saved.createdBy, locale: "en", permissions: [] },
+      routeId: "debugger",
+      params: { session_id: sessionId },
+    });
+    expect(result.html).toContain('role="alert"');
+    expect(result.html).toContain("Debugger error");
+    expect(result.html).toContain("target &lt;halted&gt;\nprobe disconnected");
+    expect(result.html).not.toContain("target <halted>");
+  });
+
   test("renders bounded target configuration revision metadata without YAML", async () => {
     const plugin = createSoulInjectorPlugin(store());
     const result = await plugin.render!["debugger"]!({

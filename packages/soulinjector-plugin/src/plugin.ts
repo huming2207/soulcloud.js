@@ -236,6 +236,21 @@ function observationData(value: unknown): string {
   return escapeHtml(serialized.length > MAX_OBSERVATION_DATA_CHARS ? `${serialized.slice(0, MAX_OBSERVATION_DATA_CHARS)}…` : serialized);
 }
 
+function latestSessionError(observations: DebugObservationRecord[]): string | null {
+  for (let index = observations.length - 1; index >= 0; index -= 1) {
+    const observation = observations[index]!;
+    if (observation.kind === "debug.status") {
+      const parsed = debugStatusSchema.safeParse(observation.structuredData);
+      if (parsed.success && parsed.data.error) return parsed.data.error;
+    }
+    if (observation.kind === "debug.log") {
+      const parsed = debugLogSchema.safeParse(observation.structuredData);
+      if (parsed.success && parsed.data.level === "error") return parsed.data.message;
+    }
+  }
+  return null;
+}
+
 function debuggerActionControls(input: { selectedSession: DebugSessionRecord | null }): string {
   const session = input.selectedSession;
   if (!session) return "<section><h2>Manual debugger actions</h2><p>Select a session before issuing a device command.</p></section>";
@@ -268,6 +283,12 @@ function configForm(input: { installationId: string; yaml: string; cases: DebugC
     : input.observations.length === 0
       ? `<p>No observations recorded for session <code>${escapeHtml(input.selectedSession.id)}</code>.</p>`
       : `<ol>${input.observations.map((item) => `<li><time datetime="${escapeHtml(item.createdAt)}">${escapeHtml(item.createdAt)}</time> — <strong>${escapeHtml(item.source)}:${escapeHtml(item.kind)}</strong><pre>${observationData(item.structuredData)}</pre></li>`).join("")}</ol>`;
+  const sessionError = input.selectedSession ? latestSessionError(input.observations) : null;
+  const errorView = input.selectedSession?.state === "failed"
+    ? `<section role="alert"><h2>Debugger error</h2><p>${escapeHtml(sessionError ?? "The debugger session failed without a diagnostic message.")}</p></section>`
+    : sessionError
+      ? `<section role="alert"><h2>Latest debugger error</h2><p>${escapeHtml(sessionError)}</p></section>`
+      : "";
   const targetConfigs = input.targetConfigs.length === 0
     ? "<p>No target configuration revisions yet.</p>"
     : `<ul>${input.targetConfigs.map((item) => `<li><strong>Revision ${item.revision}</strong> — ${item.targetCount} target(s) — <code>${escapeHtml(item.sha256)}</code> — created ${escapeHtml(item.createdAt)}</li>`).join("")}</ul>`;
@@ -286,7 +307,7 @@ function configForm(input: { installationId: string; yaml: string; cases: DebugC
   const reportOptions = `<option value="">Select a draft report</option>${input.reports.filter((item) => item.state === "draft").map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
   const reportForm = `<section><h2>Reports</h2>${reports}<form method="post"><input type="hidden" name="intent" value="create_report"><label for="report-case">Case</label><br><select id="report-case" name="caseId" required>${reportCases}</select><br><label for="report-title">Report title</label><br><input id="report-title" name="reportTitle" maxlength="256" required><br><label for="report-content">Initial report content (max 64 KiB)</label><br><textarea id="report-content" name="reportContent" rows="12" cols="100" maxlength="65536"></textarea><br><button type="submit">Create report draft</button></form><form method="post"><input type="hidden" name="intent" value="append_report"><label for="report-revision">Draft report</label><br><select id="report-revision" name="reportId" required>${reportOptions}</select><br><label for="report-revision-content">New revision (max 64 KiB)</label><br><textarea id="report-revision-content" name="reportContent" rows="12" cols="100" maxlength="65536" required></textarea><br><button type="submit">Save report revision</button></form></section>`;
   const error = input.error === "invalid_target_config" ? "<p role=\"alert\">Target configuration is invalid. Review the YAML schema and try again.</p>" : "";
-  return `<main><h1>SoulInjector debugger</h1>${error}<section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section>${sessionForm}<section><h2>Sessions</h2>${sessions}</section><section><h2>Session timeline</h2>${timeline}</section>${debuggerActionControls({ selectedSession: input.selectedSession })}<section><h2>Artifacts</h2>${artifacts}<form id="artifact-upload" method="post" action="/plugins/${encodeURIComponent(input.installationId)}/debugger/artifacts"><label for="artifact-kind">Artifact type</label><br><select id="artifact-kind"><option value="elf">ELF</option><option value="firmware">Firmware</option></select><br><label for="artifact-case">Debugger case</label><br><select id="artifact-case">${artifactCases}</select><br><label for="artifact-file">Artifact file (max 64 MiB)</label><br><input id="artifact-file" type="file" accept=".elf,.bin,.img,application/octet-stream,application/x-elf" required><br><button type="submit">Upload artifact</button><p id="artifact-upload-status" role="status" aria-live="polite"></p></form></section>${reportForm}<section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><h3>Saved revisions</h3>${targetConfigs}<form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml-file">Load YAML file (最大 64 KiB)</label><br><input id="yaml-file" type="file" accept=".yaml,.yml,text/yaml,text/plain"><br><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
+  return `<main><h1>SoulInjector debugger</h1>${error}${errorView}<section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section>${sessionForm}<section><h2>Sessions</h2>${sessions}</section><section><h2>Session timeline</h2>${timeline}</section>${debuggerActionControls({ selectedSession: input.selectedSession })}<section><h2>Artifacts</h2>${artifacts}<form id="artifact-upload" method="post" action="/plugins/${encodeURIComponent(input.installationId)}/debugger/artifacts"><label for="artifact-kind">Artifact type</label><br><select id="artifact-kind"><option value="elf">ELF</option><option value="firmware">Firmware</option></select><br><label for="artifact-case">Debugger case</label><br><select id="artifact-case">${artifactCases}</select><br><label for="artifact-file">Artifact file (max 64 MiB)</label><br><input id="artifact-file" type="file" accept=".elf,.bin,.img,application/octet-stream,application/x-elf" required><br><button type="submit">Upload artifact</button><p id="artifact-upload-status" role="status" aria-live="polite"></p></form></section>${reportForm}<section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><h3>Saved revisions</h3>${targetConfigs}<form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml-file">Load YAML file (最大 64 KiB)</label><br><input id="yaml-file" type="file" accept=".yaml,.yml,text/yaml,text/plain"><br><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
 }
 
 export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {
