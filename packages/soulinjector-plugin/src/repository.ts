@@ -956,6 +956,28 @@ export class SoulInjectorRepository {
     return result.rows[0] ? asSessionRecord(result.rows[0]) : null;
   }
 
+  /** Mark a bootstrap-created session failed without issuing any device command. */
+  async abortDebugSession(
+    id: string,
+    executionRef: string,
+    installationId: string,
+    projectId: string,
+    soulcloudDeviceRef: string,
+  ): Promise<DebugSessionRecord | null> {
+    if (!UUID.test(id) || !UUID.test(executionRef) || !UUID.test(soulcloudDeviceRef)) return null;
+    const result = await this.pool.query<QueryResultRow>(
+      `UPDATE ${schema}.debug_sessions s
+       SET state = CASE WHEN s.state IN ('completed', 'failed', 'cancelled') THEN s.state ELSE 'failed' END,
+           ended_at = CASE WHEN s.state IN ('completed', 'failed', 'cancelled') THEN s.ended_at ELSE COALESCE(s.ended_at, CURRENT_TIMESTAMP) END
+       FROM ${schema}.debug_cases c
+       WHERE s.id = $1 AND s.execution_ref = $2 AND s.installation_id = $3
+         AND s.soulcloud_device_ref = $4 AND s.case_id = c.id AND c.project_id = $5
+       RETURNING s.*`,
+      [id, executionRef, installationId, soulcloudDeviceRef, projectId],
+    );
+    return result.rows[0] ? asSessionRecord(result.rows[0]) : null;
+  }
+
   async updateDebugSessionState(input: UpdateDebugSessionStateInput): Promise<DebugSessionRecord> {
     if (!UUID.test(input.sessionId)) throw new RangeError("session id must be a UUID");
     if (!UUID.test(input.soulcloudDeviceRef)) throw new RangeError("Soulcloud Device reference must be a UUID");

@@ -67,7 +67,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   execution/session 摘要。bootstrap RPC 返回后，Manager 会按 installation → device → binding
   的统一锁顺序重新验证启用状态、manifest/device scope、数据库时钟 lease 和 execution state，
   不把并发禁用、迁移或重绑定期间已经失效的 active execution 返回给 Human API。plugin 私有
-  session 保存 execution 引用但不保存原始 token；pause、
+  session 保存 execution 引用但不保存原始 token；如果 bootstrap 已在 plugin 私库创建 session
+  但上述校验失败，Manager 会通过有界、仅 Manager 可调用的 `debugger.abortSession` 将该私有
+  session 标为 failed；该清理不发送设备 command，也不替代人工批准。pause、
   cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成。
 - oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`，以及
   受 execution capability 约束的 `context.devices.enqueueCommand`、`getCommand`、`cancelCommand`；

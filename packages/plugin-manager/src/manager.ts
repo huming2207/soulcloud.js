@@ -425,6 +425,10 @@ export class PluginManager {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     let started: { execution: DebugExecutionRecord; executionToken: string } | undefined;
     let operationId: string | undefined;
+    let bootstrapSessionId: string | undefined;
+    let bootstrapInvalidated = false;
+    let bootstrapConnection: PluginConnection | undefined;
+    let bootstrapInstallation: { id: string; projectId: string; pluginId: string; pluginVersion: string; manifestHash: string } | undefined;
     try {
       started = await this.startDebugExecution({
         installationId: input.installationId,
@@ -442,6 +446,8 @@ export class PluginManager {
       });
       if (!installation || installation.state !== "enabled" || installation.projectId !== input.projectId) throw new Error("plugin installation changed while starting debug session");
       const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
+      bootstrapConnection = connection;
+      bootstrapInstallation = { ...installation, manifestHash: installation.manifestHash.trim() };
       operationId = crypto.randomUUID();
       const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
       const timeoutMs = input.timeoutMs ?? 30_000;
@@ -484,6 +490,7 @@ export class PluginManager {
       }, timeoutMs);
       const parsed = debugSessionStartOutput.parse(output);
       if (parsed.executionId !== execution.id) throw new Error("plugin returned a different debug execution id");
+      bootstrapSessionId = parsed.sessionId;
       await this.sealOperation(operationId);
       let currentExecution: DebugExecutionRecord;
       try {
@@ -499,16 +506,88 @@ export class PluginManager {
         });
       } catch (error) {
         if (error instanceof DebugExecutionCapabilityError) {
+          bootstrapInvalidated = true;
           throw publicError("debug execution changed while starting debug session", 409, "conflict");
         }
         throw error;
       }
       return { execution: currentExecution, sessionId: parsed.sessionId };
     } catch (error) {
+      if (bootstrapInvalidated && bootstrapSessionId && bootstrapConnection && bootstrapInstallation) {
+        await this.abortDebugSessionBestEffort({
+          connection: bootstrapConnection,
+          installation: bootstrapInstallation,
+          deviceId: input.deviceId,
+          executionId: started?.execution.id ?? "",
+          sessionId: bootstrapSessionId,
+          userId: input.userId,
+          reason: "platform execution became invalid during session bootstrap",
+          timeoutMs: Math.min(input.timeoutMs ?? 30_000, 5_000),
+        });
+      }
       if (started) await completeDebugExecution(this.options.prisma, started.execution.id, hashCapabilityToken(started.executionToken), "failed").catch(() => undefined);
       throw error;
     } finally {
       if (operationId) this.finishOperation(operationId);
+    }
+  }
+
+  private async abortDebugSessionBestEffort(input: {
+    connection: PluginConnection;
+    installation: { id: string; projectId: string; pluginId: string; pluginVersion: string; manifestHash: string };
+    deviceId: string;
+    executionId: string;
+    sessionId: string;
+    userId: string;
+    reason: string;
+    timeoutMs: number;
+  }): Promise<void> {
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    try {
+      this.registerOperation(operationId, {
+        kind: "debug-session-bootstrap",
+        operationTokenHash: hashOperationToken(operationToken),
+        connectionId: input.connection.id,
+        installationId: input.installation.id,
+        projectId: input.installation.projectId,
+        pluginId: input.installation.pluginId,
+        pluginVersion: input.installation.pluginVersion,
+        manifestHash: input.installation.manifestHash,
+        deviceId: input.deviceId,
+        userId: input.userId,
+        deadline: performance.now() + input.timeoutMs,
+        state: "active",
+        reverseCalls: 0,
+        inFlightReverseCalls: 0,
+        stagedCommandCount: 0,
+        stagedCommandBytes: 0,
+        reverseSettledWaiters: new Set(),
+      });
+      const output = await input.connection.request("debugger.abortSession", {
+        operationId,
+        operationToken,
+        installationId: input.installation.id,
+        projectId: input.installation.projectId,
+        deviceId: input.deviceId,
+        executionId: input.executionId,
+        sessionId: input.sessionId,
+        reason: input.reason,
+      }, input.timeoutMs);
+      if (
+        !output ||
+        typeof output !== "object" ||
+        (output as { sessionId?: unknown }).sessionId !== input.sessionId ||
+        (output as { executionId?: unknown }).executionId !== input.executionId ||
+        (output as { state?: unknown }).state !== "failed"
+      ) {
+        throw new Error("plugin returned an invalid debug session cleanup output");
+      }
+      await this.sealOperation(operationId);
+    } catch (error) {
+      this.log("debug session cleanup failed", { sessionId: input.sessionId, executionId: input.executionId, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      this.finishOperation(operationId);
     }
   }
 

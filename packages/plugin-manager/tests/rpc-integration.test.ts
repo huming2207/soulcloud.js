@@ -115,6 +115,7 @@ beforeAll(async () => {
       sessionStartInput = { executionId: input.executionId, executionToken: input.executionToken };
       return { sessionId: randomUUID(), executionId: input.executionId };
     },
+    abortDebugSession: async (input) => ({ sessionId: input.sessionId, executionId: input.executionId, state: "failed" as const }),
   }), { hostname: "127.0.0.1", port: 0, authToken });
 
   connection = new PluginConnection({
@@ -282,6 +283,23 @@ describe("plugin oRPC WebSocket transport", () => {
     expect(output.executionId).toBe(executionId);
     expect(output.sessionId).toBeString();
     expect(sessionStartInput).toEqual({ executionId, executionToken });
+  });
+
+  test("routes manager-only cleanup for an invalidated private session", async () => {
+    const sessionId = randomUUID();
+    const executionId = randomUUID();
+    const output = await connection.request("debugger.abortSession", {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      deadlineMs: 1_000,
+      installationId: randomUUID(),
+      projectId: randomUUID(),
+      deviceId: randomUUID(),
+      executionId,
+      sessionId,
+      reason: "platform execution invalidated",
+    }, 1_000) as { sessionId: string; executionId: string; state: "failed" };
+    expect(output).toEqual({ sessionId, executionId, state: "failed" });
   });
 
   test("routes artifact metadata without moving artifact bytes through the listing procedure", async () => {

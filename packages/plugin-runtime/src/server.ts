@@ -13,6 +13,7 @@ import {
   assertRpcValueBudget,
   canonicalJson,
   configureTargetOutput as configureTargetOutputSchema,
+  debugSessionAbortOutput as debugSessionAbortOutputSchema,
   debugSessionStartOutput as debugSessionStartOutputSchema,
   listTargetConfigsOutput as listTargetConfigsOutputSchema,
   artifactChunkOutput as artifactChunkOutputSchema,
@@ -528,6 +529,29 @@ function createRuntimeConnection(
           }, { signal }));
           assertRpcValueBudget(result, budget);
           const parsed = debugSessionStartOutputSchema.safeParse(result);
+          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+          return parsed.data;
+        } finally {
+          operations.running -= 1;
+        }
+      }),
+      abortSession: implemented.debugger.abortSession.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        if (!definition.abortDebugSession) rpcError("NOT_FOUND", "debug session cleanup is not supported by this plugin");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
+        try {
+          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.abortDebugSession!({
+            operationId: input.operationId,
+            installationId: input.installationId,
+            projectId: input.projectId,
+            deviceId: input.deviceId,
+            executionId: input.executionId,
+            sessionId: input.sessionId,
+            reason: input.reason,
+          }, { signal }));
+          assertRpcValueBudget(result, budget);
+          const parsed = debugSessionAbortOutputSchema.safeParse(result);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
         } finally {

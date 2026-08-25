@@ -105,6 +105,17 @@ export const debugSessionStartInput = operation.extend({
   return hasId === hasRevision && hasRevision === hasTarget;
 }, "target configuration id, revision and target id must be provided together");
 export const debugSessionStartOutput = z.object({ sessionId: z.string().uuid(), executionId: z.string().uuid() }).strict();
+/** Manager-only cleanup after a bootstrap created a private session but the
+ * platform execution became invalid before the response could be returned. */
+export const debugSessionAbortInput = operation.extend({
+  installationId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  deviceId: z.string().uuid(),
+  executionId: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  reason: z.string().min(1).max(512),
+}).strict();
+export const debugSessionAbortOutput = z.object({ sessionId: z.string().uuid(), executionId: z.string().uuid(), state: z.literal("failed") }).strict();
 
 export const entityGetInput = operation.extend({ entityKey: z.string().min(1).max(128) }).strict();
 export const entityGetOutput = z.object({ entityKey: z.string(), value: entityValue, quality: z.enum(["good", "bad", "uncertain", "stale", "unknown"]), sourceTimestamp: z.string().datetime({ offset: true }).nullable(), ingestedAt: z.string().datetime({ offset: true }), alarm: z.object({ level: z.enum(["info", "warning", "critical"]), code: z.string() }).strict().nullable() }).strict().nullable();
@@ -191,6 +202,7 @@ export const managerToPluginContract = {
     storeArtifactChunk: procedure(artifactChunkInput, artifactChunkOutput, ["debugger", "storeArtifactChunk"]),
     listArtifacts: procedure(listArtifactsInput, listArtifactsOutput, ["debugger", "listArtifacts"]),
     startSession: procedure(debugSessionStartInput, debugSessionStartOutput, ["debugger", "startSession"]),
+    abortSession: procedure(debugSessionAbortInput, debugSessionAbortOutput, ["debugger", "abortSession"]),
   },
 };
 
@@ -246,6 +258,8 @@ export type ListArtifactsInput = z.infer<typeof listArtifactsInput>;
 export type ListArtifactsOutput = z.infer<typeof listArtifactsOutput>;
 export type DebugSessionStartInput = z.infer<typeof debugSessionStartInput>;
 export type DebugSessionStartOutput = z.infer<typeof debugSessionStartOutput>;
+export type DebugSessionAbortInput = z.infer<typeof debugSessionAbortInput>;
+export type DebugSessionAbortOutput = z.infer<typeof debugSessionAbortOutput>;
 export type UiDataInput = z.infer<typeof uiDataInput>;
 export type EntityGetOutput = z.infer<typeof entityGetOutput>;
 export type EntityGetInput = z.infer<typeof entityGetInput>;

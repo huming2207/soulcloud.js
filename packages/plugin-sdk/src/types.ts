@@ -315,6 +315,18 @@ export interface DebugSessionStartInput {
 export interface DebugSessionStartOutput { sessionId: string; executionId: string; }
 export type DebugSessionStartHandler = (input: DebugSessionStartInput, context: { signal: AbortSignal }) => Promise<DebugSessionStartOutput>;
 
+export interface DebugSessionAbortInput {
+  operationId: string;
+  installationId: string;
+  projectId: string;
+  deviceId: string;
+  executionId: string;
+  sessionId: string;
+  reason: string;
+}
+export interface DebugSessionAbortOutput { sessionId: string; executionId: string; state: "failed"; }
+export type DebugSessionAbortHandler = (input: DebugSessionAbortInput, context: { signal: AbortSignal }) => Promise<DebugSessionAbortOutput>;
+
 export interface PluginCallContext {
   operationId: string;
   signal: AbortSignal;
@@ -344,6 +356,8 @@ export interface PluginDefinition {
   listArtifacts?: ArtifactListHandler;
   /** Manager-only bootstrap for associating a private debugger session with an execution. */
   startDebugSession?: DebugSessionStartHandler;
+  /** Manager-only cleanup when a bootstrap execution becomes invalid in flight. */
+  abortDebugSession?: DebugSessionAbortHandler;
   /** Explicitly named procedures callable through Plugin Manager scope checks. */
   handleCall?: Record<string, PluginCallHandler>;
 }

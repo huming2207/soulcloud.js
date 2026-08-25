@@ -175,6 +175,48 @@ describe("SoulInjector plugin", () => {
     expect(created[0]).toMatchObject({ executionRef: "00000000-0000-4000-8000-000000000007", targetConfigId: saved.id, targetConfigRevision: 1, targetId: "fixture" });
   });
 
+  test("marks only the scoped private session failed during manager cleanup", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000006";
+    const executionId = "00000000-0000-4000-8000-000000000007";
+    const calls: unknown[] = [];
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      abortDebugSession: async (...input) => {
+        calls.push(input);
+        return {
+          id: sessionId,
+          caseId: saved.id,
+          installationId: saved.installationId,
+          soulcloudDeviceRef: saved.installationId,
+          executionRef: executionId,
+          state: "failed",
+          pluginVersion: "0.1.0",
+          manifestHash: saved.sha256,
+          deviceFirmwareVersion: null,
+          targetConfigId: null,
+          targetConfigRevision: null,
+          targetId: null,
+          artifactId: null,
+          startedBy: saved.createdBy,
+          controller: null,
+          startedAt: saved.createdAt,
+          endedAt: saved.createdAt,
+        };
+      },
+    });
+    const result = await plugin.abortDebugSession!({
+      operationId: "operation",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      deviceId: saved.installationId,
+      executionId,
+      sessionId,
+      reason: "platform execution invalidated",
+    }, { signal: AbortSignal.timeout(1_000) });
+    expect(result).toEqual({ sessionId, executionId, state: "failed" });
+    expect(calls).toEqual([[sessionId, executionId, saved.installationId, saved.projectId, saved.installationId]]);
+  });
+
   test("renders private debugger session summaries without exposing execution credentials", async () => {
     const sessionId = "00000000-0000-4000-8000-000000000006";
     const plugin = createSoulInjectorPlugin({
