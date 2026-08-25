@@ -254,6 +254,13 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
             }));
           } catch (error) { return failure(error); }
         }
+        const uiExecutionReleasePrefix = `/plugins/${session.installationId}/debugger/executions/`;
+        if (request.method === "POST" && url.pathname.startsWith(uiExecutionReleasePrefix) && url.pathname.endsWith("/release")) {
+          try {
+            const executionId = parseInstallationId(url.pathname.slice(uiExecutionReleasePrefix.length, -"/release".length));
+            return json(200, await options.manager.releaseDebugExecutionFromUiSession(session, executionId));
+          } catch (error) { return failure(error); }
+        }
         const uiDebuggerSessionPath = `/plugins/${session.installationId}/debugger/sessions`;
         if (request.method === "POST" && url.pathname === uiDebuggerSessionPath && session.routeId === "debugger") {
           try {

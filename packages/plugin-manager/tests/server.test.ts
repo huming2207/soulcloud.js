@@ -31,6 +31,7 @@ let renderedParams: unknown;
 let submittedAction: unknown;
 let actionTimeout: number | undefined;
 let uiDeviceActionInput: unknown;
+let uiExecutionReleaseInput: unknown;
 let uiActionError: unknown;
 let sessionStartInput: unknown;
 let uiSessionStartInput: unknown;
@@ -55,6 +56,10 @@ const manager = {
     if (uiActionError) throw uiActionError;
     uiDeviceActionInput = { session, input };
     return { batchId: randomUUID(), deviceCount: 1 };
+  },
+  releaseDebugExecutionFromUiSession: async (session: unknown, executionId: string) => {
+    uiExecutionReleaseInput = { session, executionId };
+    return { id: executionId, installationId, deviceId: randomUUID(), initiatingUserId: randomUUID(), pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: "a".repeat(64), allowedCapabilities: [], state: "paused", deviceLeaseExpiresAt: null, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), createdAt: new Date(0).toISOString(), updatedAt: new Date().toISOString(), finishedAt: null };
   },
   startDebugSession: async (input: unknown) => {
     sessionStartInput = input;
@@ -209,6 +214,17 @@ describe("plugin SSR route", () => {
       session: { installationId, projectId },
       input: { deviceId, executionId, actionId: "debug.identify", actionInput: { targetConfigRevision: 3, targetId: "fixture" } },
     });
+  });
+
+  test("releases a debugger execution lease through the scoped plugin-origin session", async () => {
+    const executionId = randomUUID();
+    const response = await fetch(`${server.url}plugins/${installationId}/debugger/executions/${executionId}/release`, {
+      method: "POST",
+      headers: { cookie: debuggerCookie },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: executionId, state: "paused", deviceLeaseExpiresAt: null });
+    expect(uiExecutionReleaseInput).toMatchObject({ executionId, session: { installationId, projectId } });
   });
 
   test("preserves an explicit public error code from a UI action", async () => {
