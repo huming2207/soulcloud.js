@@ -100,8 +100,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   durable event queue 因不可恢复的 scope miss 无限重试；其他私有数据库错误仍按可恢复故障抛出重试。
 - `DeviceCommand` 已保存平台侧 provenance：`origin_type`、发起用户、plugin installation、
   plugin version/manifest hash、execution/correlation/idempotency 字段和取消请求时间；这些
-  字段不进入设备下发的 MessagePack payload。插件/LLM 来源在入队前必须带 installation、版本
-  和 manifest hash，避免出现无法归属的高权限命令。
+  字段不进入设备下发的 MessagePack payload。Human API 显式批准的 action 记录为 `human` 来源；
+  plugin/LLM 来源在入队前必须带 installation、版本和 manifest hash，避免出现无法归属的高权限命令。
 - installation 被禁用、迁移或设备/profile 重新绑定时，同一事务会把旧的非终态 debug execution
   置为 `failed` 并释放 lease；broker lease 查询也会跳过已失效 execution 的排队 command，避免
   旧控制权继续触碰设备或阻塞该设备后续队列。

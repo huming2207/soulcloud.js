@@ -126,6 +126,11 @@ const DEBUG_SESSION_CAPABILITIES = [
   "device.cancel_command",
 ] as const;
 
+/** Preserve whether an encoded action was explicitly approved by a human. */
+export function actionCommandOrigin(humanApproved?: boolean): "human" | "plugin" {
+  return humanApproved === true ? "human" : "plugin";
+}
+
 export interface PluginEventStore {
   lease(limit: number, leaseMs: number): Promise<LeasedPluginEvent[]>;
   complete(eventId: string, leaseToken: string): Promise<boolean>;
@@ -780,7 +785,13 @@ export class PluginManager {
         if (!binding || binding.installationId !== installation.id) throw new Error("device is not bound to the plugin installation");
         return enqueueBatchInTransaction(tx, [input.deviceId], { cmd: encoded.command, args }, {
           provenance: {
-            originType: "plugin",
+            // The public Human API marks its authenticated action request as
+            // explicitly approved. Preserve that distinction in platform
+            // provenance; otherwise a destructive human operation is
+            // indistinguishable from a plugin-origin command in the audit
+            // trail. Internal callers that do not provide approval remain
+            // plugin-origin commands and still require plugin provenance.
+            originType: actionCommandOrigin(input.humanApproved),
             originUserId: input.userId,
             pluginInstallationId: installation.id,
             pluginVersion: installation.pluginVersion,
