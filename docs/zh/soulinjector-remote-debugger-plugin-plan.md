@@ -1,6 +1,6 @@
 # SoulInjector 远程 Debugger Plugin 实施计划
 
-**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease、事件侧 execution capability 传递和受限 execution reverse RPC 基础；私有 case/session/observation/report 数据层已落地；Human API start/session bootstrap 已有基础版本；设备固件、LLM、pause/cancel/take-over、重启恢复和完整设备 command 闭环尚未实现）
+**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease、事件侧 execution capability 传递、受限 execution reverse RPC 和已绑定 session 终态关闭平台 execution 的同步；私有 case/session/observation/report 数据层已落地；Human API start/session/bootstrap 已有基础版本；设备固件、LLM、pause/cancel/take-over、重启恢复和完整设备 command 闭环尚未实现）
 **日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
 
@@ -140,7 +140,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   在私有库中产生两条互相竞争的 debugger session。
 - 带有效 `sessionId` 的设备 `debug.status` 事件会在验证 project/device 后更新私有 session；
   completed/failed/cancelled 等终态不会被乱序的后续设备事件回退，原始事件仍按 event id 幂等
-  写入 observation。
+  写入 observation。对于 completed/failed 终态，插件还会在私有 session 更新成功后，通过
+  当前事件携带的 execution capability 关闭平台侧 `DebugExecution`；关闭前会核对私有
+  session 的 `executionRef` 与 capability 的 execution ID。按 installation/device 路由的迟到旧
+  session 事件因此只会记录 observation，不会误关闭同一设备后来启动的新 execution。
 - session 创建时会校验并保存同一 installation/project 下的 target-config revision、target ID
   和可选 ELF/firmware artifact 引用；后续配置或上传新 artifact 不会改变已有 session 的输入快照。
 - 私有 session、设备状态更新和 observation 查询均带 `installation_id` scope；SSR 页面可按查询参数选择
@@ -170,8 +173,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 
 尚未实现：SoulInjector 设备固件 command handler、HTTPS 设备文件 gateway、Human API 的
 pause/cancel/take-over 与 plugin 重启后的 capability 恢复、LLM harness，以及独立 plugin-origin
-live channel。execution 绑定的 device enqueue/get/cancel 已有受限 reverse RPC 基础，Human API
-的 start/session bootstrap 基础已接入，但还没有完整设备结果闭环。不要
+live channel。execution 绑定的 device enqueue/get/cancel 已有受限 reverse RPC 基础；设备终态事件
+关闭平台 execution 的插件侧同步已接入，但设备固件 command/result producer 和完整设备结果闭环
+仍未完成。不要
 把上述未完成项误认为已经可以进行生产远程诊断。
 
 ## 3. 已确认的架构决定
@@ -662,7 +666,7 @@ command intent。
 1. 增加最小 debug execution 平台记录；**已完成基础版本**；
 2. 实现 device control lease、renew/release/expiry；**已完成基础版本**；
 3. 增加 command origin/execution/plugin/user correlation；**已完成基础版本**；
-4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle 与 device command RPC；**基础版本及同进程设备事件 capability 传递已完成**；
+4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle 与 device command RPC；**基础版本、同进程设备事件 capability 传递，以及已绑定 session 终态事件关闭平台 execution 已完成**；
 5. Human API 实现 start/pause/cancel/take-over 权限入口；**start/session bootstrap 基础已完成，
    pause/cancel/take-over 及重启恢复仍未完成**；
 6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试；**数据库
