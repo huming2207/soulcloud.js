@@ -161,6 +161,33 @@ function publicError(message: string, status: number, publicCode: string): Error
   return Object.assign(new Error(message), { status, publicCode });
 }
 
+/**
+ * Convert the wire-level command argument list into the core device command
+ * representation. The RPC contract already validates this shape, but keep a
+ * second boundary check here: this is the last point before data is persisted
+ * in the device command queue, and it must never rely on a TypeScript cast.
+ */
+export async function normalizeCommandArguments(value: unknown): Promise<CommandArgument[]> {
+  if (!Array.isArray(value) || value.length > 256) throw new Error("command arguments must be an array of at most 256 items");
+  const result: CommandArgument[] = [];
+  for (const argument of value) {
+    if (!argument || typeof argument !== "object" || Array.isArray(argument)) {
+      throw new Error("each command argument must be an object");
+    }
+    const record = argument as Record<string, unknown>;
+    if (typeof record.name !== "string" || record.name.length < 1 || record.name.length > 256 || !Object.prototype.hasOwnProperty.call(record, "value")) {
+      throw new Error("each command argument must contain a bounded name and value");
+    }
+    const raw = record.value;
+    const commandValue = raw instanceof Blob ? new Uint8Array(await raw.arrayBuffer()) : raw;
+    if (commandValue !== null && typeof commandValue !== "string" && typeof commandValue !== "bigint" && typeof commandValue !== "boolean" && !(typeof commandValue === "number" && Number.isFinite(commandValue)) && !(commandValue instanceof Uint8Array)) {
+      throw new Error(`command argument ${record.name} must be scalar`);
+    }
+    result.push({ [record.name]: commandValue as CommandArgument[string] });
+  }
+  return result;
+}
+
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
 
 interface ActiveOperation {
@@ -391,13 +418,11 @@ export class PluginManager {
       if (!encoded || encoded.command !== action.wire.command || encoded.schemaVersion !== action.wire.schemaVersion || !Array.isArray(encoded.args)) {
         throw publicError("plugin encoder output invalid: command, schemaVersion or args are malformed", 502, "invalid_action_output");
       }
-      const args: CommandArgument[] = [];
-      for (const argument of encoded.args) {
-        if (!argument || typeof argument !== "object" || typeof argument.name !== "string" || !argument.name || !Object.prototype.hasOwnProperty.call(argument, "value")) {
-          throw publicError("plugin encoder output invalid: each argument must contain a name and value", 502, "invalid_action_output");
-        }
-        const value = argument.value instanceof Blob ? new Uint8Array(await argument.value.arrayBuffer()) : argument.value;
-        args.push({ [argument.name]: value as CommandArgument[string] });
+      let args: CommandArgument[];
+      try {
+        args = await normalizeCommandArguments(encoded.args);
+      } catch (error) {
+        throw publicError(`plugin encoder output invalid: ${(error as Error).message}`, 502, "invalid_action_output");
       }
       const batch = await this.options.prisma.$transaction(async (tx) => {
         const installationRows = await tx.$queryRaw<Array<{ id: string; project_id: string; plugin_id: string; plugin_version: string; manifest_hash: string; state: string }>>`
@@ -1159,13 +1184,7 @@ export class PluginManager {
       if (!binding || binding.installationId !== operation.installationId || binding.installation.projectId !== operation.projectId || binding.installation.state !== "enabled") {
         throw new Error("device is not bound to the active plugin installation");
       }
-      const args: CommandArgument[] = [];
-      for (const argument of input.args) {
-        const value = argument.value instanceof Blob
-          ? new Uint8Array(await argument.value.arrayBuffer())
-          : argument.value;
-        args.push({ [argument.name]: value as CommandArgument[string] });
-      }
+      const args = await normalizeCommandArguments(input.args);
       operation.stagedCommands ??= [];
       operation.stagedCommands.push({ deviceId: operation.deviceId, command: { cmd: input.command, args } });
       return { accepted: true };
