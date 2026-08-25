@@ -64,6 +64,10 @@ flowchart LR
 
 ## 3. Soulcloud Device 与 Soulcloud Client
 
+> **术语约束**：不要写“低层 SWD/UART 留在 Client”。准确表述是：低层 SWD/UART
+> 由 Soulcloud Device（例如 SoulInjector 设备）的本地设备软件/固件执行；Soulcloud Client
+> 仅负责 MQTT/HTTPS 等 Soulcloud 云端通信。
+
 所有边缘硬件和边缘计算机统一称为 Soulcloud Device；Soulcloud Client 只表示运行在设备上的
 软件/固件组件，不是设备本身的别名。设备用途和体积不产生新的身份域或协议。例如运行烧录治具
 的 PC 是 Soulcloud Device；它通过本地 USB/JTAG 操作的目标板只是本地外设，除非目标板自己

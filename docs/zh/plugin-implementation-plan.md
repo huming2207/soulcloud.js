@@ -53,6 +53,10 @@ Device Broker MQTT/HTTPS 协议。
 
 ### 3.1 Soulcloud Device 与 Soulcloud Client 的术语边界
 
+> **术语约束**：不要写“低层 SWD/UART 留在 Client”。准确表述是：低层 SWD/UART
+> 由 Soulcloud Device（例如 SoulInjector 设备）的本地设备软件/固件执行；Soulcloud Client
+> 仅负责 MQTT/HTTPS 等 Soulcloud 云端通信。
+
 Soulcloud Device 是硬件或边缘计算机的身份名称；Soulcloud Client 只表示运行在该设备上的
 MQTT/HTTPS 通信软件或固件组件，不能用来代指设备本身。对于 SoulInjector，SWD/UART 的低层
 协议、时序、target 状态、轮询、重试和硬件清理都由 **SoulInjector 设备的本地设备软件/固件**
