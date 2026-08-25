@@ -166,6 +166,16 @@ describe("plugin SSR route", () => {
       uploadId,
       totalSize: 3,
     });
+    expect(uploadedArtifactInput?.input).toMatchObject({
+      uiSession: {
+        installationId,
+        projectId,
+        sub: expect.any(String),
+        pluginId: manifest.id,
+        pluginVersion: manifest.version,
+        manifestHash: "a".repeat(64),
+      },
+    });
   });
 
   test("serves a bounded artifact chunk only to an authorized internal caller", async () => {
