@@ -10,7 +10,12 @@ import {
   releaseDebugExecution,
   renewDebugExecutionLease,
 } from "../../src/plugins/executions";
-import { enqueueDebugCommand, getDebugCommand, requestDebugCommandCancellation } from "../../src/plugins/execution-commands";
+import {
+  DebugCommandIdempotencyConflictError,
+  enqueueDebugCommand,
+  getDebugCommand,
+  requestDebugCommandCancellation,
+} from "../../src/plugins/execution-commands";
 import { createPluginInstallation } from "../../src/plugins/installations";
 
 const projectId = randomUUID();
@@ -142,6 +147,26 @@ describe("durable debug execution capability", () => {
     expect(await getDebugCommand(prisma, execution.id, tokenHashE, command.id)).toMatchObject({ id: command.id, deviceId });
     const cancelled = await requestDebugCommandCancellation(prisma, execution.id, tokenHashE, command.id);
     expect(cancelled.cancelRequestedAt).not.toBeNull();
+
+    const idempotentInput = {
+      executionId: execution.id,
+      tokenHash: tokenHashE,
+      pluginId,
+      pluginVersion: "1.0.0",
+      manifestHash,
+      initiatingUserId: userId,
+      command: { cmd: "debug.identify", args: [{ probe: new Uint8Array([1, 2, 3]) }] },
+      correlationId: execution.id,
+      idempotencyKey: "identify-once",
+    };
+    const firstIdempotent = await enqueueDebugCommand(prisma, idempotentInput);
+    const repeatedIdempotent = await enqueueDebugCommand(prisma, idempotentInput);
+    expect(repeatedIdempotent.id).toBe(firstIdempotent.id);
+    await expect(enqueueDebugCommand(prisma, {
+      ...idempotentInput,
+      command: { cmd: "debug.reset", args: [] },
+    })).rejects.toBeInstanceOf(DebugCommandIdempotencyConflictError);
+
     await completeDebugExecution(prisma, execution.id, tokenHashE, "completed");
 
     const noReadCapability = await createDebugExecution(prisma, input(tokenHashF, 60_000, ["device.enqueue_command", "device.cancel_command"]));

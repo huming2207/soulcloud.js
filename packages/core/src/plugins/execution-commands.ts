@@ -1,6 +1,9 @@
 import { type PrismaClient } from "../db";
 import { enqueueBatchInTransaction } from "../queue/enqueue";
-import type { DeviceCommand as WireDeviceCommand } from "../protocol/command";
+import {
+  decodeDeviceCommandExecution,
+  type DeviceCommand as WireDeviceCommand,
+} from "../protocol/command";
 import { DebugExecutionCapabilityError } from "./executions";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -33,6 +36,15 @@ export interface DebugCommandRecord {
 
 export type DebugCommandState = "queued" | "leased" | "broker_accepted" | "device_completed" | "delivery_failed";
 
+export class DebugCommandIdempotencyConflictError extends Error {
+  readonly code = "DEBUG_COMMAND_IDEMPOTENCY_CONFLICT";
+
+  constructor() {
+    super("idempotency key is already associated with a different device command");
+    this.name = "DebugCommandIdempotencyConflictError";
+  }
+}
+
 interface RawCommandRow {
   id: string;
   batch_id: string;
@@ -44,6 +56,7 @@ interface RawCommandRow {
   broker_accepted_at: Date | string | null;
   device_completed_at: Date | string | null;
   created_at: Date | string;
+  payload: Uint8Array;
 }
 
 function assertCapabilityInput(executionId: string, tokenHash: string): void {
@@ -75,6 +88,39 @@ function mapCommand(row: RawCommandRow): DebugCommandRecord {
 function capabilitiesOf(value: unknown): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("stored debug execution capabilities are invalid");
   return value as string[];
+}
+
+function equalCommandValue(left: unknown, right: unknown): boolean {
+  if (left instanceof Uint8Array || right instanceof Uint8Array) {
+    if (!(left instanceof Uint8Array) || !(right instanceof Uint8Array) || left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index]) return false;
+    }
+    return true;
+  }
+  return left === right;
+}
+
+function equalDeviceCommand(
+  left: { cmd: string; args?: WireDeviceCommand["args"] | null },
+  right: WireDeviceCommand,
+): boolean {
+  if (left.cmd !== right.cmd) return false;
+  const leftArgs = left.args ?? [];
+  const rightArgs = right.args ?? [];
+  if (leftArgs.length !== rightArgs.length) return false;
+  for (let index = 0; index < leftArgs.length; index += 1) {
+    const leftArgument = leftArgs[index];
+    const rightArgument = rightArgs[index];
+    if (!leftArgument || !rightArgument) return false;
+    const leftKeys = Object.keys(leftArgument);
+    const rightKeys = Object.keys(rightArgument);
+    const leftKey = leftKeys[0];
+    const rightKey = rightKeys[0];
+    if (leftKeys.length !== 1 || rightKeys.length !== 1 || !leftKey || !rightKey || leftKey !== rightKey) return false;
+    if (!equalCommandValue(leftArgument[leftKey], rightArgument[rightKey])) return false;
+  }
+  return true;
 }
 
 /**
@@ -135,13 +181,17 @@ export async function enqueueDebugCommand(
     if (input.idempotencyKey) {
       const existingRows = await tx.$queryRaw<RawCommandRow[]>`
         SELECT id, batch_id, device_id, sequence, state, result_code, cancel_requested_at,
-          broker_accepted_at, device_completed_at, created_at
+          broker_accepted_at, device_completed_at, created_at, payload
         FROM device_commands
         WHERE execution_id = ${input.executionId}::uuid AND idempotency_key = ${input.idempotencyKey}
         ORDER BY created_at ASC, id ASC
         LIMIT 1
       `;
-      if (existingRows[0]) return mapCommand(existingRows[0]);
+      if (existingRows[0]) {
+        const existingExecution = decodeDeviceCommandExecution(existingRows[0].payload);
+        if (!equalDeviceCommand(existingExecution, input.command)) throw new DebugCommandIdempotencyConflictError();
+        return mapCommand(existingRows[0]);
+      }
     }
     const batch = await enqueueBatchInTransaction(tx, [device.id], input.command, {
       provenance: {
@@ -157,7 +207,7 @@ export async function enqueueDebugCommand(
     });
     const rows = await tx.$queryRaw<RawCommandRow[]>`
       SELECT id, batch_id, device_id, sequence, state, result_code, cancel_requested_at,
-        broker_accepted_at, device_completed_at, created_at
+        broker_accepted_at, device_completed_at, created_at, payload
       FROM device_commands
       WHERE batch_id = ${batch.id}::uuid AND device_id = ${device.id}::uuid
       LIMIT 1
@@ -187,7 +237,7 @@ async function findDebugCommandWithCapability(
 ): Promise<DebugCommandRecord | null> {
   const rows = await prisma.$queryRaw<RawCommandRow[]>`
     SELECT c.id, c.batch_id, c.device_id, c.sequence, c.state, c.result_code,
-      c.cancel_requested_at, c.broker_accepted_at, c.device_completed_at, c.created_at
+      c.cancel_requested_at, c.broker_accepted_at, c.device_completed_at, c.created_at, c.payload
     FROM device_commands c
     JOIN debug_executions e ON e.id = c.execution_id
     WHERE e.id = ${executionId}::uuid
@@ -234,7 +284,7 @@ export async function requestDebugCommandCancellation(
       AND c.id = ${commandId}::uuid
       AND c.state IN ('queued', 'leased', 'broker_accepted')
     RETURNING c.id, c.batch_id, c.device_id, c.sequence, c.state, c.result_code,
-      c.cancel_requested_at, c.broker_accepted_at, c.device_completed_at, c.created_at
+      c.cancel_requested_at, c.broker_accepted_at, c.device_completed_at, c.created_at, c.payload
   `;
   if (rows[0]) return mapCommand(rows[0]);
   const existing = await findDebugCommandWithCapability(prisma, executionId, tokenHash, commandId, "device.cancel_command");
