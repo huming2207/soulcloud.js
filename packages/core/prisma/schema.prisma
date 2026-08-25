@@ -454,6 +454,18 @@ model PluginManifestSnapshot {
   @@map("plugin_manifest_snapshots")
 }
 
+/// One-time plugin UI bootstrap grants consumed by Plugin Manager.
+/// The signed token remains short-lived; this row makes nonce consumption
+/// durable across Plugin Manager restarts and races between replicas.
+model PluginUiGrant {
+  nonce      String   @id @db.Uuid
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz()
+  consumedAt DateTime @default(now()) @map("consumed_at") @db.Timestamptz()
+
+  @@index([expiresAt], map: "plugin_ui_grants_expiry_idx")
+  @@map("plugin_ui_grants")
+}
+
 /// A project-level enablement of one immutable plugin manifest snapshot.
 model PluginInstallation {
   id                String                   @id @default(uuid()) @db.Uuid

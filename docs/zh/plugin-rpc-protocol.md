@@ -222,8 +222,8 @@ shell、CSP 和错误页。plugin 不能设置 cookie、CORS、CSP、redirect ta
 action route，再调用 `ui.handleAction`。该 procedure 返回 redirect intent、validation errors
 或重新渲染所需状态，不能直接绕过 Human API 权限创建 Soulcloud 副作用。当前 asset 已有路径、
 MIME、Blob 大小、manifest SHA-256 双端校验和同源代理校验；Human API grant、独立 origin `/bootstrap`
-消费、Web 前端 POST/跳转和 path-scoped cookie 已有基础实现，但 HA replay store 和 live channel
-尚未实现完整生产闭环。
+消费、Web 前端 POST/跳转和 path-scoped cookie 已有基础实现；bootstrap nonce 的 PostgreSQL
+原子单次消费与过期清理已接入，但 live channel 尚未实现完整生产闭环。
 
 目标协议允许 manifest 声明 immutable、content-hashed JavaScript/CSS asset。每个 asset 的 URL
 路径必须包含 manifest 声明的完整 SHA-256（例如 `/main/app.<sha256>.js`），避免升级后同一路径

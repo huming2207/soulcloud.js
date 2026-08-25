@@ -27,6 +27,7 @@ let renderedParams: unknown;
 let submittedAction: unknown;
 let actionTimeout: number | undefined;
 let sessionStartInput: unknown;
+const consumedGrants = new Set<string>();
 const manager = {
   ready: async () => true,
   getManifest: () => manifest,
@@ -45,6 +46,11 @@ const manager = {
   startDebugSession: async (input: unknown) => {
     sessionStartInput = input;
     return { execution: { id: randomUUID() }, sessionId: randomUUID() };
+  },
+  consumePluginUiGrant: async (nonce: string) => {
+    if (consumedGrants.has(nonce)) return false;
+    consumedGrants.add(nonce);
+    return true;
   },
 } as unknown as PluginManager;
 const server = startPluginManagerServer({ hostname: "127.0.0.1", port: 0, serviceToken: "internal-service-token", manager, uiSessionSecret: secret });

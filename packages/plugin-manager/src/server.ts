@@ -141,14 +141,6 @@ function escapeHtml(value: string): string {
 }
 
 export function startPluginManagerServer(options: PluginManagerServerOptions): { url: string; stop(): Promise<void> } {
-  const consumedUiGrants = new Map<string, number>();
-  const consumeUiGrant = (nonce: string, expiresAt: number): boolean => {
-    const now = Date.now();
-    for (const [key, expiry] of consumedUiGrants) if (expiry <= now) consumedUiGrants.delete(key);
-    if (consumedUiGrants.has(nonce)) return false;
-    consumedUiGrants.set(nonce, Math.min(expiresAt, now + 15 * 60_000));
-    return true;
-  };
   const server = Bun.serve({
     hostname: options.hostname,
     port: options.port,
@@ -172,7 +164,8 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
           const manifest = options.manager.getManifest(session.pluginId, session.pluginVersion);
           const route = manifest?.ui?.routes.find((item) => item.id === session.routeId);
           if (!route) return json(404, { error: "plugin_ui_route_not_found" });
-          if (!consumeUiGrant(session.nonce, Date.now() + (options.uiSessionTtlSeconds ?? 300) * 1_000)) return json(401, { error: "plugin_ui_grant_replayed" });
+          const expiresAt = new Date(Date.now() + (options.uiSessionTtlSeconds ?? 300) * 1_000);
+          if (!(await options.manager.consumePluginUiGrant(session.nonce, expiresAt))) return json(401, { error: "plugin_ui_grant_replayed" });
           const location = `/plugins/${session.installationId}${route.path}`;
           return new Response(null, {
             status: 303,

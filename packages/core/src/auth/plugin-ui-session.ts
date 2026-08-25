@@ -1,4 +1,5 @@
 import { createSigner, createVerifier } from "fast-jwt";
+import type { PrismaClient } from "../db";
 
 export interface PluginUiSessionConfig {
   secret: string;
@@ -23,6 +24,7 @@ type Signer = (payload: Record<string, unknown>) => string;
 type Verifier = (token: string) => unknown;
 const signers = new Map<string, Signer>();
 const verifiers = new Map<string, Verifier>();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function signPluginUiSession(config: PluginUiSessionConfig, session: Omit<PluginUiSession, "nonce">): string {
   const key = `${config.secret}:${config.ttlSeconds}`;
@@ -76,4 +78,48 @@ export function verifyPluginUiSession(config: PluginUiSessionConfig, token: stri
 
 export function pluginUiSessionCookieName(installationId: string): string {
   return `soulcloud_plugin_ui_${installationId.replaceAll("-", "")}`;
+}
+
+/**
+ * Atomically consume a UI bootstrap nonce using the database as the source of
+ * truth. The signed token is still verified by the caller; this function only
+ * closes the replay window across restarts and multiple Manager instances.
+ */
+export async function consumePluginUiGrant(
+  prisma: PrismaClient,
+  nonce: string,
+  expiresAt: Date | string,
+): Promise<boolean> {
+  if (!UUID.test(nonce)) throw new RangeError("plugin UI grant nonce must be a UUID");
+  const expiry = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+  if (!Number.isFinite(expiry.getTime())) throw new RangeError("plugin UI grant expiry is invalid");
+  const rows = await prisma.$queryRaw<Array<{ nonce: string }>>`
+    INSERT INTO plugin_ui_grants (nonce, expires_at)
+    SELECT ${nonce}::uuid, ${expiry}
+    WHERE ${expiry} > CURRENT_TIMESTAMP
+    ON CONFLICT (nonce) DO NOTHING
+    RETURNING nonce
+  `;
+  return rows.length === 1;
+}
+
+/** Remove expired one-time grants in bounded batches. */
+export async function purgePluginUiGrants(prisma: PrismaClient, batchSize = 256): Promise<number> {
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 10_000) {
+    throw new RangeError("batchSize must be between 1 and 10000");
+  }
+  const deleted = await prisma.$executeRaw`
+    WITH expired AS (
+      SELECT nonce
+      FROM plugin_ui_grants
+      WHERE expires_at <= CURRENT_TIMESTAMP
+      ORDER BY expires_at ASC
+      LIMIT ${batchSize}
+      FOR UPDATE SKIP LOCKED
+    )
+    DELETE FROM plugin_ui_grants grants
+    USING expired
+    WHERE grants.nonce = expired.nonce
+  `;
+  return Number(deleted);
 }

@@ -40,6 +40,8 @@ import {
   getDebugExecutionCapability,
   getDebugCommand,
   getDebugExecution,
+  consumePluginUiGrant,
+  purgePluginUiGrants,
   migratePluginInstallation,
   reconcilePluginInstallation,
   releaseDebugExecution,
@@ -305,6 +307,11 @@ export class PluginManager {
     }
   }
 
+  async consumePluginUiGrant(nonce: string, expiresAt: Date | string): Promise<boolean> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return consumePluginUiGrant(this.options.prisma, nonce, expiresAt);
+  }
+
   private maintain(): void {
     if (this.stopping || this.maintenanceRunning || (!this.options.eventStore?.purge && !this.options.prisma)) return;
     const running = this.runMaintenance();
@@ -321,11 +328,13 @@ export class PluginManager {
     let history = 0;
     let executions = 0;
     let leases = 0;
+    let uiGrants = 0;
     try {
       if (this.options.prisma) {
         const result = await expireDebugExecutions(this.options.prisma, Math.min(batchSize, 10_000));
         executions = result.executions;
         leases = result.leases;
+        uiGrants = await purgePluginUiGrants(this.options.prisma, Math.min(batchSize, 10_000));
       }
       if (this.options.eventStore?.purge) {
         for (let batch = 0; batch < maxBatches && !this.stopping; batch += 1) {
@@ -339,7 +348,7 @@ export class PluginManager {
           if (result.events < batchSize && result.history < batchSize) break;
         }
       }
-      this.log("plugin maintenance sweep completed", { events, history, executions, leases });
+      this.log("plugin maintenance sweep completed", { events, history, executions, leases, uiGrants });
     } catch (error) {
       this.log("plugin retention sweep failed", { error: (error as Error).message });
     }
