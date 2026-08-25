@@ -122,6 +122,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - 选中带 execution 的 debugger session 时，页面会通过受 UI session 和 installation/plugin 快照
   保护的 command-status endpoint 低频轮询 command timeline；只返回 batch、状态、结果码和时间等
   元数据，不返回设备 command payload，也不把这条临时轮询当作最终 live WebSocket 协议。
+- 同一 debugger UI session 现在可以对属于当前 execution 的单条 queued/leased/broker-accepted
+  command 请求取消；Manager 会重新校验 UI session、installation/project、execution 发起人和
+  进程内 capability，再调用 core 的 `device.cancel_command`。queued command 会进入
+  `delivery_failed` 并释放队列；已经被 broker 接受的 command 只记录取消请求，不能伪装成设备已停止。
 - `DebugExecution` 已保存平台侧长时 capability：不可变 plugin/version/manifest snapshot、
   initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
   device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
@@ -140,8 +144,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   Human API 也提供只读的 `GET .../debugger/executions/:executionId` 状态查询；它先执行项目权限
   检查，再由 Manager 重新校验 installation/project scope 和当前 user membership，只返回 execution
   摘要，不返回 token。
-  pause、
-  cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成。
+  整个 execution 的 pause/cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成；这里的
+  单条 command cancellation 不是整个 execution 的取消，也不等价于硬件已经停止。
 - oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`，以及
   受 execution capability 约束的 `context.devices.enqueueCommand`、`getCommand`、`cancelCommand`；
   Manager 会绑定父 operation、plugin/version、installation、device、token hash 和 capability
@@ -722,7 +726,8 @@ MQTT/oRPC 热路径。
    revision 存储，以及 execution→session 输入快照关联基础**；
 2. SSR case/debugger 页面；**已完成最小 case 列表/创建、plugin-origin session 创建入口、session
    摘要、installation-scoped observation timeline、target 配置页面和基于 plugin-origin session
-   的人工 action 控件、execution 发起人触发的 lease release 和页面 heartbeat 续租；session
+   的人工 action 控件、execution 发起人触发的 lease release/heartbeat 续租，以及受限的单条
+   command cancellation；session
    控制闭环和实时状态 UI 仍待实现**；
 3. 人工执行 identify/halt/read/reset/capture/close，并能在需要时释放当前 device lease；
 4. command timeline、observation、错误与报告草稿；**报告草稿/修订/定稿基础、受限 command
