@@ -63,6 +63,7 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   基础能力；Manager 另提供仅限 service token 的内部二进制读取端点并返回 offset/total/hash/final 元数据，
   当前仍不开放设备端 HTTP，也不预先决定 push staging 或 controlled pull proxy。
 - artifact 上传要求 Human API 的 `Idempotency-Key`（UUID）贯穿 API → Plugin Manager → plugin 私库；响应丢失后用同一 key 重试会返回原 artifact，而不会重复创建；上传流还有可配置的绝对 wall-clock deadline，避免卡住的 body 或大量分块长期占用资源；
+- 每个 plugin artifact chunk 响应都必须回显本次请求的 `uploadId`；Plugin Manager 在推进进度或接受完成结果前核对该身份，插件误把其他上传的响应返回时以 `invalid_plugin_output` 拒绝，不得串写上传状态；
 - SSR target 配置表单支持 textarea 和受限的 YAML 文件载入，对非法 YAML 给出受限错误状态；Human API
   同一路由接受 JSON `{yaml}` 或原始 YAML 文本，详细 schema 校验仍由 plugin 私有 parser 执行，路径返回 400，
   不把用户提交的原文拼进 redirect 或页面错误信息；
