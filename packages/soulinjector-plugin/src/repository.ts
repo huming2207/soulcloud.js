@@ -113,6 +113,7 @@ export interface CreateDebugCaseInput {
 export interface DebugSessionRecord {
   id: string;
   caseId: string;
+  installationId: string;
   soulcloudDeviceRef: string;
   executionRef: string | null;
   state: DebugSessionState;
@@ -157,6 +158,7 @@ export interface DebugObservationRecord {
 }
 
 export interface AppendDebugObservationInput {
+  installationId: string;
   projectId: string;
   sessionId: string;
   /** When present, the session must belong to this Soulcloud Device. */
@@ -169,6 +171,7 @@ export interface AppendDebugObservationInput {
 }
 
 export interface UpdateDebugSessionStateInput {
+  installationId: string;
   projectId: string;
   sessionId: string;
   soulcloudDeviceRef: string;
@@ -279,6 +282,7 @@ CREATE INDEX IF NOT EXISTS debug_cases_project_updated_idx
 CREATE TABLE IF NOT EXISTS ${schema}.debug_sessions (
   id uuid PRIMARY KEY,
   case_id uuid NOT NULL REFERENCES ${schema}.debug_cases(id) ON DELETE CASCADE,
+  installation_id uuid,
   soulcloud_device_ref uuid NOT NULL,
   execution_ref uuid,
   state text NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'paused', 'completed', 'failed', 'cancelled')),
@@ -295,12 +299,15 @@ CREATE TABLE IF NOT EXISTS ${schema}.debug_sessions (
   ended_at timestamptz
 );
 ALTER TABLE ${schema}.debug_sessions
+  ADD COLUMN IF NOT EXISTS installation_id uuid,
   ADD COLUMN IF NOT EXISTS target_config_id uuid,
   ADD COLUMN IF NOT EXISTS target_config_revision integer,
   ADD COLUMN IF NOT EXISTS target_id varchar(64),
   ADD COLUMN IF NOT EXISTS artifact_id uuid;
 CREATE INDEX IF NOT EXISTS debug_sessions_case_started_idx
   ON ${schema}.debug_sessions (case_id, started_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS debug_sessions_installation_started_idx
+  ON ${schema}.debug_sessions (installation_id, started_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS debug_sessions_device_started_idx
   ON ${schema}.debug_sessions (soulcloud_device_ref, started_at DESC, id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS debug_sessions_execution_unique
@@ -458,6 +465,7 @@ function asSessionRecord(row: QueryResultRow): DebugSessionRecord {
   return {
     id: asString(row.id, "session id"),
     caseId: asString(row.case_id, "session case id"),
+    installationId: asString(row.installation_id, "session installation id"),
     soulcloudDeviceRef: asString(row.soulcloud_device_ref, "Soulcloud Device reference"),
     executionRef: optionalString(row.execution_ref, "execution reference"),
     state: asSessionState(row.state),
@@ -887,24 +895,25 @@ export class SoulInjectorRepository {
       }
       const result = await client.query<QueryResultRow>(
         `INSERT INTO ${schema}.debug_sessions
-         (id, case_id, soulcloud_device_ref, execution_ref, plugin_version, manifest_hash, device_firmware_version,
+         (id, case_id, installation_id, soulcloud_device_ref, execution_ref, plugin_version, manifest_hash, device_firmware_version,
           target_config_id, target_config_revision, target_id, artifact_id, started_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          ON CONFLICT (execution_ref) WHERE execution_ref IS NOT NULL DO NOTHING
          RETURNING *`,
-        [randomUUID(), input.caseId, input.soulcloudDeviceRef, input.executionRef ?? null, pluginVersion, input.manifestHash.toLowerCase(), deviceFirmwareVersion, targetConfigId, targetConfigRevision, targetId, artifactId, input.startedBy],
+        [randomUUID(), input.caseId, input.installationId, input.soulcloudDeviceRef, input.executionRef ?? null, pluginVersion, input.manifestHash.toLowerCase(), deviceFirmwareVersion, targetConfigId, targetConfigRevision, targetId, artifactId, input.startedBy],
       );
       if (!result.rows[0] && input.executionRef) {
         const existingResult = await client.query<QueryResultRow>(
           `SELECT s.* FROM ${schema}.debug_sessions s
            JOIN ${schema}.debug_cases c ON c.id = s.case_id
-           WHERE s.execution_ref = $1 AND c.project_id = $2
+           WHERE s.execution_ref = $1 AND c.project_id = $2 AND s.installation_id = $3
            FOR UPDATE`,
-          [input.executionRef, input.projectId],
+          [input.executionRef, input.projectId, input.installationId],
         );
         const existing = existingResult.rows[0];
         if (!existing) throw new Error("debug session disappeared after idempotent insert");
         const sameSession = existing.case_id === input.caseId
+          && existing.installation_id === input.installationId
           && existing.soulcloud_device_ref === input.soulcloudDeviceRef
           && existing.plugin_version === pluginVersion
           && String(existing.manifest_hash).trim().toLowerCase() === input.manifestHash.toLowerCase()
@@ -928,14 +937,14 @@ export class SoulInjectorRepository {
     }
   }
 
-  async finishDebugSession(id: string, projectId: string, state: Exclude<DebugSessionState, "active" | "paused">): Promise<DebugSessionRecord | null> {
+  async finishDebugSession(id: string, installationId: string, projectId: string, state: Exclude<DebugSessionState, "active" | "paused">): Promise<DebugSessionRecord | null> {
     const result = await this.pool.query<QueryResultRow>(
       `UPDATE ${schema}.debug_sessions s
-       SET state = $3, ended_at = COALESCE(s.ended_at, CURRENT_TIMESTAMP)
+       SET state = $4, ended_at = COALESCE(s.ended_at, CURRENT_TIMESTAMP)
        FROM ${schema}.debug_cases c
-       WHERE s.id = $1 AND s.case_id = c.id AND c.project_id = $2
+       WHERE s.id = $1 AND s.installation_id = $2 AND s.case_id = c.id AND c.project_id = $3
        RETURNING s.*`,
-      [id, projectId, state],
+      [id, installationId, projectId, state],
     );
     return result.rows[0] ? asSessionRecord(result.rows[0]) : null;
   }
@@ -949,9 +958,9 @@ export class SoulInjectorRepository {
       const currentResult = await client.query<QueryResultRow>(
         `SELECT s.* FROM ${schema}.debug_sessions s
          JOIN ${schema}.debug_cases c ON c.id = s.case_id
-         WHERE s.id = $1 AND c.project_id = $2 AND s.soulcloud_device_ref = $3
+         WHERE s.id = $1 AND s.installation_id = $2 AND c.project_id = $3 AND s.soulcloud_device_ref = $4
          FOR UPDATE`,
-        [input.sessionId, input.projectId, input.soulcloudDeviceRef],
+        [input.sessionId, input.installationId, input.projectId, input.soulcloudDeviceRef],
       );
       const current = currentResult.rows[0];
       if (!current) throw new Error("debug session is not available to this project/device");
@@ -967,9 +976,9 @@ export class SoulInjectorRepository {
          WHERE id = $1 AND EXISTS (
            SELECT 1 FROM ${schema}.debug_cases c
            WHERE c.id = debug_sessions.case_id AND c.project_id = $2
-         ) AND soulcloud_device_ref = $3
+         ) AND installation_id = $3 AND soulcloud_device_ref = $6
          RETURNING *`,
-        [input.sessionId, input.projectId, input.soulcloudDeviceRef, input.state, endedAt],
+        [input.sessionId, input.projectId, input.installationId, input.state, endedAt, input.soulcloudDeviceRef],
       );
       if (!updatedResult.rows[0]) throw new Error("debug session disappeared while updating state");
       await client.query("COMMIT");
@@ -982,25 +991,25 @@ export class SoulInjectorRepository {
     }
   }
 
-  async getDebugSession(id: string, projectId: string): Promise<DebugSessionRecord | null> {
+  async getDebugSession(id: string, installationId: string, projectId: string): Promise<DebugSessionRecord | null> {
     const result = await this.pool.query<QueryResultRow>(
       `SELECT s.* FROM ${schema}.debug_sessions s
        JOIN ${schema}.debug_cases c ON c.id = s.case_id
-       WHERE s.id = $1 AND c.project_id = $2`,
-      [id, projectId],
+       WHERE s.id = $1 AND s.installation_id = $2 AND c.project_id = $3`,
+      [id, installationId, projectId],
     );
     return result.rows[0] ? asSessionRecord(result.rows[0]) : null;
   }
 
-  async listDebugSessions(projectId: string, limit = 64): Promise<DebugSessionRecord[]> {
+  async listDebugSessions(installationId: string, projectId: string, limit = 64): Promise<DebugSessionRecord[]> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("session limit must be between 1 and 256");
     const result = await this.pool.query<QueryResultRow>(
       `SELECT s.* FROM ${schema}.debug_sessions s
        JOIN ${schema}.debug_cases c ON c.id = s.case_id
-       WHERE c.project_id = $1
+       WHERE s.installation_id = $1 AND c.project_id = $2
        ORDER BY s.started_at DESC, s.id DESC
-       LIMIT $2`,
-      [projectId, limit],
+       LIMIT $3`,
+      [installationId, projectId, limit],
     );
     return result.rows.map(asSessionRecord);
   }
@@ -1019,10 +1028,10 @@ export class SoulInjectorRepository {
       const sessionResult = await client.query(
         `SELECT s.id FROM ${schema}.debug_sessions s
          JOIN ${schema}.debug_cases c ON c.id = s.case_id
-         WHERE s.id = $1 AND c.project_id = $2
-           AND ($3::text IS NULL OR s.soulcloud_device_ref = $3)
+         WHERE s.id = $1 AND s.installation_id = $2 AND c.project_id = $3
+           AND ($4::text IS NULL OR s.soulcloud_device_ref = $4)
          FOR UPDATE`,
-        [input.sessionId, input.projectId, soulcloudDeviceRef],
+        [input.sessionId, input.installationId, input.projectId, soulcloudDeviceRef],
       );
       if (!sessionResult.rows[0]) throw new Error("debug session is not available to this project");
       if (input.artifactId !== null && input.artifactId !== undefined) {
@@ -1058,16 +1067,16 @@ export class SoulInjectorRepository {
     }
   }
 
-  async listDebugObservations(sessionId: string, projectId: string, limit = 128): Promise<DebugObservationRecord[]> {
+  async listDebugObservations(sessionId: string, installationId: string, projectId: string, limit = 128): Promise<DebugObservationRecord[]> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new RangeError("observation limit must be between 1 and 512");
     const result = await this.pool.query<QueryResultRow>(
       `SELECT o.* FROM ${schema}.debug_observations o
        JOIN ${schema}.debug_sessions s ON s.id = o.session_id
        JOIN ${schema}.debug_cases c ON c.id = s.case_id
-       WHERE o.session_id = $1 AND c.project_id = $2
+       WHERE o.session_id = $1 AND s.installation_id = $2 AND c.project_id = $3
        ORDER BY o.created_at ASC, o.id ASC
-       LIMIT $3`,
-      [sessionId, projectId, limit],
+       LIMIT $4`,
+      [sessionId, installationId, projectId, limit],
     );
     return result.rows.map(asObservationRecord);
   }

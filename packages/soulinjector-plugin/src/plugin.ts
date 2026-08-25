@@ -1,5 +1,5 @@
 import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginManifest } from "@soulcloud/plugin-sdk";
-import type { AppendDebugObservationInput, CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, DebugSessionRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary, UpdateDebugSessionStateInput } from "./repository";
+import type { AppendDebugObservationInput, CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, DebugObservationRecord, DebugSessionRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary, UpdateDebugSessionStateInput } from "./repository";
 import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 import { targetSelectionArgs } from "./target-selection";
 
@@ -81,7 +81,9 @@ interface SoulInjectorPluginStore {
   saveTargetConfig(input: { installationId: string; projectId: string; createdBy: string; yaml: string }): Promise<TargetConfigRecord>;
   createDebugCase?(input: CreateDebugCaseInput): Promise<DebugCaseRecord>;
   listDebugCases?(projectId: string, limit?: number): Promise<DebugCaseRecord[]>;
-  listDebugSessions?(projectId: string, limit?: number): Promise<DebugSessionRecord[]>;
+  listDebugSessions?(installationId: string, projectId: string, limit?: number): Promise<DebugSessionRecord[]>;
+  getDebugSession?(id: string, installationId: string, projectId: string): Promise<DebugSessionRecord | null>;
+  listDebugObservations?(sessionId: string, installationId: string, projectId: string, limit?: number): Promise<DebugObservationRecord[]>;
   appendDebugObservation?(input: AppendDebugObservationInput): Promise<unknown>;
   updateDebugSessionState?(input: UpdateDebugSessionStateInput): Promise<DebugSessionRecord>;
   createDebugSession?(input: Parameters<SoulInjectorRepository["createDebugSession"]>[0]): Promise<DebugSessionRecord>;
@@ -187,16 +189,16 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
         if (parsed.data.sessionId && isUuid(parsed.data.sessionId)) {
           if (repository.updateDebugSessionState) {
             const state = sessionStateForDeviceState(parsed.data.state);
-            if (state) await repository.updateDebugSessionState({ projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, state });
+            if (state) await repository.updateDebugSessionState({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, state });
           }
-          if (repository.appendDebugObservation) await repository.appendDebugObservation({ projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
+          if (repository.appendDebugObservation) await repository.appendDebugObservation({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
         }
         return { updates: eventUpdates(parsed.data) };
       }
       const parsed = debugLogSchema.safeParse(event.payload);
       if (!parsed.success) return { logs: [{ level: "warn", message: "ignored malformed SoulInjector debug.log event" }] };
       if (parsed.data.sessionId && isUuid(parsed.data.sessionId)) {
-        if (repository.appendDebugObservation) await repository.appendDebugObservation({ projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
+        if (repository.appendDebugObservation) await repository.appendDebugObservation({ installationId: context.installation.id, projectId: context.installation.projectId, sessionId: parsed.data.sessionId, soulcloudDeviceRef: context.device.id, eventRef: event.id, source: "device", kind: event.kind, structuredData: parsed.data });
       }
       return { updates: [{ entityKey: "debug.last_message", value: parsed.data.message }], logs: [{ level: parsed.data.level, message: parsed.data.message }] };
     },
@@ -243,7 +245,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
       debugger: async (input) => {
         const saved = await repository.getLatestTargetConfig(input.installationId);
         const cases = repository.listDebugCases ? await repository.listDebugCases(input.projectId, 64) : [];
-        const sessions = repository.listDebugSessions ? await repository.listDebugSessions(input.projectId, 64) : [];
+        const sessions = repository.listDebugSessions ? await repository.listDebugSessions(input.installationId, input.projectId, 64) : [];
         return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions }), title: "SoulInjector debugger", cache: "no-store" };
       },
     },

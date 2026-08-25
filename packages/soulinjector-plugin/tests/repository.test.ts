@@ -44,8 +44,8 @@ describe("SoulInjector observation scope", () => {
       query: async (query: string, params?: unknown[]) => {
         if (query.includes("SELECT s.id FROM")) {
           return {
-            rows: params?.[2] === "device-1" ? [{ id: "session-1" }] : [],
-            rowCount: params?.[2] === "device-1" ? 1 : 0,
+            rows: params?.[3] === "device-1" ? [{ id: "session-1" }] : [],
+            rowCount: params?.[3] === "device-1" ? 1 : 0,
           };
         }
         if (query.includes("INSERT INTO soul_injector_plugin.debug_observations")) {
@@ -69,6 +69,7 @@ describe("SoulInjector observation scope", () => {
     } as unknown as PoolClient;
     const repository = new SoulInjectorRepository({ connect: async () => client } as unknown as Pool);
     await expect(repository.appendDebugObservation({
+      installationId: "installation-1",
       projectId: "project-1",
       sessionId: "session-1",
       soulcloudDeviceRef: "device-1",
@@ -78,6 +79,7 @@ describe("SoulInjector observation scope", () => {
       structuredData: { state: "running" },
     })).resolves.toMatchObject({ sessionId: "session-1" });
     await expect(repository.appendDebugObservation({
+      installationId: "installation-1",
       projectId: "project-1",
       sessionId: "session-1",
       soulcloudDeviceRef: "device-2",
@@ -104,6 +106,7 @@ describe("SoulInjector debug session idempotency", () => {
   const existing = {
     id: "00000000-0000-4000-8000-000000000006",
     case_id: input.caseId,
+    installation_id: input.installationId,
     soulcloud_device_ref: input.soulcloudDeviceRef,
     execution_ref: input.executionRef,
     state: "active",
@@ -179,8 +182,24 @@ describe("SoulInjector debug session idempotency", () => {
       artifactId,
     });
     expect(result).toMatchObject({ targetConfigId, targetConfigRevision: 2, targetId: "fixture", artifactId });
-    const insertParams = paramsSeen.find((params) => params.length === 12);
-    expect(insertParams?.slice(7)).toEqual([targetConfigId, 2, "fixture", artifactId, input.startedBy]);
+    const insertParams = paramsSeen.find((params) => params.length === 13);
+    expect(insertParams?.slice(8)).toEqual([targetConfigId, 2, "fixture", artifactId, input.startedBy]);
+  });
+});
+
+describe("SoulInjector installation session scope", () => {
+  test("applies installation scope before returning session lists", async () => {
+    const calls: { query: string; params?: unknown[] }[] = [];
+    const pool = {
+      query: async (query: string, params?: unknown[]) => {
+        calls.push({ query, params });
+        return { rows: [], rowCount: 0 };
+      },
+    } as unknown as Pool;
+    const repository = new SoulInjectorRepository(pool);
+    await expect(repository.listDebugSessions("installation-1", "project-1", 8)).resolves.toEqual([]);
+    expect(calls[0]?.query).toContain("s.installation_id = $1");
+    expect(calls[0]?.params).toEqual(["installation-1", "project-1", 8]);
   });
 });
 
@@ -188,6 +207,7 @@ describe("SoulInjector device session state", () => {
   const base = {
     id: "00000000-0000-4000-8000-000000000016",
     case_id: "00000000-0000-4000-8000-000000000017",
+    installation_id: "00000000-0000-4000-8000-000000000022",
     soulcloud_device_ref: "00000000-0000-4000-8000-000000000018",
     execution_ref: "00000000-0000-4000-8000-000000000019",
     state: "active",
@@ -219,6 +239,7 @@ describe("SoulInjector device session state", () => {
     const updated = { ...base, state: "completed", ended_at: new Date(1) };
     const fake = repositoryForState(base, updated);
     const result = await fake.repository.updateDebugSessionState({
+      installationId: base.installation_id as string,
       projectId: "00000000-0000-4000-8000-000000000021",
       sessionId: base.id,
       soulcloudDeviceRef: base.soulcloud_device_ref,
@@ -232,6 +253,7 @@ describe("SoulInjector device session state", () => {
     const terminal = { ...base, state: "failed", ended_at: new Date(1) };
     const fake = repositoryForState(terminal);
     const result = await fake.repository.updateDebugSessionState({
+      installationId: base.installation_id as string,
       projectId: "00000000-0000-4000-8000-000000000021",
       sessionId: base.id,
       soulcloudDeviceRef: base.soulcloud_device_ref,

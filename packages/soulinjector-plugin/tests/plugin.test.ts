@@ -103,6 +103,7 @@ describe("SoulInjector plugin", () => {
         return {
           id: sessionId,
           caseId: input.caseId,
+          installationId: input.installationId,
           soulcloudDeviceRef: input.soulcloudDeviceRef,
           executionRef: input.executionRef ?? null,
           state: "active",
@@ -149,6 +150,7 @@ describe("SoulInjector plugin", () => {
       listDebugSessions: async () => [{
         id: sessionId,
         caseId: saved.id,
+        installationId: saved.installationId,
         soulcloudDeviceRef: "soulinjector-device-1",
         executionRef: "00000000-0000-4000-8000-000000000007",
         state: "active",
@@ -208,8 +210,8 @@ describe("SoulInjector plugin", () => {
       device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
     });
     expect(result.updates).toEqual([{ entityKey: "debug.state", value: "running" }, { entityKey: "debug.session_id", value: sessionId }]);
-    expect(sessionStates).toEqual([{ projectId: saved.projectId, sessionId, soulcloudDeviceRef: saved.installationId, state: "active" }]);
-    expect(observations).toEqual([{ projectId: saved.projectId, sessionId, soulcloudDeviceRef: saved.installationId, eventRef: "broker-event-1", source: "device", kind: "debug.status", structuredData: { state: "running", sessionId } }]);
+    expect(sessionStates).toEqual([{ installationId: saved.installationId, projectId: saved.projectId, sessionId, soulcloudDeviceRef: saved.installationId, state: "active" }]);
+    expect(observations).toEqual([{ installationId: saved.installationId, projectId: saved.projectId, sessionId, soulcloudDeviceRef: saved.installationId, eventRef: "broker-event-1", source: "device", kind: "debug.status", structuredData: { state: "running", sessionId } }]);
   });
 
   test("lists target configuration revision metadata without exposing YAML", async () => {

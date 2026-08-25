@@ -200,7 +200,7 @@ debug_cases
   id, project_ref, target_unit_ref, state, title, created_by_ref, assigned_to_ref
 
 debug_sessions
-  id, case_id, soulcloud_device_ref, execution_ref, state
+  id, case_id, installation_id, soulcloud_device_ref, execution_ref, state
   plugin_version, manifest_hash, device_firmware_version
   target_config_id, target_config_revision, target_id, artifact_id
   started_by_ref, controller_ref, started_at, ended_at
