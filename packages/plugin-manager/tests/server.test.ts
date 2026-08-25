@@ -183,4 +183,31 @@ describe("plugin SSR route", () => {
     expect(await response.json()).not.toHaveProperty("executionToken");
     expect(sessionStartInput).toMatchObject({ installationId, projectId, caseId: expect.any(String), leaseMs: 60_000, ttlMs: 86_400_000 });
   });
+
+  test("maps an active debug execution conflict to HTTP 409", async () => {
+    const conflictManager = {
+      ...manager,
+      startDebugSession: async () => {
+        throw Object.assign(new Error("device already has an active debug execution"), { code: "DEBUG_EXECUTION_CONFLICT" });
+      },
+    } as unknown as PluginManager;
+    const conflictServer = startPluginManagerServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      serviceToken: "internal-service-token",
+      manager: conflictManager,
+      uiSessionSecret: secret,
+    });
+    try {
+      const response = await fetch(`${conflictServer.url}internal/plugins/debugger/sessions`, {
+        method: "POST",
+        headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+        body: JSON.stringify({ installationId, projectId, deviceId: randomUUID(), userId: randomUUID(), caseId: randomUUID() }),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: "conflict" });
+    } finally {
+      await conflictServer.stop();
+    }
+  });
 });

@@ -75,12 +75,15 @@ function failure(error: unknown): Response {
     ? String((error as { publicCode: unknown }).publicCode)
     : undefined;
   const message = error instanceof Error ? error.message : "plugin manager operation failed";
+  const errorCode = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code: unknown }).code)
+    : undefined;
   const mapped = Number.isInteger(explicitStatus) && explicitStatus! >= 400 && explicitStatus! <= 599
     ? explicitStatus!
     : message.startsWith("invalid action input") ? 400
       : message.includes("plugin encoder") ? 502
         : message.includes("not found") ? 404
-          : message.includes("disabled") || message.includes("changed concurrently") || message.includes("changed while") ? 409
+          : errorCode === "DEBUG_EXECUTION_CONFLICT" || message.includes("device already has an active debug execution") || message.includes("disabled") || message.includes("changed concurrently") || message.includes("changed while") ? 409
             : 500;
   const publicMessage = mapped >= 500 && mapped !== 502 ? "plugin manager operation failed" : message;
   const code = explicitCode && ["invalid_action_input", "invalid_action_output", "action_not_found", "human_approval_required", "invalid_plugin_output", "payload_too_large", "plugin_ui_invalid_input", "plugin_ui_invalid_output", "plugin_ui_session_invalid", "plugin_manager_overloaded"].includes(explicitCode)
