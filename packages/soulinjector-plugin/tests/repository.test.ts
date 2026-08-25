@@ -89,6 +89,28 @@ describe("SoulInjector observation scope", () => {
       structuredData: { state: "running" },
     })).rejects.toThrow("debug session is not available to this project");
   });
+
+  test("requires observation artifacts to belong to the same installation", async () => {
+    const queries: { query: string; params?: unknown[] }[] = [];
+    const client = {
+      query: async (query: string, params?: unknown[]) => {
+        queries.push({ query, params });
+        if (query.includes("SELECT s.id FROM")) return { rows: [{ id: "session-1" }], rowCount: 1 };
+        if (query.includes("FROM soul_injector_plugin.debug_artifacts")) return { rows: [{ id: "artifact-1" }], rowCount: 1 };
+        if (query.includes("INSERT INTO soul_injector_plugin.debug_observations")) return {
+          rows: [{ id: "observation-1", session_id: "session-1", event_ref: null, source: "plugin", kind: "snapshot", structured_data: {}, artifact_id: "artifact-1", created_at: new Date(0) }],
+          rowCount: 1,
+        };
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    } as unknown as PoolClient;
+    const repository = new SoulInjectorRepository({ connect: async () => client } as unknown as Pool);
+    await repository.appendDebugObservation({ installationId: "installation-1", projectId: "project-1", sessionId: "session-1", artifactId: "artifact-1", source: "plugin", kind: "snapshot", structuredData: {} });
+    const artifactQuery = queries.find((item) => item.query.includes("FROM soul_injector_plugin.debug_artifacts"));
+    expect(artifactQuery?.query).toContain("installation_id = $2");
+    expect(artifactQuery?.params).toEqual(["artifact-1", "installation-1", "project-1"]);
+  });
 });
 
 describe("SoulInjector debug session idempotency", () => {

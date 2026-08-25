@@ -776,10 +776,10 @@ export class SoulInjectorRepository {
     }
   }
 
-  async getArtifact(id: string): Promise<(DebugArtifactRecord & { bytes: Uint8Array }) | null> {
+  async getArtifact(id: string, installationId: string, projectId: string): Promise<(DebugArtifactRecord & { bytes: Uint8Array }) | null> {
     const result = await this.pool.query<QueryResultRow>(
-      `SELECT * FROM ${schema}.debug_artifacts WHERE id = $1`,
-      [id],
+      `SELECT * FROM ${schema}.debug_artifacts WHERE id = $1 AND installation_id = $2 AND project_id = $3`,
+      [id, installationId, projectId],
     );
     const row = result.rows[0];
     if (!row) return null;
@@ -1036,8 +1036,8 @@ export class SoulInjectorRepository {
       if (!sessionResult.rows[0]) throw new Error("debug session is not available to this project");
       if (input.artifactId !== null && input.artifactId !== undefined) {
         const artifactResult = await client.query(
-          `SELECT id FROM ${schema}.debug_artifacts WHERE id = $1 AND project_id = $2`,
-          [input.artifactId, input.projectId],
+          `SELECT id FROM ${schema}.debug_artifacts WHERE id = $1 AND installation_id = $2 AND project_id = $3`,
+          [input.artifactId, input.installationId, input.projectId],
         );
         if (!artifactResult.rows[0]) throw new Error("observation artifact is not available to this project");
       }
