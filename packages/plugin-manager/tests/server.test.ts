@@ -34,6 +34,7 @@ let uiDeviceActionInput: unknown;
 let uiExecutionReleaseInput: unknown;
 let uiExecutionRenewInput: unknown;
 let uiCommandCancelInput: unknown;
+let executionPauseInput: unknown;
 let uiActionError: unknown;
 let sessionStartInput: unknown;
 let uiSessionStartInput: unknown;
@@ -107,6 +108,10 @@ const manager = {
     updatedAt: new Date(0).toISOString(),
     finishedAt: null,
   }),
+  pauseDebugExecutionForUser: async (input: unknown) => {
+    executionPauseInput = input;
+    return { id: (input as { executionId: string }).executionId, installationId, deviceId: randomUUID(), initiatingUserId: (input as { userId: string }).userId, pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: "a".repeat(64), allowedCapabilities: [], state: "paused" as const, deviceLeaseExpiresAt: null, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), createdAt: new Date(0).toISOString(), updatedAt: new Date().toISOString(), finishedAt: null };
+  },
   consumePluginUiGrant: async (nonce: string) => {
     if (consumedGrants.has(nonce)) return false;
     consumedGrants.add(nonce);
@@ -303,6 +308,25 @@ describe("plugin SSR route", () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).not.toHaveProperty("tokenHash");
+  });
+
+  test("pauses a scoped debug execution only through the authenticated internal API", async () => {
+    const executionId = randomUUID();
+    const userId = randomUUID();
+    const response = await fetch(`${server.url}internal/plugins/debugger/executions/pause`, {
+      method: "POST",
+      headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+      body: JSON.stringify({ executionId, installationId, projectId, userId }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: executionId, state: "paused", deviceLeaseExpiresAt: null });
+    expect(executionPauseInput).toEqual({ executionId, installationId, projectId, userId });
+    const unauthorized = await fetch(`${server.url}internal/plugins/debugger/executions/pause`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ executionId, installationId, projectId, userId }),
+    });
+    expect(unauthorized.status).toBe(401);
   });
 
   test("reports invalid plugin UI output as a 502 plugin error", async () => {
