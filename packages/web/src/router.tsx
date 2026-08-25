@@ -36,6 +36,9 @@ const RolloutDetailPage = lazy(() =>
 const OtaJobPage = lazy(() =>
   import("./pages/OtaJobPage").then((m) => ({ default: m.OtaJobPage })),
 );
+const PluginUiLaunchPage = lazy(() =>
+  import("./pages/PluginUiLaunchPage").then((m) => ({ default: m.PluginUiLaunchPage })),
+);
 const NotFoundPage = lazy(() =>
   import("./pages/NotFoundPage").then((m) => ({ default: m.NotFoundPage })),
 );
@@ -70,6 +73,7 @@ export const router = createBrowserRouter([
       { path: "/rollouts", element: withLoader(<RolloutsPage />) },
       { path: "/rollouts/:rolloutId", element: withLoader(<RolloutDetailPage />) },
       { path: "/ota-jobs/:jobId", element: withLoader(<OtaJobPage />) },
+      { path: "/plugin-ui/:installationId/:routeId", element: withLoader(<PluginUiLaunchPage />) },
     ],
   },
   { path: "*", element: withLoader(<NotFoundPage />) },

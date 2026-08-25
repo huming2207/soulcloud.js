@@ -1,7 +1,7 @@
 /**
  * API layer tests: URL / query / body construction for the typed helpers.
  */
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 const calls: Array<{
   method: string;
@@ -31,6 +31,7 @@ mock.module("./http", () => ({ http: httpMock, errorMessage: (e: unknown) => Str
 const devices = await import("./devices");
 const logs = await import("./logs");
 const firmware = await import("./firmware");
+const plugins = await import("./plugins");
 
 beforeEach(() => {
   calls.length = 0;
@@ -140,5 +141,38 @@ describe("api/firmware", () => {
     expect(form.get("version")).toBe("v2.0.0");
     expect(form.get("bin")).toBeInstanceOf(File);
     expect(form.get("elf")).toBeInstanceOf(File);
+  });
+});
+
+describe("api/plugins", () => {
+  test("fetchPluginUiSession keeps the bootstrap grant in the response body", async () => {
+    await plugins.fetchPluginUiSession("installation/1", "debugger", "en");
+    expect(httpMock.get).toHaveBeenCalledWith(
+      "/v1/plugin-installations/installation%2F1/ui-session/debugger",
+      { params: { locale: "en" } },
+    );
+  });
+
+  test("posts the one-time grant to the dedicated origin without putting it in the URL", () => {
+    const formPrototype = Object.getPrototypeOf(document.createElement("form")) as { submit: () => void };
+    const submit = spyOn(formPrototype, "submit").mockImplementation(() => {});
+    try {
+      plugins.postPluginUiBootstrap({
+        bootstrap_url: "https://plugins.example.test/bootstrap",
+        bootstrap_token: "one-time-token",
+        path: "/plugins/i/debugger",
+        expires_in: 300,
+      });
+      const form = document.body.querySelector("form");
+      expect(form?.method).toBe("POST");
+      expect(form?.action).toBe("https://plugins.example.test/bootstrap");
+      expect(form?.querySelector("input")?.name).toBe("bootstrap_token");
+      expect(form?.querySelector("input")?.value).toBe("one-time-token");
+      expect(form?.action).not.toContain("one-time-token");
+      expect(submit).toHaveBeenCalledTimes(1);
+      form?.remove();
+    } finally {
+      submit.mockRestore();
+    }
   });
 });
