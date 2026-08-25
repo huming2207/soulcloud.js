@@ -1,5 +1,5 @@
 import { definePlugin, type ActionEncoder, type EntityUpdate, type PluginDefinition, type PluginManifest } from "@soulcloud/plugin-sdk";
-import type { SoulInjectorRepository, TargetConfigRecord } from "./repository";
+import type { SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord } from "./repository";
 
 export const SOULINJECTOR_PLUGIN_ID = "soulcloud.soulinjector-debugger";
 export const SOULINJECTOR_PLUGIN_VERSION = "0.1.0";
@@ -70,6 +70,7 @@ const manifest = {
 interface SoulInjectorPluginStore {
   saveTargetConfig(input: { installationId: string; projectId: string; createdBy: string; yaml: string }): Promise<TargetConfigRecord>;
   getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null>;
+  storeArtifactChunk(input: { installationId: string; projectId: string; userId: string; uploadId: string; kind: "elf" | "firmware"; filename: string; contentType: string; totalSize: number; offset: number; final: boolean; chunk: Uint8Array }): Promise<StoreArtifactChunkOutput>;
 }
 
 function value(input: unknown, key: string): unknown {
@@ -154,6 +155,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
       const saved = await repository.saveTargetConfig({ installationId: input.installationId, projectId: input.projectId, createdBy: input.userId, yaml: input.yaml });
       return { configId: saved.id, revision: saved.revision, sha256: saved.sha256, targetCount: saved.config.targets.length };
     },
+    storeArtifactChunk: async (input) => repository.storeArtifactChunk(input),
     render: {
       debugger: async (input) => {
         const saved = await repository.getLatestTargetConfig(input.installationId);

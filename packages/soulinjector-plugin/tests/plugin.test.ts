@@ -18,6 +18,7 @@ function store() {
   return {
     saveTargetConfig: async () => saved,
     getLatestTargetConfig: async () => saved,
+    storeArtifactChunk: async (input: { uploadId: string; offset: number; chunk: Uint8Array; final: boolean }) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? saved.id : null, sha256: input.final ? saved.sha256 : null }),
   };
 }
 
@@ -40,6 +41,7 @@ describe("SoulInjector plugin", () => {
     const repository = {
       saveTargetConfig: async (input: { createdBy: string }) => { calls.push(input.createdBy); return saved; },
       getLatestTargetConfig: async () => saved,
+      storeArtifactChunk: async (input: { uploadId: string; offset: number; chunk: Uint8Array; final: boolean }) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? saved.id : null, sha256: input.final ? saved.sha256 : null }),
     };
     const plugin = createSoulInjectorPlugin(repository);
     const configured = await plugin.configureTarget!({ operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, userId: saved.createdBy, yaml: saved.yaml }, { signal: AbortSignal.timeout(1000) });
@@ -47,5 +49,11 @@ describe("SoulInjector plugin", () => {
     const result = await plugin.handleAction!["debugger"]!({ yaml: saved.yaml }, { requestId: "request", installationId: saved.installationId, projectId: saved.projectId, user: { id: saved.createdBy, locale: "en", permissions: [] }, routeId: "debugger", params: {} });
     expect(result).toEqual({ redirect: `/plugins/${saved.installationId}/debugger` });
     expect(calls).toEqual([saved.createdBy, saved.createdBy]);
+  });
+
+  test("passes artifact chunks to the private store", async () => {
+    const plugin = createSoulInjectorPlugin(store());
+    const result = await plugin.storeArtifactChunk!({ operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, userId: saved.createdBy, uploadId: saved.id, kind: "firmware", filename: "image.bin", contentType: "application/octet-stream", totalSize: 3, offset: 0, final: true, chunk: Uint8Array.of(1, 2, 3) }, { signal: AbortSignal.timeout(1000) });
+    expect(result).toMatchObject({ uploadId: saved.id, receivedBytes: 3, complete: true, artifactId: saved.id });
   });
 });
