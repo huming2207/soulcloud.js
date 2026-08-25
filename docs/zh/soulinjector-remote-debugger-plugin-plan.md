@@ -126,6 +126,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   command 请求取消；Manager 会重新校验 UI session、installation/project、execution 发起人和
   进程内 capability，再调用 core 的 `device.cancel_command`。queued command 会进入
   `delivery_failed` 并释放队列；已经被 broker 接受的 command 只记录取消请求，不能伪装成设备已停止。
+- debugger UI 现在可以通过 installation/project/plugin snapshot 保护的 execution 状态 endpoint
+  读取 `active/paused/terminal` 生命周期；bundle 会在 lease 已释放、execution 过期或终止时立即
+  禁用设备操作按钮，不再等下一次 heartbeat 失败才反映状态。
 - `DebugExecution` 已保存平台侧长时 capability：不可变 plugin/version/manifest snapshot、
   initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
   device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
@@ -733,8 +736,8 @@ MQTT/oRPC 热路径。
    revision 存储，以及 execution→session 输入快照关联基础**；
 2. SSR case/debugger 页面；**已完成最小 case 列表/创建、plugin-origin session 创建入口、session
    摘要、installation-scoped observation timeline、target 配置页面和基于 plugin-origin session
-   的人工 action 控件、execution 发起人触发的 lease release/heartbeat 续租、Human API pause，以及受限的单条
-   command cancellation；session
+   的人工 action 控件、execution 发起人触发的 lease release/heartbeat 续租、Human API pause、scoped
+   execution 状态反馈，以及受限的单条 command cancellation；session
    控制闭环和实时状态 UI 仍待实现**；
 3. 人工执行 identify/halt/read/reset/capture/close，并能在需要时释放当前 device lease；
 4. command timeline、observation、错误与报告草稿；**报告草稿/修订/定稿基础、受限 command
