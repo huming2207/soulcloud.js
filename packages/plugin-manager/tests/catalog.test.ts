@@ -397,6 +397,9 @@ describe("plugin catalog connection state", () => {
           };
         },
       },
+      userProject: {
+        findUnique: async () => ({ userId: "00000000-0000-4000-8000-000000000002" }),
+      },
     };
     const manager = new PluginManager({
       endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
@@ -437,6 +440,39 @@ describe("plugin catalog connection state", () => {
     expect(reads).toBe(2);
   });
 
+  test("rejects a plugin UI session after project membership is removed", async () => {
+    const persisted = manifest("1.0.0");
+    const manifestHash = await sha256Hex(canonicalJson(persisted));
+    const installationId = randomUUID();
+    const projectId = randomUUID();
+    const userId = randomUUID();
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000,
+      prisma: {
+        pluginInstallation: {
+          findUnique: async () => ({ projectId, pluginId: persisted.id, pluginVersion: persisted.version, manifestHash, state: "enabled" }),
+        },
+        userProject: { findUnique: async () => null },
+      } as never,
+    });
+    const session: PluginUiSession = {
+      sub: userId,
+      projectId,
+      installationId,
+      pluginId: persisted.id,
+      pluginVersion: persisted.version,
+      manifestHash,
+      routeId: "main",
+      permissions: [],
+      locale: "en",
+      nonce: randomUUID(),
+    };
+
+    await expect(manager.renderPluginUi(session, "request", {})).rejects.toThrow("no longer valid");
+  });
+
   test("rejects an asset whose MIME differs from the manifest", async () => {
     const bytes = new TextEncoder().encode("console.log('asset');");
     const assetHash = createHash("sha256").update(bytes).digest("hex");
@@ -459,6 +495,9 @@ describe("plugin catalog connection state", () => {
           manifestHash,
           state: "enabled",
         }),
+      },
+      userProject: {
+        findUnique: async () => ({ userId: randomUUID() }),
       },
     };
     const manager = new PluginManager({
@@ -517,6 +556,9 @@ describe("plugin catalog connection state", () => {
           manifestHash,
           state: "enabled",
         }),
+      },
+      userProject: {
+        findUnique: async () => ({ userId: randomUUID() }),
       },
     };
     const manager = new PluginManager({

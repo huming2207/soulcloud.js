@@ -1448,18 +1448,25 @@ export class PluginManager {
   }
 
   private async assertUiSessionCurrent(session: PluginUiSession): Promise<void> {
-    const installation = await this.options.prisma!.pluginInstallation.findUnique({
-      where: { id: session.installationId },
-      select: {
-        projectId: true,
-        pluginId: true,
-        pluginVersion: true,
-        manifestHash: true,
-        state: true,
-      },
-    });
+    const [installation, membership] = await Promise.all([
+      this.options.prisma!.pluginInstallation.findUnique({
+        where: { id: session.installationId },
+        select: {
+          projectId: true,
+          pluginId: true,
+          pluginVersion: true,
+          manifestHash: true,
+          state: true,
+        },
+      }),
+      this.options.prisma!.userProject.findUnique({
+        where: { userId_projectId: { userId: session.sub, projectId: session.projectId } },
+        select: { userId: true },
+      }),
+    ]);
     if (
       !installation ||
+      !membership ||
       installation.state !== "enabled" ||
       installation.projectId !== session.projectId ||
       installation.pluginId !== session.pluginId ||
