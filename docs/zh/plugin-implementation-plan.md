@@ -268,10 +268,11 @@ Entity completion 已落地。真实设备 publish/掉电 sequence 仍是退出�
 
 ## 阶段 6：Plugin UI MVP
 
-**状态：SSR 与 client asset 传输基础纵切已完成，产品 MVP 未完成。** Human API 能签发短期
+**状态：SSR、client asset 传输和 Web bootstrap launch 基础纵切已完成，产品 MVP 未完成。** Human API 能签发短期
 path-scoped HttpOnly session cookie，Manager 能验签并转发有界 HTML fragment；manifest/contract/
 runtime 已有 `ui.asset`，并通过 Manager 同源代理一个最小 client bundle。当前 bundle 尚未做
-content hash，独立 plugin-origin bootstrap、`context.ui.getData` 和实时 UI channel 仍未完成。
+content hash；独立 plugin-origin 的 Web POST/跳转已接入，但 HA replay store、`context.ui.getData`
+和实时 UI channel 仍未完成。
 RSC 与 Manager 进程内执行 plugin code 仍不在范围内。
 
 ### Session 与路由
