@@ -22,8 +22,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   target，不因被调试而成为 Soulcloud Device。
 - **Soulcloud Client** 只表示运行在 Soulcloud Device 上的 Soulcloud 通信软件/固件组件；
   描述硬件执行主体时必须写“设备”或“SoulInjector 设备”，不能用 Client 代指设备。
-- SWD/UART 的低层协议、时序、target 状态、重试、轮询和批量读写由 SoulInjector 设备本地
-  执行。云端只下发高层、有界、可取消的 debugger command。
+- SWD/UART 的低层协议、时序、target 状态、重试、轮询和批量读写由 SoulInjector 设备本地的
+  设备软件/固件执行。该设备软件/固件可以包含 Soulcloud Client 通信组件，但低层能力的归属
+  是设备，不是一个叫 Client、Station 或 Agent 的独立系统角色；云端只下发高层、有界、可取消
+  的 debugger command。
 - plugin 只在云端自己的容器中运行；它不能连接 Device Broker、SoulInjector 设备、
   Soulcloud PostgreSQL 或任何 SWD/UART/JTAG/USB 硬件。
 - plugin 通过 Plugin Manager 获取所有 Soulcloud 范围内的 device、command、artifact、用户

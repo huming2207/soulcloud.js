@@ -34,7 +34,7 @@ flowchart LR
     Web[Web / Browser] --> HumanAPI[Human API]
     Web -->|/plugins/* + 短期 UI session| Manager[Plugin Manager]
 
-    Device[Soulcloud Device\nSoulcloud Client] <-->|MQTT over WSS| Broker[Device Broker]
+    Device[Soulcloud Device\n设备软件/固件含 Soulcloud Client] <-->|MQTT over WSS| Broker[Device Broker]
     Device <-->|HTTPS: OTA / files| HumanAPI
 
     HumanAPI --> DB[(PostgreSQL)]
@@ -62,11 +62,12 @@ flowchart LR
 - Docker Compose、systemd 或 Kubernetes 管理进程和容器生命周期。Soulcloud 代码不 spawn、
   kill、restart 容器，也不访问 Docker socket。
 
-## 3. Soulcloud Device 与 Client
+## 3. Soulcloud Device 与 Soulcloud Client
 
-所有边缘端统一使用 Soulcloud Device/Soulcloud Client。设备用途和体积不产生新的身份域或
-协议。例如运行烧录治具的 PC 是 Soulcloud Device；它通过本地 USB/JTAG 操作的目标板只是
-本地外设，除非目标板自己联网并运行 Soulcloud Client。
+所有边缘硬件和边缘计算机统一称为 Soulcloud Device；Soulcloud Client 只表示运行在设备上的
+软件/固件组件，不是设备本身的别名。设备用途和体积不产生新的身份域或协议。例如运行烧录治具
+的 PC 是 Soulcloud Device；它通过本地 USB/JTAG 操作的目标板只是本地外设，除非目标板自己
+联网并运行 Soulcloud Client。
 
 设备能力直接实现并编译进设备软件/固件。例如治具设备可以实现：
 
@@ -80,11 +81,12 @@ run_functional_test
 
 云端 plugin 只能调用设备已实现的 DeviceCommand。部署 plugin 不能向设备动态注入代码；
 增加硬件能力需要发布新的设备软件/固件。`Soulcloud Client` 是设备上的 Soulcloud 通信软件
-名称，不用来代指执行硬件操作的设备本身。
+或固件组件名称，不用来代指执行硬件操作的设备本身。
 
 对于带调试/测试硬件的设备，USB/JTAG/SWD/UART 的低层协议、时序、轮询、重试和硬件状态
-管理由设备上的设备软件或固件执行；云端只下发设备已实现的、有界 DeviceCommand。这里的
-“设备软件/固件”描述执行层，不是另一个叫 Client、Station 或 Agent 的系统角色。
+管理由 Soulcloud Device 本地的设备软件或固件执行；云端只下发设备已实现的、有界
+DeviceCommand。设备软件/固件中可以包含 Soulcloud Client 通信组件，但“设备”是硬件执行主体，
+“Soulcloud Client”不是设备的另一种称呼，也不是独立的 Station 或 Agent 系统角色。
 
 设备侧要求：
 
