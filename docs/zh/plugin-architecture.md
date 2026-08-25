@@ -88,6 +88,11 @@ run_functional_test
 DeviceCommand。设备软件/固件中可以包含 Soulcloud Client 通信组件，但“设备”是硬件执行主体，
 “Soulcloud Client”不是设备的另一种称呼，也不是独立的 Station 或 Agent 系统角色。
 
+因此，“低层 SWD/UART 留在 Client”不是本架构的有效表述。准确说法是：低层 SWD/UART
+留在 Soulcloud Device 的本地设备软件/固件中；其中负责 MQTT/HTTPS 通信的那部分才叫
+Soulcloud Client。即使设备软件把通信和硬件驱动编译在同一个程序里，两者的术语和职责仍然
+分开，文档、API 和权限模型都不得把 Client 当作设备身份。
+
 设备侧要求：
 
 - MQTT 必须走现有 Device Broker，默认 MQTT over WSS；
