@@ -258,7 +258,8 @@ plugin 是可信但可能有 bug 的云端代码。每个 plugin 独立构建和
 `SOULINJECTOR_PLUGIN_PIDS_LIMIT=128`，根文件系统只读，仅提供 64 MiB `/tmp`，并启用
 `no-new-privileges` 与 `cap_drop: ALL`。这些是可由 `.env` 覆盖的起始值，不是所有部署的
 容量承诺；systemd/Kubernetes 部署必须配置等价的 Memory/CPU/PID/Filesystem/Capability
-限制，并为日志设置独立配额。
+限制，并为日志设置独立配额。Compose 默认还将 plugin 的 Docker JSON 日志限制为
+`SOULINJECTOR_PLUGIN_LOG_MAX_SIZE=10m`、最多 `SOULINJECTOR_PLUGIN_LOG_MAX_FILES=3`。
 
 ### 6.1 Plugin-to-plugin
 
