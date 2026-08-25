@@ -794,6 +794,16 @@ export class PluginManager {
       } catch (error) {
         throw publicError(`plugin encoder output invalid: ${(error as Error).message}`, 502, "invalid_action_output");
       }
+      let encodedInput: Record<string, unknown>;
+      try {
+        encodedInput = commandArgumentsToActionInput(args);
+      } catch (error) {
+        throw publicError(`plugin encoder output invalid: ${(error as Error).message}`, 502, "invalid_action_output");
+      }
+      const encodedValidation = validateActionInput(action.inputSchema, encodedInput);
+      if (!encodedValidation.ok) {
+        throw publicError(`plugin encoder output invalid: ${encodedValidation.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; ")}`, 502, "invalid_action_output");
+      }
       const batch = await this.options.prisma.$transaction(async (tx) => {
         const installationRows = await tx.$queryRaw<Array<{ id: string; project_id: string; plugin_id: string; plugin_version: string; manifest_hash: string; state: string }>>`
           SELECT id, project_id, plugin_id, plugin_version, manifest_hash, state

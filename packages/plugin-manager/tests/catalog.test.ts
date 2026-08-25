@@ -291,6 +291,53 @@ describe("plugin catalog connection state", () => {
     expect(() => internals.assertExecutionCommandAllowed(operation, "debug.read_memory", [{ length: 33 }])).toThrow("action schema");
   });
 
+  test("classifies encoder args that violate the action schema as plugin output", async () => {
+    const persisted: PluginManifest = {
+      ...manifest("1.0.0"),
+      actions: [{
+        id: "read",
+        inputSchema: { length: { type: "integer", required: true, min: 1, max: 32 } },
+        wire: { command: "debug.read_memory", schemaVersion: 1 },
+      }],
+    };
+    const manifestHash = await sha256Hex(canonicalJson(persisted));
+    const installationId = randomUUID();
+    const projectId = randomUUID();
+    const deviceId = randomUUID();
+    const userId = randomUUID();
+    const connection = {
+      id: "connection",
+      isOpen: true,
+      manifest: { pluginVersion: persisted.version, manifestHash },
+      request: async () => ({ command: "debug.read_memory", schemaVersion: 1, args: [{ name: "length", value: 33 }] }),
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000,
+      prisma: {
+        pluginInstallation: {
+          findUnique: async () => ({ id: installationId, projectId, pluginId: persisted.id, pluginVersion: persisted.version, manifestHash, state: "enabled" }),
+        },
+        $transaction: async () => { throw new Error("transaction must not be reached for invalid plugin output"); },
+      } as never,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+      connections: Map<string, PluginConnection>;
+    };
+    internals.catalog.set(`${persisted.id}@${persisted.version}`, { pluginId: persisted.id, pluginVersion: persisted.version, manifestHash, manifest: persisted, connected: true });
+    internals.connections.set(persisted.id, connection as unknown as PluginConnection);
+
+    await expect(manager.encodeAction({
+      installationId,
+      userId,
+      deviceId,
+      actionId: "read",
+      actionInput: { length: 4 },
+    })).rejects.toMatchObject({ status: 502, publicCode: "invalid_action_output" });
+  });
+
   test("does not return SSR output after the installation is disabled in flight", async () => {
     const persisted: PluginManifest = {
       ...manifest("1.0.0"),
