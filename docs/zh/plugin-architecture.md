@@ -82,6 +82,10 @@ run_functional_test
 增加硬件能力需要发布新的设备软件/固件。`Soulcloud Client` 是设备上的 Soulcloud 通信软件
 名称，不用来代指执行硬件操作的设备本身。
 
+对于带调试/测试硬件的设备，USB/JTAG/SWD/UART 的低层协议、时序、轮询、重试和硬件状态
+管理由设备上的设备软件或固件执行；云端只下发设备已实现的、有界 DeviceCommand。这里的
+“设备软件/固件”描述执行层，不是另一个叫 Client、Station 或 Agent 的系统角色。
+
 设备侧要求：
 
 - MQTT 必须走现有 Device Broker，默认 MQTT over WSS；

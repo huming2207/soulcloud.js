@@ -233,7 +233,7 @@ function createRuntimeConnection(
       ping: implemented.system.ping.handler(({ input, context }) => { if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required"); return input; }),
     },
     action: {
-      encode: implemented.action.encode.handler(({ input, context }) => {
+      encode: implemented.action.encode.handler(async ({ input, context }) => {
         if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
         if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
         const descriptor = definition.manifest.actions.find((action) => action.id === input.actionId);
@@ -242,7 +242,11 @@ function createRuntimeConnection(
         const check = validateActionInput(descriptor.inputSchema, input.input);
         if (!check.ok) rpcError("INVALID_ACTION_INPUT", check.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; "));
         operations.running += 1;
-        try { const args = encoder(input.input); assertRpcValueBudget(args, budget); return { command: descriptor.wire.command, args: commandWire(args), schemaVersion: descriptor.wire.schemaVersion }; }
+        try {
+          const args = await encoder(input.input, { operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, deviceId: input.deviceId, userId: input.userId });
+          assertRpcValueBudget(args, budget);
+          return { command: descriptor.wire.command, args: commandWire(args), schemaVersion: descriptor.wire.schemaVersion };
+        }
         catch (error) { rpcError("INVALID_PLUGIN_OUTPUT", (error as Error).message); }
         finally { operations.running -= 1; }
       }),

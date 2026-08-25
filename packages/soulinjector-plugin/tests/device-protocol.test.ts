@@ -3,7 +3,7 @@ import { debugLogSchema, debugStatusSchema, SOULINJECTOR_COMMAND } from "../src/
 
 describe("SoulInjector device protocol", () => {
   test("keeps command names stable and high-level", () => {
-    expect(SOULINJECTOR_COMMAND.flashWrite).toBe("soulinjector.debug.flash_write");
+    expect(SOULINJECTOR_COMMAND.start).toBe("soulinjector.debug.start");
     expect(SOULINJECTOR_COMMAND.start).not.toContain("swd");
   });
 

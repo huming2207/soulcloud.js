@@ -128,7 +128,7 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
       try {
         const result = await callManager(options, "/internal/plugins/actions/encode", {
-          installationId: params.id, deviceId: parsed.data.device_id, actionId: params.actionId, input: parsed.data.input,
+          installationId: params.id, userId: user.user.id, deviceId: parsed.data.device_id, actionId: params.actionId, input: parsed.data.input,
           humanApproved: true,
           timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
         });

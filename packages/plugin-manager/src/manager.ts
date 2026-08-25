@@ -316,6 +316,7 @@ export class PluginManager {
 
   async encodeAction(input: {
     installationId: string;
+    userId: string;
     deviceId: string;
     actionId: string;
     actionInput: unknown;
@@ -369,6 +370,10 @@ export class PluginManager {
         encoded = await connection.request("action.encode", {
           operationId,
           operationToken,
+          installationId: installation.id,
+          projectId: installation.projectId,
+          deviceId: input.deviceId,
+          userId: input.userId,
           actionId: input.actionId,
           input: input.actionInput,
         }, input.timeoutMs ?? 30_000) as { command: string; args: Array<{ name: string; value: unknown }>; schemaVersion: number };

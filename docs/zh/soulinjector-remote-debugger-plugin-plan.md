@@ -46,7 +46,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   PostgreSQL `bytea` 最终存储；不使用 S3/object storage；
 - `debugger.configureTarget`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
   路由和转发，不读取 plugin 私有业务表；
-- 高层 SoulInjector command/event schema 和 `requiresHumanApproval` action 元数据。当前
+- 高层 SoulInjector command/event schema 和 `requiresHumanApproval` action 元数据；动作编码
+  会读取指定 installation/project 下的不可变 target-config revision，并把目标快照传给设备。
+  当前
   Human API 的人工 action 请求显式传递 approval；真正可审计的长期 approval/execution record
   仍属于后续阶段。
 
@@ -213,12 +215,13 @@ debug.resume
 debug.reset
 debug.read_registers
 debug.read_memory
-debug.flash_write
 debug.start
 ```
 
-烧写功能继续复用或演进现有 erase/program/verify 能力，不因为 debugger plugin 建第二套下行
-协议。所有 command 都必须：
+当前 plugin manifest 不开放 `debug.flash_write`：artifact 虽可上传并保存在 plugin 私有库，
+但 Soulcloud HTTPS device transfer gateway 和设备侧文件消费协议尚未完成，不能让一个没有传输
+闭环的 action 伪装成可用能力。烧写功能继续复用或演进现有 erase/program/verify 能力，不因为
+debugger plugin 建第二套下行协议。所有 command 都必须：
 
 - 带 schema version、幂等 command ID 和 execution/session correlation；
 - 指定本地 timeout 和有界输入/输出；

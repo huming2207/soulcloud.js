@@ -249,6 +249,14 @@ export class SoulInjectorRepository {
     return result.rows[0] ? asRecord(result.rows[0]) : null;
   }
 
+  async getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null> {
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT * FROM ${schema}.target_config_revisions WHERE installation_id = $1 AND revision = $2`,
+      [installationId, revision],
+    );
+    return result.rows[0] ? asRecord(result.rows[0]) : null;
+  }
+
   async storeArtifact(input: SaveArtifactInput): Promise<DebugArtifactRecord> {
     const artifact = validateArtifact(input);
     const id = randomUUID();

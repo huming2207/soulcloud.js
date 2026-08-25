@@ -62,7 +62,7 @@ export const eventOutput = z.object({
   logs: z.array(z.object({ level: z.enum(["debug", "info", "warn", "error"]), message: z.string().min(1).max(4096) }).strict()).max(64).default([]),
 }).strict();
 
-export const actionInput = operation.extend({ actionId: z.string().min(1).max(128), input: z.unknown() }).strict();
+export const actionInput = operation.extend({ actionId: z.string().min(1).max(128), installationId: z.string().uuid(), projectId: z.string().uuid(), deviceId: z.string().uuid(), userId: z.string().uuid(), input: z.unknown() }).strict();
 export const actionOutput = z.object({ command: z.string().min(1).max(256), args: z.array(commandArgument).max(256), schemaVersion: z.number().int().positive() }).strict();
 
 export const uiRenderInput = operation.extend({ requestId: z.string().min(1).max(128), routeId: z.string().min(1).max(128), installationId: z.string().uuid(), projectId: z.string().uuid(), user: uiUser, params: z.record(z.string().max(128), z.union([z.string().max(1024), z.number().finite(), z.boolean()])).refine((value) => Object.keys(value).length <= 32) }).strict();

@@ -120,6 +120,7 @@ describe("plugin SSR route", () => {
       headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
       body: JSON.stringify({
         installationId,
+        userId: randomUUID(),
         deviceId: randomUUID(),
         actionId: "run",
         input: {},

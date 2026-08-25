@@ -162,7 +162,24 @@ plugin 返回有界 Entity updates、logs 和声明式副作用 intent。Manager
 
 输入已由 Human API/Manager 按 manifest Action schema 校验。plugin 只编码现有
 DeviceCommand；Manager 再以核心 DeviceCommand schema 权威复检。用户输入错误映射 400，
-plugin encoder 输出错误映射 502，不能混淆。
+plugin encoder 输出错误映射 502，不能混淆。除用户输入外，Manager 会传递当前调用的不可伪造
+scope context；plugin 不得从 action input 自己推断 project/device/user：
+
+```ts
+interface ActionEncodingContext {
+  operationId: string;
+  installationId: string;
+  projectId: string;
+  deviceId: string;
+  userId: string;
+}
+```
+
+SoulInjector plugin 的 `targetConfigRevision` 与 `targetId` 只允许引用同一
+installation/project 的私有配置 revision。encoder 会把该 revision 中的 architecture、chip、
+transport 和 requiredPrimitives 快照编码进 DeviceCommand，避免设备按云端当前配置隐式解释
+旧 command。缺少 revision、target 或 scope 不匹配时属于 plugin encoder/output 错误（502）；
+用户 schema 不满足则仍是 400 `invalid_action_input`。
 
 ### 5.3 `ui.render`
 

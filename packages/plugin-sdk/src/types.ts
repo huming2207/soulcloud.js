@@ -130,7 +130,14 @@ export interface PluginContext {
 }
 
 export type EventHandler = (context: PluginContext, event: PluginEventInput) => Promise<PluginEventOutput>;
-export type ActionEncoder = (input: unknown) => CommandArgument[];
+export interface ActionEncodingContext {
+  operationId: string;
+  installationId: string;
+  projectId: string;
+  deviceId: string;
+  userId: string;
+}
+export type ActionEncoder = (input: unknown, context: ActionEncodingContext) => CommandArgument[] | Promise<CommandArgument[]>;
 export interface UiRenderInput {
   requestId: string;
   installationId: string;

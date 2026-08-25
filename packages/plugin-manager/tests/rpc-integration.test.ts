@@ -126,6 +126,10 @@ describe("plugin oRPC WebSocket transport", () => {
     const output = await connection.request("action.encode", {
       operationId: randomUUID(),
       operationToken: `${randomUUID()}${randomUUID()}`,
+      installationId: randomUUID(),
+      projectId: randomUUID(),
+      deviceId: randomUUID(),
+      userId: randomUUID(),
       actionId: "reboot",
       input: {},
     }, 1_000) as { command: string; args: Array<{ name: string; value: bigint }> };

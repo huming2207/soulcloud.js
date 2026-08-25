@@ -93,7 +93,7 @@ const createInstallationSchema = z.object({ projectId: z.string().uuid(), plugin
 const bindingSchema = z.object({ deviceId: z.string().uuid(), profileId: z.string().min(1).max(128), profileVersion: z.number().int().positive() }).strict();
 const stateSchema = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
 const migrateSchema = z.object({ pluginVersion: z.string().min(1).max(128), manifestHash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown() }).strict();
-const encodeActionSchema = z.object({ installationId: z.string().uuid(), deviceId: z.string().uuid(), actionId: z.string().min(1).max(128), input: z.unknown(), humanApproved: z.boolean().optional().default(false), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
+const encodeActionSchema = z.object({ installationId: z.string().uuid(), userId: z.string().uuid(), deviceId: z.string().uuid(), actionId: z.string().min(1).max(128), input: z.unknown(), humanApproved: z.boolean().optional().default(false), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const configureTargetSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), yaml: z.string().min(1).max(65_536), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 
 function parseBody<T>(schema: ZodType<T>, value: unknown): T {
@@ -230,7 +230,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         }
         if (url.pathname === "/internal/plugins/actions/encode") {
           const input = parseBody(encodeActionSchema, body);
-          return json(200, await options.manager.encodeAction({ installationId: input.installationId, deviceId: input.deviceId, actionId: input.actionId, actionInput: input.input, humanApproved: input.humanApproved, timeoutMs: input.timeoutMs }));
+          return json(200, await options.manager.encodeAction({ installationId: input.installationId, userId: input.userId, deviceId: input.deviceId, actionId: input.actionId, actionInput: input.input, humanApproved: input.humanApproved, timeoutMs: input.timeoutMs }));
         }
         if (url.pathname === "/internal/plugins/debugger/target-config") {
           const input = parseBody(configureTargetSchema, body);

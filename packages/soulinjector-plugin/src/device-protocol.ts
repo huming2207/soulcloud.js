@@ -7,7 +7,6 @@ export const SOULINJECTOR_COMMAND = {
   reset: "soulinjector.debug.reset",
   readMemory: "soulinjector.debug.read_memory",
   readRegisters: "soulinjector.debug.read_registers",
-  flashWrite: "soulinjector.debug.flash_write",
   start: "soulinjector.debug.start",
 } as const;
 
