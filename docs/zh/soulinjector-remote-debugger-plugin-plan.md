@@ -57,7 +57,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
   device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
   时钟。execution 私有 token 不写入数据库。
-- oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`；
+- oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`，以及
+  受 execution capability 约束的 `context.devices.enqueueCommand`、`getCommand`、`cancelCommand`；
   Manager 会绑定父 operation、plugin/version、installation、device、token hash 和 capability
   白名单。`release` 只释放设备控制权并把 execution 置为 `paused`，不删除历史记录；数据库维护任务
   会释放过期 lease 并把达到 TTL 的 execution 标记为 `expired`。
@@ -334,8 +335,9 @@ context.artifacts.issueTransfer
 
 plugin 可在父 event/UI RPC 返回后凭 execution capability 继续调用，但 Manager 必须保存 token
 hash，并检查 connection/plugin/version/installation/device/expiry/allowed capability/rate。不能退化为
-一个 plugin 级永久万能 token。当前已经实现的四个 execution RPC 只管理 capability 生命周期；
-设备 command 的 enqueue/get/cancel 仍必须在 capability 与人工审批闭环完成后再开放。
+一个 plugin 级永久万能 token。当前设备 command RPC 使用 `device.enqueue_command`、
+`device.get_command` 和 `device.cancel_command`，只允许 manifest 声明的非破坏性命令；标记为
+`requiresHumanApproval` 的命令会被拒绝，直到人工审批闭环和取消语义明确后再开放。
 
 ## 8. Artifact 与 HTTPS 传输
 
@@ -557,7 +559,7 @@ command intent。
 1. 增加最小 debug execution 平台记录；**已完成基础版本**；
 2. 实现 device control lease、renew/release/expiry；**已完成基础版本**；
 3. 增加 command origin/execution/plugin/user correlation；**已完成基础版本**；
-4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle RPC；**已完成基础版本；device command get/enqueue/cancel 尚未完成**；
+4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle 与 device command RPC；**已完成基础版本**；
 5. Human API 实现 start/pause/cancel/take-over 权限入口；**尚未完成，token handoff 方案仍需冻结**；
 6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试；**数据库
    集成测试已写入 CI，跨进程/真实 plugin reconnect 测试仍待补齐**。
