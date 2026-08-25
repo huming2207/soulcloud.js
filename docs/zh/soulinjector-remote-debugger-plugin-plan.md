@@ -91,7 +91,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   每次点击都携带当前 session 的 `executionRef`；Manager 在 installation → device → execution
   的同一事务中用数据库时钟锁定并检查 execution 仍属于该 installation/device、处于 active 且
   device lease 和 TTL 均未过期，同时用共享锁复核 initiating user 仍是 project member，之后才允许
-  入队，并把 execution ID 写入 command provenance。
+  入队；查询还必须确认 execution 明确授予 `device.enqueue_command` capability，并把 execution ID
+  写入 command provenance。
   当前尚未实现 take-over，因此 UI session 的用户还必须是 execution 的 initiating user；未来人工接管
   需要在同一权威事务中原子更新 controller/授权后再放行新的用户。
   lease 失效或 session 被迁移/禁用后，旧页面的请求会得到冲突而不会继续控制设备。destructive
