@@ -1,6 +1,6 @@
 # SoulInjector 远程 Debugger Plugin 实施计划
 
-**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease 和受限 execution reverse RPC 基础；设备固件、case/LLM、Human API execution 启动入口和长时设备 command 闭环尚未实现）
+**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease 和受限 execution reverse RPC 基础；私有 case/session/observation/report 数据层已落地；设备固件、LLM、Human API execution 启动入口和长时设备 command 闭环尚未实现）
 **日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
 
@@ -75,9 +75,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - 未完成的分块上传由 plugin 私有 runtime 按批次、带索引地清理；这只清理临时 upload/chunk
   行，不替产品决定完整 artifact 的 retention/deletion 策略。
 
-尚未实现：SoulInjector 设备固件 command handler、HTTPS 设备文件 gateway、case/session/report
-业务表、Human API 的 start/pause/cancel/take-over 与 plugin token handoff、execution 绑定的
-device enqueue/get/cancel、LLM harness，以及独立 plugin-origin bootstrap/live channel。不要
+尚未实现：SoulInjector 设备固件 command handler、HTTPS 设备文件 gateway、Human API 的
+start/pause/cancel/take-over 与 plugin token handoff、LLM harness，以及独立 plugin-origin
+bootstrap/live channel。execution 绑定的 device enqueue/get/cancel 已有受限 reverse RPC 基础，
+但还没有 Human API 的长时启动入口和完整设备结果闭环。不要
 把上述未完成项误认为已经可以进行生产远程诊断。
 
 ## 3. 已确认的架构决定
@@ -524,13 +525,15 @@ command intent。
 
 1. 创建独立 SoulInjector plugin package/image；**已完成基础版本**；
 2. 建立 manifest、profile、Action、Event 和 UI route；
-3. 建立私有 DB migration、target-config revision、artifact upload/chunk/bytea 基础表；case/session/observation/report 表留到后续；
+3. 建立私有 DB migration、target-config revision、artifact upload/chunk/bytea 以及
+   case/session/observation/report revision 基础表；**已完成基础版本**；
 4. 接入 Plugin Manager handshake 和 health；
 5. Compose 开发部署加入 plugin 私有 DB，但不把 credential 给 Manager；
 6. 测试 plugin DB failure/crash 不影响 Manager/Broker/Human API。
 
-当前结果：target config 和 artifact 在 plugin 私有 DB 重启后可恢复；plugin runtime 的资源上限
-可由部署环境配置，未完成的 chunk upload 会自动过期清理；纯云端 case 尚未实现。
+当前结果：target config、artifact 和最小 case/session/observation/report revision 数据在 plugin
+私有 DB 重启后可恢复；artifact 可按 project scope 关联 case；plugin runtime 的资源上限可由
+部署环境配置，未完成的 chunk upload 会自动过期清理。
 
 对 `/home/hu/Projects/soul-injector` 的设备侧代码审查（2026-08-25）发现：当前源码仍有
 `/soulinjector/v1/cmd/*` 与 `/soulinjector/v1/report/*` 的历史自定义 MQTT topic，以及旧的
