@@ -515,7 +515,7 @@ export class PluginManager {
       }
       return { execution: currentExecution, sessionId: parsed.sessionId };
     } catch (error) {
-      if (bootstrapSessionId && bootstrapConnection && bootstrapInstallation && started) {
+      if (bootstrapConnection && bootstrapInstallation && started) {
         await this.abortDebugSessionBestEffort({
           connection: bootstrapConnection,
           installation: bootstrapInstallation,
@@ -539,7 +539,7 @@ export class PluginManager {
     installation: { id: string; projectId: string; pluginId: string; pluginVersion: string; manifestHash: string };
     deviceId: string;
     executionId: string;
-    sessionId: string;
+    sessionId?: string;
     userId: string;
     reason: string;
     timeoutMs: number;
@@ -573,7 +573,7 @@ export class PluginManager {
         projectId: input.installation.projectId,
         deviceId: input.deviceId,
         executionId: input.executionId,
-        sessionId: input.sessionId,
+        sessionId: input.sessionId ?? null,
         reason: input.reason,
       }, input.timeoutMs);
       if (

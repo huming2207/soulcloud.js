@@ -115,7 +115,7 @@ beforeAll(async () => {
       sessionStartInput = { executionId: input.executionId, executionToken: input.executionToken };
       return { sessionId: randomUUID(), executionId: input.executionId };
     },
-    abortDebugSession: async (input) => ({ sessionId: input.sessionId, executionId: input.executionId, state: "failed" as const }),
+    abortDebugSession: async (input) => ({ sessionId: input.sessionId ?? randomUUID(), executionId: input.executionId, state: "failed" as const }),
   }), { hostname: "127.0.0.1", port: 0, authToken });
 
   connection = new PluginConnection({

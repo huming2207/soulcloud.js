@@ -547,7 +547,7 @@ function createRuntimeConnection(
             projectId: input.projectId,
             deviceId: input.deviceId,
             executionId: input.executionId,
-            sessionId: input.sessionId,
+            sessionId: input.sessionId ?? null,
             reason: input.reason,
           }, { signal }));
           assertRpcValueBudget(result, budget);

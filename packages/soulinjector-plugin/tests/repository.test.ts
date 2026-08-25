@@ -304,4 +304,23 @@ describe("SoulInjector device session state", () => {
     expect(update?.query).toContain("s.execution_ref = $2");
     expect(update?.query).toContain("s.soulcloud_device_ref = $4");
   });
+
+  test("can abort by the unique execution scope when the session ID is unavailable", async () => {
+    const queries: { query: string; params?: unknown[] }[] = [];
+    const updated = { ...base, state: "failed", ended_at: new Date(1) };
+    const client = {
+      query: async (query: string, params?: unknown[]) => {
+        queries.push({ query, params });
+        return query.includes("UPDATE soul_injector_plugin.debug_sessions")
+          ? { rows: [updated], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    } as unknown as PoolClient;
+    const repository = new SoulInjectorRepository({ query: client.query, connect: async () => client } as unknown as Pool);
+    await expect(repository.abortDebugSession(null, base.execution_ref as string, base.installation_id as string, "00000000-0000-4000-8000-000000000021", base.soulcloud_device_ref as string)).resolves.toMatchObject({ state: "failed" });
+    const update = queries.find((item) => item.query.startsWith("UPDATE soul_injector_plugin.debug_sessions"));
+    expect(update?.params).toEqual([null, base.execution_ref, base.installation_id, base.soulcloud_device_ref, "00000000-0000-4000-8000-000000000021"]);
+    expect(update?.query).toContain("$1::uuid IS NULL OR s.id = $1::uuid");
+  });
 });

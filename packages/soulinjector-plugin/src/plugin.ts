@@ -95,7 +95,7 @@ interface SoulInjectorPluginStore {
   appendDebugObservation?(input: AppendDebugObservationInput): Promise<unknown>;
   updateDebugSessionState?(input: UpdateDebugSessionStateInput): Promise<DebugSessionRecord>;
   createDebugSession?(input: Parameters<SoulInjectorRepository["createDebugSession"]>[0]): Promise<DebugSessionRecord>;
-  abortDebugSession?(id: string, executionRef: string, installationId: string, projectId: string, soulcloudDeviceRef: string): Promise<DebugSessionRecord | null>;
+  abortDebugSession?(id: string | null, executionRef: string, installationId: string, projectId: string, soulcloudDeviceRef: string): Promise<DebugSessionRecord | null>;
   getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null>;
   getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null>;
   listTargetConfigs?(installationId: string, projectId: string): Promise<TargetConfigSummary[]>;
@@ -277,7 +277,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
     },
     abortDebugSession: async (input) => {
       if (!repository.abortDebugSession) throw new Error("debug session cleanup is not available");
-      const session = await repository.abortDebugSession(input.sessionId, input.executionId, input.installationId, input.projectId, input.deviceId);
+      const session = await repository.abortDebugSession(input.sessionId ?? null, input.executionId, input.installationId, input.projectId, input.deviceId);
       if (!session) throw new DebugSessionNotAvailableError();
       return { sessionId: session.id, executionId: input.executionId, state: "failed" };
     },

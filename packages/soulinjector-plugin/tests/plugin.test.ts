@@ -215,6 +215,17 @@ describe("SoulInjector plugin", () => {
     }, { signal: AbortSignal.timeout(1_000) });
     expect(result).toEqual({ sessionId, executionId, state: "failed" });
     expect(calls).toEqual([[sessionId, executionId, saved.installationId, saved.projectId, saved.installationId]]);
+
+    const resultWithoutSessionId = await plugin.abortDebugSession!({
+      operationId: "operation",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      deviceId: saved.installationId,
+      executionId,
+      reason: "bootstrap response lost",
+    }, { signal: AbortSignal.timeout(1_000) });
+    expect(resultWithoutSessionId).toEqual({ sessionId, executionId, state: "failed" });
+    expect(calls.at(-1)).toEqual([null, executionId, saved.installationId, saved.projectId, saved.installationId]);
   });
 
   test("renders private debugger session summaries without exposing execution credentials", async () => {

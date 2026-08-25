@@ -112,7 +112,8 @@ export const debugSessionAbortInput = operation.extend({
   projectId: z.string().uuid(),
   deviceId: z.string().uuid(),
   executionId: z.string().uuid(),
-  sessionId: z.string().uuid(),
+  /** Optional when the bootstrap response was lost after the plugin commit. */
+  sessionId: z.string().uuid().nullable().optional(),
   reason: z.string().min(1).max(512),
 }).strict();
 export const debugSessionAbortOutput = z.object({ sessionId: z.string().uuid(), executionId: z.string().uuid(), state: z.literal("failed") }).strict();

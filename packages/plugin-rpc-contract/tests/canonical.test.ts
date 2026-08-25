@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, artifactChunkInput, canonicalJson, DEFAULT_RPC_VALUE_BUDGET, debugSessionStartInput, debugSessionStartOutput, deviceCancelInput, deviceCommandOutput, deviceEnqueueInput, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
+import { assertRpcValueBudget, artifactChunkInput, canonicalJson, DEFAULT_RPC_VALUE_BUDGET, debugSessionAbortInput, debugSessionStartInput, debugSessionStartOutput, deviceCancelInput, deviceCommandOutput, deviceEnqueueInput, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
   test("keeps the default string budget below the default frame budget", () => {
@@ -126,6 +126,20 @@ describe("debug session bootstrap RPC contract", () => {
     expect(debugSessionStartInput.safeParse({ ...base, targetConfigRevision: 1 }).success).toBe(false);
     expect(debugSessionStartInput.safeParse({ ...base, targetConfigId: "00000000-0000-4000-8000-000000000007", targetConfigRevision: 1, targetId: "fixture" }).success).toBe(true);
     expect(debugSessionStartOutput.parse({ sessionId: base.executionId, executionId: base.executionId })).toEqual({ sessionId: base.executionId, executionId: base.executionId });
+  });
+
+  test("allows execution-scoped cleanup when the bootstrap response was lost", () => {
+    const abortBase = {
+      operationId: base.operationId,
+      operationToken: base.operationToken,
+      deadlineMs: base.deadlineMs,
+      installationId: base.installationId,
+      projectId: base.projectId,
+      deviceId: base.deviceId,
+      executionId: base.executionId,
+    };
+    expect(debugSessionAbortInput.safeParse({ ...abortBase, reason: "bootstrap response lost" }).success).toBe(true);
+    expect(debugSessionAbortInput.safeParse({ ...abortBase, sessionId: null, reason: "bootstrap response lost" }).success).toBe(true);
   });
 });
 

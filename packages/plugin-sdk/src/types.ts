@@ -321,7 +321,7 @@ export interface DebugSessionAbortInput {
   projectId: string;
   deviceId: string;
   executionId: string;
-  sessionId: string;
+  sessionId?: string | null;
   reason: string;
 }
 export interface DebugSessionAbortOutput { sessionId: string; executionId: string; state: "failed"; }
