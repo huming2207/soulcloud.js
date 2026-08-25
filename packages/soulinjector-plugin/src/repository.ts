@@ -1161,11 +1161,11 @@ export class SoulInjectorRepository {
        JOIN ${schema}.debug_sessions s ON s.id = o.session_id
        JOIN ${schema}.debug_cases c ON c.id = s.case_id
        WHERE o.session_id = $1 AND s.installation_id = $2 AND c.project_id = $3
-       ORDER BY o.created_at ASC, o.id ASC
+       ORDER BY o.created_at DESC, o.id DESC
        LIMIT $4`,
       [sessionId, installationId, projectId, limit],
     );
-    return result.rows.map(asObservationRecord);
+    return result.rows.reverse().map(asObservationRecord);
   }
 
   async createDebugReport(input: CreateDebugReportInput): Promise<DebugReportRecord> {

@@ -223,6 +223,26 @@ describe("SoulInjector installation session scope", () => {
     expect(calls[0]?.query).toContain("s.installation_id = $1");
     expect(calls[0]?.params).toEqual(["installation-1", "project-1", 8]);
   });
+
+  test("loads the most recent observations while preserving chronological order", async () => {
+    const calls: { query: string; params?: unknown[] }[] = [];
+    const pool = {
+      query: async (query: string, params?: unknown[]) => {
+        calls.push({ query, params });
+        return {
+          rows: [
+            { id: "observation-new", session_id: "session-1", event_ref: "event-new", source: "device", kind: "debug.status", structured_data: { state: "failed" }, artifact_id: null, created_at: new Date(2_000) },
+            { id: "observation-old", session_id: "session-1", event_ref: "event-old", source: "device", kind: "debug.status", structured_data: { state: "running" }, artifact_id: null, created_at: new Date(1_000) },
+          ],
+          rowCount: 2,
+        };
+      },
+    } as unknown as Pool;
+    const result = await new SoulInjectorRepository(pool).listDebugObservations("session-1", "installation-1", "project-1", 2);
+    expect(calls[0]?.query).toContain("ORDER BY o.created_at DESC, o.id DESC");
+    expect(calls[0]?.params).toEqual(["session-1", "installation-1", "project-1", 2]);
+    expect(result.map((item) => item.id)).toEqual(["observation-old", "observation-new"]);
+  });
 });
 
 describe("SoulInjector device session state", () => {
