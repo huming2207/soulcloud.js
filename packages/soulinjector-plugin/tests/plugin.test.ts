@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createSoulInjectorPlugin } from "../src/plugin";
 import { DebugSessionNotAvailableError } from "../src/repository";
+import { TargetConfigError } from "../src/target-config";
 import { definePlugin } from "@soulcloud/plugin-sdk";
 
 const saved = {
@@ -68,6 +69,18 @@ describe("SoulInjector plugin", () => {
     const result = await plugin.handleAction!["debugger"]!({ intent: "save_target", yaml: saved.yaml }, { requestId: "request", installationId: saved.installationId, projectId: saved.projectId, user: { id: saved.createdBy, locale: "en", permissions: [] }, routeId: "debugger", params: {} });
     expect(result).toEqual({ redirect: `/plugins/${saved.installationId}/debugger` });
     expect(calls).toEqual([saved.createdBy, saved.createdBy]);
+  });
+
+  test("shows a bounded error state when the SSR target YAML is invalid", async () => {
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      saveTargetConfig: async () => { throw new TargetConfigError("targets.0.chip: invalid"); },
+    });
+    const action = await plugin.handleAction!["debugger"]!({ intent: "save_target", yaml: "invalid" }, { requestId: "request", installationId: saved.installationId, projectId: saved.projectId, user: { id: saved.createdBy, locale: "en", permissions: [] }, routeId: "debugger", params: {} });
+    expect(action).toEqual({ redirect: `/plugins/${saved.installationId}/debugger?error=invalid_target_config` });
+    const page = await plugin.render!["debugger"]!({ requestId: "request", installationId: saved.installationId, projectId: saved.projectId, user: { id: saved.createdBy, locale: "en", permissions: [] }, routeId: "debugger", params: { error: "invalid_target_config" } });
+    expect(page.html).toContain("role=\"alert\"");
+    expect(page.html).toContain("Target configuration is invalid");
   });
 
   test("creates a private debugger case through the SSR action path", async () => {
