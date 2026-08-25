@@ -975,6 +975,7 @@ export class PluginManager {
     kind: "elf" | "firmware";
     filename: string;
     contentType: string;
+    uploadId: string;
     totalSize: number;
     body: ReadableStream<Uint8Array>;
     timeoutMs?: number;
@@ -989,7 +990,7 @@ export class PluginManager {
     if (installation.projectId !== input.projectId) throw Object.assign(new Error("plugin installation project mismatch"), { status: 403 });
     if (installation.state !== "enabled") throw Object.assign(new Error("plugin installation is disabled"), { status: 409 });
     const { connection } = this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
-    const uploadId = crypto.randomUUID();
+    const uploadId = input.uploadId;
     const chunkTimeoutMs = input.timeoutMs ?? 30_000;
     const uploadDeadline = performance.now() + (this.options.artifactUploadTimeoutMs ?? 600_000);
     let offset = 0;

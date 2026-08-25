@@ -246,12 +246,13 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
           const metadata = {
             projectId: request.headers.get("x-soulcloud-project-id") ?? "",
             userId: request.headers.get("x-soulcloud-user-id") ?? "",
+            uploadId: request.headers.get("x-soulcloud-upload-id") ?? "",
             caseId: request.headers.get("x-soulcloud-case-id") || undefined,
             kind: request.headers.get("x-soulcloud-artifact-kind") ?? "",
             filename: request.headers.get("x-soulcloud-artifact-filename") ?? "",
             contentType: request.headers.get("x-soulcloud-artifact-content-type") ?? "application/octet-stream",
           };
-          const parsed = parseBody(z.object({ projectId: z.string().uuid(), userId: z.string().uuid(), caseId: z.string().uuid().optional(), kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), contentType: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)) }).strict(), metadata);
+          const parsed = parseBody(z.object({ projectId: z.string().uuid(), userId: z.string().uuid(), uploadId: z.string().uuid(), caseId: z.string().uuid().optional(), kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), contentType: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)) }).strict(), metadata);
           if (!request.body || !Number.isSafeInteger(totalSize) || totalSize < 1) throw Object.assign(new Error("content-length is required for artifact upload"), { status: 411 });
           if (totalSize > (options.maxArtifactBytes ?? 64 * 1024 * 1024)) throw Object.assign(new Error("artifact is too large"), { status: 413 });
           return json(201, await options.manager.uploadArtifact({ installationId, ...parsed, totalSize, body: request.body as ReadableStream<Uint8Array> }));

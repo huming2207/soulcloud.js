@@ -246,6 +246,8 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       const url = new URL(request.url);
       const parsed = debuggerArtifactQuery.safeParse({ kind: url.searchParams.get("kind"), filename: url.searchParams.get("filename"), case_id: url.searchParams.get("case_id") ?? undefined, content_type: url.searchParams.get("content_type") ?? undefined });
       if (!parsed.success) { set.status = 400; return { error: "invalid_request", message: parsed.error.message }; }
+      const uploadId = z.string().uuid().safeParse(request.headers.get("idempotency-key") ?? "");
+      if (!uploadId.success) { set.status = 400; return { error: "invalid_request", message: "Idempotency-Key must be a UUID" }; }
       const totalSize = Number(request.headers.get("content-length") ?? "0");
       if (!Number.isSafeInteger(totalSize) || totalSize < 1 || totalSize > 64 * 1024 * 1024) { set.status = totalSize > 64 * 1024 * 1024 ? 413 : 411; return { error: totalSize > 64 * 1024 * 1024 ? "payload_too_large" : "length_required", message: "artifact content-length must be between 1 and 67108864 bytes" }; }
       const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
@@ -257,6 +259,7 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
           "x-soulcloud-project-id": installation.projectId,
           "x-soulcloud-user-id": user.user.id,
           ...(parsed.data.case_id ? { "x-soulcloud-case-id": parsed.data.case_id } : {}),
+          "x-soulcloud-upload-id": uploadId.data,
           "x-soulcloud-artifact-kind": parsed.data.kind,
           "x-soulcloud-artifact-filename": parsed.data.filename,
           "x-soulcloud-artifact-content-type": parsed.data.content_type,
