@@ -182,6 +182,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - execution command 的取消请求不会新增 MQTT 控制 topic：尚未投递的 queued command 直接进入
   `delivery_failed` 终态并释放队列；已经被 broker 接受的 command 只记录取消请求，最终能否在硬件阶段
   停止仍取决于设备固件的取消点，不能伪装成云端已经撤回。
+- `device.cancel_command` 的 reverse RPC 与 enqueue 使用相同的 installation → device → execution
+  锁顺序，并在 mutation 事务内重新检查 execution token、cancel capability、有效 lease 和发起人
+  project membership；撤权或生命周期变更后不会继续标记 command。
 - 专用 SoulInjector runtime 读取并校验 operation、WebSocket backpressure、idle timeout、
   value/blob budget 等环境上限；Compose 会把这些上限传入 plugin，不把 Manager 的限制误当成
   plugin 进程自身的隔离。
@@ -690,7 +693,8 @@ command intent。
 5. Human API 实现 start/pause/cancel/take-over 权限入口；**start/session bootstrap 基础已完成，
    pause/cancel/take-over 及重启恢复仍未完成**；
 6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试；**数据库
-   集成测试以及 malformed bootstrap cleanup/并发冲突的边界测试已写入 CI，跨进程/真实 plugin
+   集成测试以及 malformed bootstrap cleanup/并发冲突的边界测试已写入 CI，command cancellation
+   的 membership race 也已覆盖；跨进程/真实 plugin
    reconnect 测试仍待补齐**。
 
 退出条件：插件可以安全运行数小时 case，但 Manager 没有 step/DAG/agent state。
