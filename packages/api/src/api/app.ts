@@ -77,6 +77,7 @@ export interface PluginManagerOptions {
   requestTimeoutMs?: number;
   uploadTimeoutMs?: number;
   uiSessionSecret?: string;
+  uiOrigin?: string;
   uiSessionTtlSeconds?: number;
 }
 

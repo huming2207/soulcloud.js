@@ -97,6 +97,7 @@ const encodeActionSchema = z.object({ installationId: z.string().uuid(), userId:
 const configureTargetSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), yaml: z.string().min(1).max(65_536), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const listTargetConfigsSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
 const listArtifactsSchema = z.object({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), timeoutMs: z.number().int().min(100).max(30_000).optional() }).strict();
+const pluginUiBootstrapSchema = z.object({ bootstrap_token: z.string().min(32).max(4096) }).strict();
 
 function parseBody<T>(schema: ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -120,6 +121,14 @@ function escapeHtml(value: string): string {
 }
 
 export function startPluginManagerServer(options: PluginManagerServerOptions): { url: string; stop(): Promise<void> } {
+  const consumedUiGrants = new Map<string, number>();
+  const consumeUiGrant = (nonce: string, expiresAt: number): boolean => {
+    const now = Date.now();
+    for (const [key, expiry] of consumedUiGrants) if (expiry <= now) consumedUiGrants.delete(key);
+    if (consumedUiGrants.has(nonce)) return false;
+    consumedUiGrants.set(nonce, Math.min(expiresAt, now + 15 * 60_000));
+    return true;
+  };
   const server = Bun.serve({
     hostname: options.hostname,
     port: options.port,
@@ -129,6 +138,33 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
       if (request.method === "GET" && url.pathname === "/health/live") return json(200, { status: "ok" });
       if (request.method === "GET" && url.pathname === "/health/ready") {
         return await options.manager.ready() ? json(200, { status: "ready" }) : json(503, { status: "not_ready" });
+      }
+      if (request.method === "POST" && url.pathname === "/bootstrap") {
+        if (!options.uiSessionSecret) return json(503, { error: "plugin_ui_unavailable" });
+        try {
+          const parsed = parseBody(pluginUiBootstrapSchema, await requestJson(request));
+          let session: ReturnType<typeof verifyPluginUiSession>;
+          try {
+            session = verifyPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds: options.uiSessionTtlSeconds ?? 300 }, parsed.bootstrap_token);
+          } catch {
+            return json(401, { error: "invalid_plugin_ui_grant" });
+          }
+          const manifest = options.manager.getManifest(session.pluginId, session.pluginVersion);
+          const route = manifest?.ui?.routes.find((item) => item.id === session.routeId);
+          if (!route) return json(404, { error: "plugin_ui_route_not_found" });
+          if (!consumeUiGrant(session.nonce, Date.now() + (options.uiSessionTtlSeconds ?? 300) * 1_000)) return json(401, { error: "plugin_ui_grant_replayed" });
+          const location = `/plugins/${session.installationId}${route.path}`;
+          return new Response(null, {
+            status: 303,
+            headers: {
+              location,
+              "cache-control": "no-store",
+              "set-cookie": `${pluginUiSessionCookieName(session.installationId)}=${parsed.bootstrap_token}; Path=/plugins/${session.installationId}/; Max-Age=${options.uiSessionTtlSeconds ?? 300}; HttpOnly; Secure; SameSite=Lax`,
+            },
+          });
+        } catch (error) {
+          return failure(error);
+        }
       }
       if (url.pathname.startsWith("/plugins/")) {
         if (!options.uiSessionSecret) return json(503, { error: "plugin_ui_unavailable" });

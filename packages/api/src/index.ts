@@ -48,6 +48,7 @@ const app = createApp(
     requestTimeoutMs: config.PLUGIN_MANAGER_REQUEST_TIMEOUT_MS,
     uploadTimeoutMs: config.PLUGIN_MANAGER_UPLOAD_TIMEOUT_MS,
     uiSessionSecret: config.PLUGIN_MANAGER_UI_SESSION_SECRET,
+    uiOrigin: config.PLUGIN_UI_ORIGIN,
     uiSessionTtlSeconds: config.PLUGIN_UI_SESSION_TTL_SECONDS,
   },
 );

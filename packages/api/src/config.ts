@@ -32,6 +32,7 @@ export const envSchema = z.object({
   PLUGIN_MANAGER_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(250).max(60_000).default(5_000),
   PLUGIN_MANAGER_UPLOAD_TIMEOUT_MS: z.coerce.number().int().positive().max(1_800_000).default(600_000),
   PLUGIN_MANAGER_UI_SESSION_SECRET: z.string().min(32).optional(),
+  PLUGIN_UI_ORIGIN: z.string().url().default("https://plugins.example.com"),
   PLUGIN_UI_SESSION_TTL_SECONDS: z.coerce.number().int().positive().max(900).default(300),
 });
 

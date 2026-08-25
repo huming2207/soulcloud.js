@@ -52,6 +52,28 @@ const cookie = `${pluginUiSessionCookieName(installationId)}=${token}`;
 afterAll(async () => { await server.stop(); });
 
 describe("plugin SSR route", () => {
+  test("consumes a short-lived bootstrap grant once and sets a plugin-origin cookie", async () => {
+    const grant = signPluginUiSession({ secret, ttlSeconds: 300 }, {
+      sub: randomUUID(), projectId, installationId, pluginId: manifest.id, pluginVersion: manifest.version,
+      manifestHash: "a".repeat(64), routeId: "overview", permissions: [], locale: "en",
+    });
+    const response = await fetch(`${server.url}bootstrap`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bootstrap_token: grant }),
+      redirect: "manual",
+    });
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(`/plugins/${installationId}/overview`);
+    expect(response.headers.get("set-cookie")).toContain(`Path=/plugins/${installationId}/`);
+    const replay = await fetch(`${server.url}bootstrap`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bootstrap_token: grant }),
+    });
+    expect(replay.status).toBe(401);
+  });
+
   test("requires the path-scoped UI session cookie", async () => {
     const response = await fetch(`${server.url}plugins/${installationId}/overview?count=3`);
     expect(response.status).toBe(401);

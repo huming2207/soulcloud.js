@@ -1,4 +1,4 @@
-import { pluginUiSessionCookieName, signPluginUiSession, type JwtConfig, type PrismaClient } from "@soulcloud/core";
+import { signPluginUiSession, type JwtConfig, type PrismaClient } from "@soulcloud/core";
 import { Elysia } from "elysia";
 import type { PluginManagerOptions } from "./app";
 import { authenticateRequest, userCanAccessProject } from "./validate";
@@ -279,7 +279,8 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       const locale = typeof query?.locale === "string" && query.locale.length <= 32 ? query.locale : "en";
       const ttlSeconds = options.uiSessionTtlSeconds ?? 300;
       const session = signPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds }, { sub: user.user.id, projectId: installation.projectId, installationId: params.id, pluginId: installation.pluginId, pluginVersion: installation.pluginVersion, manifestHash: installation.manifestHash.trim(), routeId: params.routeId, permissions: [], locale });
-      set.headers["set-cookie"] = `${pluginUiSessionCookieName(params.id)}=${session}; Path=/plugins/${params.id}/; Max-Age=${ttlSeconds}; HttpOnly; Secure; SameSite=Strict`;
-      return { url: `/plugins/${params.id}${route.path}` };
+      const uiOrigin = options.uiOrigin?.replace(/\/$/, "");
+      if (!uiOrigin) { set.status = 503; return { error: "plugin_ui_unavailable", message: "plugin UI origin is not configured" }; }
+      return { bootstrap_url: `${uiOrigin}/bootstrap`, bootstrap_token: session, path: `/plugins/${params.id}${route.path}`, expires_in: ttlSeconds };
     });
 }

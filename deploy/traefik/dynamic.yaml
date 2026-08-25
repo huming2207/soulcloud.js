@@ -61,11 +61,21 @@ http:
     # Plugin SSR is authenticated with a short-lived, path-scoped session
     # issued by the Human API. Internal Manager routes do not match here.
     plugin-ui:
-      rule: "Host(`example.com`) && PathPrefix(`/plugins/`)"
+      # Keep plugin SSR/client code on the dedicated UI origin configured as
+      # PLUGIN_UI_ORIGIN (replace plugins.example.com for the deployment).
+      rule: "Host(`plugins.example.com`) && PathPrefix(`/plugins/`)"
       priority: 100
       entryPoints: [websecure]
       service: plugin-manager
       middlewares: [ratelimit-web, compress, security-headers, body-limit-plugin-ui]
+      tls:
+        certResolver: letsencrypt
+
+    plugin-ui-bootstrap:
+      rule: "Host(`plugins.example.com`) && Path(`/bootstrap`)"
+      entryPoints: [websecure]
+      service: plugin-manager
+      middlewares: [ratelimit-web, security-headers, body-limit-plugin-ui]
       tls:
         certResolver: letsencrypt
 
