@@ -4,6 +4,7 @@ import { prisma } from "../../src/db";
 import {
   completeDebugExecution,
   createDebugExecution,
+  DebugExecutionCapabilityError,
   DebugExecutionConflictError,
   expireDebugExecutions,
   getDebugExecutionCapability,
@@ -213,7 +214,7 @@ describe("durable debug execution capability", () => {
       pluginId,
       pluginVersion: "1.0.0",
       manifestHash,
-    })).rejects.toThrow("invalid or expired");
+    })).rejects.toBeInstanceOf(DebugExecutionCapabilityError);
     await setPluginInstallationState(prisma, installationId, "enabled");
   });
 });
