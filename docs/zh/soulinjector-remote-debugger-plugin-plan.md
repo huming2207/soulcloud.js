@@ -1,6 +1,6 @@
 # SoulInjector 远程 Debugger Plugin 实施计划
 
-**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease 和受限 execution reverse RPC 基础；私有 case/session/observation/report 数据层已落地；Human API start/session bootstrap 已有基础版本；设备固件、LLM、pause/cancel/take-over、重启恢复和长时设备 command 闭环尚未实现）
+**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease、事件侧 execution capability 传递和受限 execution reverse RPC 基础；私有 case/session/observation/report 数据层已落地；Human API start/session bootstrap 已有基础版本；设备固件、LLM、pause/cancel/take-over、重启恢复和完整设备 command 闭环尚未实现）
 **日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
 
@@ -78,6 +78,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   Manager 会绑定父 operation、plugin/version、installation、device、token hash 和 capability
   白名单。`release` 只释放设备控制权并把 execution 置为 `paused`，不删除历史记录；数据库维护任务
   会释放过期 lease 并把达到 TTL 的 execution 标记为 `expired`。
+- 同一 Manager 进程内，设备事件分发会按 installation/device 找到当前 active 且仍持有 lease 的
+  execution，并只从进程内 token cache 取出原始 capability 传给插件；Manager 每次事件都会再用
+  数据库中的 token hash、lease、installation、device、plugin/version/hash 复核。原始 token 不写入
+  Soulcloud 或 plugin 数据库，Manager 重启后不会伪造恢复能力；跨重启 re-issue/resume 仍待实现。
 - plugin 私有 `debug_sessions.execution_ref` 已建立非空唯一约束；同一个 execution 的重试会
   返回原 session，若 case、设备、plugin manifest 或发起人等快照不一致则明确拒绝，避免重试
   在私有库中产生两条互相竞争的 debugger session。
@@ -602,7 +606,7 @@ command intent。
 1. 增加最小 debug execution 平台记录；**已完成基础版本**；
 2. 实现 device control lease、renew/release/expiry；**已完成基础版本**；
 3. 增加 command origin/execution/plugin/user correlation；**已完成基础版本**；
-4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle 与 device command RPC；**已完成基础版本**；
+4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle 与 device command RPC；**基础版本及同进程设备事件 capability 传递已完成**；
 5. Human API 实现 start/pause/cancel/take-over 权限入口；**start/session bootstrap 基础已完成，
    pause/cancel/take-over 及重启恢复仍未完成**；
 6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试；**数据库
