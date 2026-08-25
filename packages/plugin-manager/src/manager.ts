@@ -1175,7 +1175,7 @@ export class PluginManager {
         // the original artifact for that idempotency key; return it without
         // creating a second artifact or replaying the remaining chunks.
         if (typeof progress !== "number") {
-          if (input.uiSession) await this.assertArtifactUploadSessionCurrent(input.uiSession);
+          await this.assertArtifactInstallationSnapshotCurrent(installation, input.uiSession);
           return { uploadId, artifactId: progress.artifactId, sha256: progress.sha256, size: input.totalSize, kind: input.kind, filename: input.filename };
         }
         offset = progress;
@@ -1184,26 +1184,31 @@ export class PluginManager {
     }
     if (!previous) throw Object.assign(new Error("artifact body is empty"), { status: 400 });
     if (bodyBytes !== input.totalSize) throw publicError("artifact body is shorter than the declared content length", 400, "invalid_request");
+    await this.assertArtifactInstallationSnapshotCurrent(installation, input.uiSession);
     const result = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: true, chunk: previous }, artifactChunkTimeout(chunkTimeoutMs, uploadDeadline), true);
     if (typeof result === "number") throw publicError("plugin did not complete artifact upload", 502, "invalid_plugin_output");
-    if (input.uiSession) await this.assertArtifactUploadSessionCurrent(input.uiSession);
+    await this.assertArtifactInstallationSnapshotCurrent(installation, input.uiSession);
     return { uploadId, artifactId: result.artifactId, sha256: result.sha256, size: input.totalSize, kind: input.kind, filename: input.filename };
   }
 
-  private async assertArtifactUploadSessionCurrent(session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">): Promise<void> {
+  private async assertArtifactInstallationSnapshotCurrent(
+    installation: { id: string; projectId: string; pluginId: string; pluginVersion: string; manifestHash: string },
+    uiSession?: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
+  ): Promise<void> {
     const current = await this.options.prisma!.pluginInstallation.findUnique({
-      where: { id: session.installationId },
+      where: { id: installation.id },
       select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
     });
     if (
       !current ||
-      current.projectId !== session.projectId ||
-      current.pluginId !== session.pluginId ||
-      current.pluginVersion !== session.pluginVersion ||
-      current.manifestHash.trim().toLowerCase() !== session.manifestHash.trim().toLowerCase() ||
+      current.projectId !== installation.projectId ||
+      current.pluginId !== installation.pluginId ||
+      current.pluginVersion !== installation.pluginVersion ||
+      current.manifestHash.trim().toLowerCase() !== installation.manifestHash.trim().toLowerCase() ||
       current.state !== "enabled"
     ) {
-      throw publicError("plugin UI session is no longer valid", 403, "plugin_ui_session_invalid");
+      if (uiSession) throw publicError("plugin UI session is no longer valid", 403, "plugin_ui_session_invalid");
+      throw publicError("plugin installation changed while uploading artifact", 409, "conflict");
     }
   }
 

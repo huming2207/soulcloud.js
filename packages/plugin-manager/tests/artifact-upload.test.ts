@@ -261,4 +261,62 @@ describe("plugin artifact upload body", () => {
     })).rejects.toMatchObject({ status: 403, publicCode: "plugin_ui_session_invalid" });
     expect(installationReads).toBe(2);
   });
+
+  test("revalidates an internal upload snapshot before accepting the final chunk", async () => {
+    const installationId = randomUUID();
+    const projectId = randomUUID();
+    const pluginId = "fixture.plugin";
+    const manifestHash = "a".repeat(64);
+    let installationReads = 0;
+    let pluginCalls = 0;
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "test-plugin-rpc-token-that-is-long-enough",
+      maxFrameBytes: 1024 * 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024 * 1024,
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      prisma: {
+        pluginInstallation: {
+          findUnique: async () => {
+            installationReads += 1;
+            return installationReads === 1
+              ? { id: installationId, projectId, pluginId, pluginVersion: "1.0.0", manifestHash, state: "enabled" }
+              : { id: installationId, projectId, pluginId, pluginVersion: "2.0.0", manifestHash, state: "enabled" };
+          },
+        },
+      } as never,
+    });
+    const connection = {
+      id: "connection-1",
+      isOpen: true,
+      manifest: { pluginVersion: "1.0.0", manifestHash },
+      request: async () => { pluginCalls += 1; return { uploadId: randomUUID(), receivedBytes: 1, complete: true, artifactId: randomUUID(), sha256: "b".repeat(64) }; },
+    };
+    const managerState = manager as unknown as { connections: Map<string, unknown>; catalog: Map<string, unknown> };
+    managerState.connections.set(pluginId, connection);
+    managerState.catalog.set(`${pluginId}@1.0.0`, {
+      pluginId,
+      pluginVersion: "1.0.0",
+      manifestHash,
+      manifest: { id: pluginId, version: "1.0.0", apiVersion: 1, profiles: [], actions: [], events: [] },
+      connected: true,
+    });
+
+    await expect(manager.uploadArtifact({
+      installationId,
+      projectId,
+      userId: randomUUID(),
+      uploadId: randomUUID(),
+      kind: "firmware",
+      filename: "fixture.bin",
+      contentType: "application/octet-stream",
+      totalSize: 1,
+      body: new ReadableStream({ start(controller) { controller.enqueue(Uint8Array.of(1)); controller.close(); } }),
+    })).rejects.toMatchObject({ status: 409, publicCode: "conflict" });
+    expect(installationReads).toBe(2);
+    expect(pluginCalls).toBe(0);
+  });
 });
