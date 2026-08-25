@@ -371,6 +371,10 @@ abort 本地请求、discard operation/staged effects，并按错误类别 retry
 Manager 不 kill/restart plugin。`system.ping` 只检测连接和 plugin event loop；真正 liveness
 restart 由 Docker/systemd/Kubernetes 执行。
 
+plugin runtime 也必须使用同一个 `deadlineMs` 建立本地 `AbortSignal`，并在 deadline 到期时
+停止等待该 handler；即使 handler 不合作，也不能永久占满 runtime operation slot。这个超时
+只结束该 RPC，不由应用代码 kill/restart 容器。
+
 ## 11. 大小、并发与 backpressure
 
 以下全部由部署配置给出硬上限：
