@@ -94,6 +94,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   Manager 会绑定父 operation、plugin/version、installation、device、token hash 和 capability
   白名单。`release` 只释放设备控制权并把 execution 置为 `paused`，不删除历史记录；数据库维护任务
   会释放过期 lease 并把达到 TTL 的 execution 标记为 `expired`。
+- execution reverse command 在入队前还必须把单键 args 重建为 action input，并通过当前 manifest
+  的 action schema、范围、枚举和必填字段校验；不能因为 command 名称已声明就让 plugin 绕过
+  `read_memory` 等参数边界。校验失败的 event 输入会作为永久 `INVALID_EVENT_INPUT` 处理，不应
+  无限重试或反复触发 installation circuit breaker。
 - 同一 Manager 进程内，设备事件分发会按 installation/device 找到当前 active 且仍持有 lease 的
   execution，并只从进程内 token cache 取出原始 capability 传给插件；Manager 每次事件都会再用
   数据库中的 token hash、lease、installation、device、plugin/version/hash 复核。原始 token 不写入
