@@ -14,7 +14,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { createSigner, createVerifier, TOKEN_ERROR_CODES } from "fast-jwt";
-import type { PrismaClient } from "../db";
+import { Prisma, type PrismaClient } from "../db";
 
 export interface JwtConfig {
   /** HS256 secret (>= 32 bytes recommended). */
@@ -176,55 +176,53 @@ export async function rotateRefreshToken(
   refreshToken: string,
 ): Promise<RotatedTokens> {
   const tokenHash = hashToken(refreshToken);
-  const stored = await prisma.refreshToken.findUnique({
-    where: { tokenHash },
-    include: { user: { select: { id: true, username: true } } },
-  });
+  // M1: keep claim, successor creation and reuse-family revocation in one
+  // transaction. Otherwise a losing concurrent request can revoke the
+  // family before the winner inserts its successor, leaving that successor
+  // usable despite the detected reuse.
+  const outcome = await prisma.$transaction(async (tx) => {
+    const stored = await tx.refreshToken.findUnique({
+      where: { tokenHash },
+      include: { user: { select: { id: true, username: true } } },
+    });
+    if (!stored) return { kind: "invalid" as const };
+    if (stored.expiresAt.getTime() < Date.now()) {
+      await tx.refreshToken.updateMany({
+        where: { id: stored.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      return { kind: "expired" as const };
+    }
 
-  if (!stored) {
-    throw new AuthError("invalid_token", "unknown refresh token");
-  }
-  if (stored.expiresAt.getTime() < Date.now()) {
-    // expiry is terminal; mark revoked (best effort) and reject
-    await prisma.refreshToken.updateMany({
+    const claimed = await tx.refreshToken.updateMany({
       where: { id: stored.id, revokedAt: null },
       data: { revokedAt: new Date() },
     });
-    throw new AuthError("token_expired", "refresh token expired");
-  }
+    if (claimed.count === 0) {
+      // H2: chain-walking only reached depth 1; revoking by user closes the
+      // gap at any chain depth and forces a full re-login.
+      await revokeAllForUser(tx, stored.userId);
+      return { kind: "reuse" as const };
+    }
 
-  // M1: atomic rotation. Only the first concurrent refresh wins the
-  // conditional update; a loser is either a replay (theft signal) or a
-  // concurrent refresh — both revoke the ENTIRE user session family
-  // (H2: chain-walking only reached depth 1; revoking by user closes the
-  // gap at any depth and forces a re-login, which is the clearest
-  // semantics for a stolen-token signal).
-  const claimed = await prisma.refreshToken.updateMany({
-    where: { id: stored.id, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
-  if (claimed.count === 0) {
-    await revokeAllForUser(prisma, stored.userId);
-    throw new AuthError("reuse_detected", "refresh token reuse detected");
-  }
-
-  // revoke this token, issue the successor
-  const nextToken = randomBytes(32).toString("base64url");
-  await prisma.refreshToken.create({
-    data: {
-      userId: stored.userId,
-      tokenHash: hashToken(nextToken),
-      expiresAt: new Date(Date.now() + config.refreshTtlSeconds * 1000),
-      rotatedFrom: stored.id,
-    },
+    const nextToken = randomBytes(32).toString("base64url");
+    await tx.refreshToken.create({
+      data: {
+        userId: stored.userId,
+        tokenHash: hashToken(nextToken),
+        expiresAt: new Date(Date.now() + config.refreshTtlSeconds * 1000),
+        rotatedFrom: stored.id,
+      },
+    });
+    return { kind: "success" as const, nextToken, userId: stored.user.id, username: stored.user.username };
   });
 
+  if (outcome.kind === "invalid") throw new AuthError("invalid_token", "unknown refresh token");
+  if (outcome.kind === "expired") throw new AuthError("token_expired", "refresh token expired");
+  if (outcome.kind === "reuse") throw new AuthError("reuse_detected", "refresh token reuse detected");
   return {
-    accessToken: await signAccessToken(config, {
-      sub: stored.user.id,
-      username: stored.user.username,
-    }),
-    refreshToken: nextToken,
+    accessToken: await signAccessToken(config, { sub: outcome.userId, username: outcome.username }),
+    refreshToken: outcome.nextToken,
   };
 }
 
@@ -249,7 +247,7 @@ function hashToken(token: string): string {
  * gap at any chain depth and forces a full re-login — the clearest
  * semantics for a stolen-token signal.
  */
-async function revokeAllForUser(prisma: PrismaClient, userId: string): Promise<void> {
+async function revokeAllForUser(prisma: PrismaClient | Prisma.TransactionClient, userId: string): Promise<void> {
   await prisma.refreshToken.updateMany({
     where: { userId, revokedAt: null },
     data: { revokedAt: new Date() },
