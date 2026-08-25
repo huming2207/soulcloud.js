@@ -1,5 +1,5 @@
 import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginManifest } from "@soulcloud/plugin-sdk";
-import type { AppendDebugObservationInput, CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary } from "./repository";
+import type { AppendDebugObservationInput, CreateDebugCaseInput, DebugArtifactRecord, DebugCaseRecord, DebugSessionRecord, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary } from "./repository";
 import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 import { targetSelectionArgs } from "./target-selection";
 
@@ -81,6 +81,7 @@ interface SoulInjectorPluginStore {
   saveTargetConfig(input: { installationId: string; projectId: string; createdBy: string; yaml: string }): Promise<TargetConfigRecord>;
   createDebugCase?(input: CreateDebugCaseInput): Promise<DebugCaseRecord>;
   listDebugCases?(projectId: string, limit?: number): Promise<DebugCaseRecord[]>;
+  listDebugSessions?(projectId: string, limit?: number): Promise<DebugSessionRecord[]>;
   appendDebugObservation?(input: AppendDebugObservationInput): Promise<unknown>;
   getLatestTargetConfig(installationId: string): Promise<TargetConfigRecord | null>;
   getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null>;
@@ -156,11 +157,14 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }
 
-function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[] }): string {
+function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[] }): string {
   const cases = input.cases.length === 0
     ? "<p>No debugger cases yet.</p>"
     : `<ul>${input.cases.map((item) => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(item.state)}${item.targetUnitRef ? ` — ${escapeHtml(item.targetUnitRef)}` : ""}</li>`).join("")}</ul>`;
-  return `<main><h1>SoulInjector debugger</h1><section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section><section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
+  const sessions = input.sessions.length === 0
+    ? "<p>No debugger sessions yet.</p>"
+    : `<ul>${input.sessions.map((item) => `<li><code>${escapeHtml(item.id)}</code> — ${escapeHtml(item.state)} — device <code>${escapeHtml(item.soulcloudDeviceRef)}</code> — started ${escapeHtml(item.startedAt)}</li>`).join("")}</ul>`;
+  return `<main><h1>SoulInjector debugger</h1><section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section><section><h2>Sessions</h2>${sessions}</section><section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
 }
 
 export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {
@@ -207,7 +211,8 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
       debugger: async (input) => {
         const saved = await repository.getLatestTargetConfig(input.installationId);
         const cases = repository.listDebugCases ? await repository.listDebugCases(input.projectId, 64) : [];
-        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases }), title: "SoulInjector debugger", cache: "no-store" };
+        const sessions = repository.listDebugSessions ? await repository.listDebugSessions(input.projectId, 64) : [];
+        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions }), title: "SoulInjector debugger", cache: "no-store" };
       },
     },
     handleAction: {

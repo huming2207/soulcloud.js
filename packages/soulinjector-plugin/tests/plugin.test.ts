@@ -93,6 +93,38 @@ describe("SoulInjector plugin", () => {
     expect(created).toEqual([{ projectId: saved.projectId, targetUnitRef: "unit-42", title: "Overheating probe", createdBy: saved.createdBy }]);
   });
 
+  test("renders private debugger session summaries without exposing execution credentials", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000006";
+    const plugin = createSoulInjectorPlugin({
+      ...store(),
+      listDebugSessions: async () => [{
+        id: sessionId,
+        caseId: saved.id,
+        soulcloudDeviceRef: "soulinjector-device-1",
+        executionRef: "00000000-0000-4000-8000-000000000007",
+        state: "active",
+        pluginVersion: "0.1.0",
+        manifestHash: saved.sha256,
+        deviceFirmwareVersion: null,
+        startedBy: saved.createdBy,
+        controller: saved.createdBy,
+        startedAt: saved.createdAt,
+        endedAt: null,
+      }],
+    });
+    const result = await plugin.render!["debugger"]!({
+      requestId: "request",
+      installationId: saved.installationId,
+      projectId: saved.projectId,
+      user: { id: saved.createdBy, locale: "en", permissions: [] },
+      routeId: "debugger",
+      params: {},
+    });
+    expect(result.html).toContain(sessionId);
+    expect(result.html).toContain("soulinjector-device-1");
+    expect(result.html).not.toContain("executionToken");
+  });
+
   test("persists device observations idempotently by broker event id", async () => {
     const observations: unknown[] = [];
     const plugin = createSoulInjectorPlugin({

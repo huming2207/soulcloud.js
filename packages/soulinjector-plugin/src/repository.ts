@@ -854,6 +854,19 @@ export class SoulInjectorRepository {
     return result.rows[0] ? asSessionRecord(result.rows[0]) : null;
   }
 
+  async listDebugSessions(projectId: string, limit = 64): Promise<DebugSessionRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("session limit must be between 1 and 256");
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT s.* FROM ${schema}.debug_sessions s
+       JOIN ${schema}.debug_cases c ON c.id = s.case_id
+       WHERE c.project_id = $1
+       ORDER BY s.started_at DESC, s.id DESC
+       LIMIT $2`,
+      [projectId, limit],
+    );
+    return result.rows.map(asSessionRecord);
+  }
+
   async appendDebugObservation(input: AppendDebugObservationInput): Promise<DebugObservationRecord> {
     const source = boundedText(input.source, "observation source", 64);
     const kind = boundedText(input.kind, "observation kind", 128);
