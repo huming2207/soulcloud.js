@@ -426,7 +426,6 @@ export class PluginManager {
     let started: { execution: DebugExecutionRecord; executionToken: string } | undefined;
     let operationId: string | undefined;
     let bootstrapSessionId: string | undefined;
-    let bootstrapInvalidated = false;
     let bootstrapConnection: PluginConnection | undefined;
     let bootstrapInstallation: { id: string; projectId: string; pluginId: string; pluginVersion: string; manifestHash: string } | undefined;
     try {
@@ -506,22 +505,21 @@ export class PluginManager {
         });
       } catch (error) {
         if (error instanceof DebugExecutionCapabilityError) {
-          bootstrapInvalidated = true;
           throw publicError("debug execution changed while starting debug session", 409, "conflict");
         }
         throw error;
       }
       return { execution: currentExecution, sessionId: parsed.sessionId };
     } catch (error) {
-      if (bootstrapInvalidated && bootstrapSessionId && bootstrapConnection && bootstrapInstallation) {
+      if (bootstrapSessionId && bootstrapConnection && bootstrapInstallation && started) {
         await this.abortDebugSessionBestEffort({
           connection: bootstrapConnection,
           installation: bootstrapInstallation,
           deviceId: input.deviceId,
-          executionId: started?.execution.id ?? "",
+          executionId: started.execution.id,
           sessionId: bootstrapSessionId,
           userId: input.userId,
-          reason: "platform execution became invalid during session bootstrap",
+          reason: "debug session bootstrap did not complete successfully",
           timeoutMs: Math.min(input.timeoutMs ?? 30_000, 5_000),
         });
       }
