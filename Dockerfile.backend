@@ -14,6 +14,7 @@ COPY packages/plugin-sdk/package.json packages/plugin-sdk/package.json
 COPY packages/plugin-rpc-contract/package.json packages/plugin-rpc-contract/package.json
 COPY packages/plugin-manager/package.json packages/plugin-manager/package.json
 COPY packages/plugin-runtime/package.json packages/plugin-runtime/package.json
+COPY packages/soulinjector-plugin/package.json packages/soulinjector-plugin/package.json
 RUN bun install --frozen-lockfile
 
 # source + generated client (root tsconfig is extended by packages)
@@ -25,6 +26,7 @@ COPY packages/plugin-sdk packages/plugin-sdk
 COPY packages/plugin-rpc-contract packages/plugin-rpc-contract
 COPY packages/plugin-manager packages/plugin-manager
 COPY packages/plugin-runtime packages/plugin-runtime
+COPY packages/soulinjector-plugin packages/soulinjector-plugin
 # prisma.config.ts needs a datasource url at generate time (no connection made)
 ARG DATABASE_URL=postgres://soulcloud:soulcloud@postgres:5432/soulcloud
 ENV DATABASE_URL=$DATABASE_URL
@@ -59,3 +61,14 @@ ENV PLUGIN_PORT=8090
 USER bun
 EXPOSE 8090
 CMD ["bun", "run", "packages/plugin-runtime/src/index.ts"]
+
+# --- SoulInjector plugin ----------------------------------------------------
+# The plugin has its own PostgreSQL connection and is never loaded into the
+# API or Plugin Manager process. Docker Compose/systemd/Kubernetes owns this
+# process lifecycle.
+FROM base AS soulinjector-plugin
+ENV PLUGIN_BIND=0.0.0.0
+ENV PLUGIN_PORT=8090
+USER bun
+EXPOSE 8090
+CMD ["bun", "run", "packages/soulinjector-plugin/src/runtime.ts"]

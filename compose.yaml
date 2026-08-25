@@ -20,6 +20,21 @@ services:
       # fresh volumes also get the isolated test database
       - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
 
+  soulinjector-plugin-postgres:
+    image: postgres:18.3-alpine
+    environment:
+      POSTGRES_DB: soulinjector
+      POSTGRES_USER: soulinjector
+      POSTGRES_PASSWORD: ${SOULINJECTOR_PLUGIN_POSTGRES_PASSWORD:-soulinjector}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soulinjector -d soulinjector"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - soulinjector-plugin-postgres-data:/var/lib/postgresql
+
   api:
     build:
       context: .
@@ -81,7 +96,7 @@ services:
       target: plugin-manager
     environment:
       DATABASE_URL: postgres://soulcloud:${POSTGRES_PASSWORD:-soulcloud}@postgres:5432/soulcloud
-      PLUGIN_ENDPOINTS: ${PLUGIN_ENDPOINTS:-}
+      PLUGIN_ENDPOINTS: ${PLUGIN_ENDPOINTS:-soulcloud.soulinjector-debugger=ws://soulinjector-plugin:8090/rpc/ws}
       PLUGIN_MANAGER_INTERNAL_BIND: 0.0.0.0
       PLUGIN_MANAGER_INTERNAL_PORT: 8091
       PLUGIN_MANAGER_SERVICE_TOKEN: ${PLUGIN_MANAGER_SERVICE_TOKEN:?set PLUGIN_MANAGER_SERVICE_TOKEN in .env}
@@ -122,14 +137,39 @@ services:
       PLUGIN_MAINTENANCE_INTERVAL_MS: ${PLUGIN_MAINTENANCE_INTERVAL_MS:-3600000}
       PLUGIN_RETENTION_BATCH_SIZE: ${PLUGIN_RETENTION_BATCH_SIZE:-2000}
       PLUGIN_RETENTION_MAX_BATCHES: ${PLUGIN_RETENTION_MAX_BATCHES:-8}
+      PLUGIN_ARTIFACT_MAX_BYTES: ${PLUGIN_ARTIFACT_MAX_BYTES:-67108864}
     ports:
       - "127.0.0.1:8091:8091"
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      soulinjector-plugin:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8091/health/ready | grep -q ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  soulinjector-plugin:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: soulinjector-plugin
+    environment:
+      SOULINJECTOR_PLUGIN_DATABASE_URL: postgres://soulinjector:${SOULINJECTOR_PLUGIN_POSTGRES_PASSWORD:-soulinjector}@soulinjector-plugin-postgres:5432/soulinjector
+      SOULINJECTOR_PLUGIN_DB_POOL_SIZE: ${SOULINJECTOR_PLUGIN_DB_POOL_SIZE:-4}
+      PLUGIN_BIND: 0.0.0.0
+      PLUGIN_PORT: 8090
+      PLUGIN_RPC_AUTH_TOKEN: ${PLUGIN_RPC_AUTH_TOKEN:?set PLUGIN_RPC_AUTH_TOKEN in .env}
+      PLUGIN_RPC_MAX_FRAME_BYTES: ${PLUGIN_RPC_MAX_FRAME_BYTES:-1048576}
+    restart: unless-stopped
+    depends_on:
+      soulinjector-plugin-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/health | grep -q soulcloud.soulinjector-debugger"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -151,3 +191,4 @@ services:
 
 volumes:
   postgres-data:
+  soulinjector-plugin-postgres-data:
