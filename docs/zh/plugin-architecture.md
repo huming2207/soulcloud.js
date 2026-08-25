@@ -253,6 +253,13 @@ plugin 是可信但可能有 bug 的云端代码。每个 plugin 独立构建和
 - 每个外部请求仍应有 timeout、响应大小和连接并发上限；
 - 容器 crash/hang/OOM 由 Docker/systemd/Kubernetes 的 policy 处理。
 
+当前 Compose 的 SoulInjector plugin service 已把这些边界中的部署级限制落到配置：默认
+`SOULINJECTOR_PLUGIN_MEMORY_LIMIT=512m`、`SOULINJECTOR_PLUGIN_CPU_LIMIT=1.0`、
+`SOULINJECTOR_PLUGIN_PIDS_LIMIT=128`，根文件系统只读，仅提供 64 MiB `/tmp`，并启用
+`no-new-privileges` 与 `cap_drop: ALL`。这些是可由 `.env` 覆盖的起始值，不是所有部署的
+容量承诺；systemd/Kubernetes 部署必须配置等价的 Memory/CPU/PID/Filesystem/Capability
+限制，并为日志设置独立配额。
+
 ### 6.1 Plugin-to-plugin
 
 plugin 可以直接调用另一个 plugin 的无租户或纯计算能力。任何涉及以下内容的调用必须经由
