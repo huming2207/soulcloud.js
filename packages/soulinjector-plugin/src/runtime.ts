@@ -22,6 +22,8 @@ const maxFrameBytes = positiveInteger("PLUGIN_RPC_MAX_FRAME_BYTES", 1024 * 1024,
 const maxBlobBytes = positiveInteger("PLUGIN_RPC_MAX_BLOB_BYTES", 65_536, 64 * 1024 * 1024);
 const maxTotalBlobBytes = positiveInteger("PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES", 256 * 1024, 64 * 1024 * 1024);
 if (maxBlobBytes > maxTotalBlobBytes) throw new Error("PLUGIN_RPC_MAX_BLOB_BYTES cannot exceed PLUGIN_RPC_MAX_TOTAL_BLOB_BYTES");
+const uploadCleanupIntervalMs = positiveInteger("SOULINJECTOR_PLUGIN_UPLOAD_CLEANUP_INTERVAL_MS", 300_000, 86_400_000);
+const uploadCleanupBatchSize = positiveInteger("SOULINJECTOR_PLUGIN_UPLOAD_CLEANUP_BATCH_SIZE", 256, 10_000);
 const runtime = await startPluginRuntime(createSoulInjectorPlugin(repository), {
   hostname: process.env.PLUGIN_BIND ?? "0.0.0.0",
   port,
@@ -41,11 +43,23 @@ const runtime = await startPluginRuntime(createSoulInjectorPlugin(repository), {
   },
 });
 console.log(`[soulcloud-soulinjector-plugin] ready url=${runtime.url}`);
+let cleanupRunning: Promise<void> | null = null;
+const cleanupTimer = setInterval(() => {
+  if (cleanupRunning) return;
+  const running = repository.purgeExpiredArtifactUploads(uploadCleanupBatchSize)
+    .then((count) => { if (count > 0) console.log(`[soulcloud-soulinjector-plugin] purged expired artifact uploads count=${count}`); })
+    .catch((error) => console.error("[soulcloud-soulinjector-plugin] artifact upload cleanup failed", error));
+  cleanupRunning = running;
+  void running.finally(() => { if (cleanupRunning === running) cleanupRunning = null; });
+}, uploadCleanupIntervalMs);
+cleanupTimer.unref?.();
 let stopping = false;
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
   console.log(`[soulcloud-soulinjector-plugin] ${signal}`);
+  clearInterval(cleanupTimer);
+  if (cleanupRunning) await cleanupRunning;
   await runtime.close();
   await repository.close();
   process.exit(0);

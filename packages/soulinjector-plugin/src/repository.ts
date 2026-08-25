@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS ${schema}.artifact_upload_chunks (
   content bytea NOT NULL,
   PRIMARY KEY (upload_id, offset_bytes)
 );
+CREATE INDEX IF NOT EXISTS artifact_uploads_expires_idx
+  ON ${schema}.artifact_uploads (expires_at);
 `;
 
 function asString(value: unknown, field: string): string {
@@ -358,6 +360,23 @@ export class SoulInjectorRepository {
     const record = asArtifactRecord(row);
     if (!Buffer.isBuffer(row.content)) throw new Error("private plugin database returned invalid artifact bytes");
     return { ...record, bytes: new Uint8Array(row.content.buffer, row.content.byteOffset, row.content.byteLength) };
+  }
+
+  async purgeExpiredArtifactUploads(batchSize = 256): Promise<number> {
+    if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 10_000) throw new RangeError("artifact upload cleanup batch size must be between 1 and 10000");
+    const result = await this.pool.query(
+      `WITH expired AS (
+         SELECT id FROM ${schema}.artifact_uploads
+         WHERE expires_at < CURRENT_TIMESTAMP
+         ORDER BY expires_at ASC, id ASC
+         LIMIT $1
+       )
+       DELETE FROM ${schema}.artifact_uploads uploads
+       USING expired
+       WHERE uploads.id = expired.id`,
+      [batchSize],
+    );
+    return result.rowCount ?? 0;
   }
 
   async close(): Promise<void> {
