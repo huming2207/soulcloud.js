@@ -111,7 +111,8 @@ target、healthcheck 和连接认证已落地；容器生命周期仍由部署�
 
 - 全仓 typecheck/unit/integration/build；
 - Compose config 和 healthcheck；
-- `rg` 确认 runtime/API/docs 没有引入 Station、Agent、Dispatcher 或 Host 角色名；
+- `rg` 确认 runtime/API 实现没有引入 Station、Dispatcher 或 Host 角色名；文档中若出现这些词，
+  只能出现在“废弃/禁止重新引入”的说明里；`Agent` 仅在明确指 plugin 内的 LLM 调试 agent 时使用；
 - plugin crash/hang 测试确认 Manager 及其他 plugin 不受影响。
 
 ### 退出条件
