@@ -1,6 +1,6 @@
 # SoulInjector 远程 Debugger Plugin 实施计划
 
-**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；设备固件、case/LLM 和长时 execution 尚未实现）
+**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地命令来源审计基础；设备固件、case/LLM 和长时 execution 尚未实现）
 **日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
 
@@ -51,6 +51,10 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   当前
   Human API 的人工 action 请求显式传递 approval；真正可审计的长期 approval/execution record
   仍属于后续阶段。
+- `DeviceCommand` 已保存平台侧 provenance：`origin_type`、发起用户、plugin installation、
+  plugin version/manifest hash、execution/correlation/idempotency 字段和取消请求时间；这些
+  字段不进入设备下发的 MessagePack payload。插件/LLM 来源在入队前必须带 installation、版本
+  和 manifest hash，避免出现无法归属的高权限命令。
 - 专用 SoulInjector runtime 读取并校验 operation、WebSocket backpressure、idle timeout、
   value/blob budget 等环境上限；Compose 会把这些上限传入 plugin，不把 Manager 的限制误当成
   plugin 进程自身的隔离。
@@ -344,7 +348,7 @@ MVP 采用 DB bytea 还是本地 spool，会影响部署和失败语义，必须
 
 ## 9. Command provenance、控制权和审批
 
-平台 DeviceCommand 需要补充或关联以下通用 provenance：
+平台 DeviceCommand 已补充以下通用 provenance（长时间 execution record 仍未实现）：
 
 ```text
 origin_type: human | plugin | llm_agent
@@ -356,6 +360,9 @@ correlation_id
 idempotency_key
 cancel_requested_at?
 ```
+
+入队校验要求非 human 来源同时提供 plugin installation、plugin version 和 manifest hash；
+provenance 只作为 Soulcloud 平台审计元数据保存，不改变现有设备 command wire contract。
 
 每台设备同一时刻最多一个 debug execution 持有控制 lease。其他用户可以观察，但不能同时
 改变 target 状态。人工接管必须原子转移 controller，并通知 plugin UI 与 LLM harness。
