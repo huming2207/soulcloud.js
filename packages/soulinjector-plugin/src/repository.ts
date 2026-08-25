@@ -77,6 +77,113 @@ export interface StoreArtifactChunkOutput {
   sha256: string | null;
 }
 
+export type DebugCaseState = "open" | "in_progress" | "resolved" | "closed";
+export type DebugSessionState = "active" | "paused" | "completed" | "failed" | "cancelled";
+export type DebugReportState = "draft" | "final";
+
+export interface DebugCaseRecord {
+  id: string;
+  projectId: string;
+  targetUnitRef: string | null;
+  state: DebugCaseState;
+  title: string;
+  createdBy: string;
+  assignedTo: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateDebugCaseInput {
+  projectId: string;
+  targetUnitRef?: string | null;
+  title: string;
+  createdBy: string;
+}
+
+export interface DebugSessionRecord {
+  id: string;
+  caseId: string;
+  soulcloudDeviceRef: string;
+  executionRef: string | null;
+  state: DebugSessionState;
+  pluginVersion: string;
+  manifestHash: string;
+  deviceFirmwareVersion: string | null;
+  startedBy: string;
+  controller: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+export interface CreateDebugSessionInput {
+  projectId: string;
+  caseId: string;
+  soulcloudDeviceRef: string;
+  executionRef?: string | null;
+  pluginVersion: string;
+  manifestHash: string;
+  deviceFirmwareVersion?: string | null;
+  startedBy: string;
+}
+
+export interface DebugObservationRecord {
+  id: string;
+  sessionId: string;
+  source: string;
+  kind: string;
+  structuredData: unknown;
+  artifactId: string | null;
+  createdAt: string;
+}
+
+export interface AppendDebugObservationInput {
+  projectId: string;
+  sessionId: string;
+  source: string;
+  kind: string;
+  structuredData: unknown;
+  artifactId?: string | null;
+}
+
+export interface DebugReportRecord {
+  id: string;
+  caseId: string;
+  state: DebugReportState;
+  title: string;
+  currentRevision: number;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DebugReportRevisionRecord {
+  id: string;
+  reportId: string;
+  revision: number;
+  content: string;
+  contentSha256: string;
+  metadata: unknown;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface CreateDebugReportInput {
+  projectId: string;
+  caseId: string;
+  title: string;
+  createdBy: string;
+  content?: string;
+  metadata?: unknown;
+}
+
+export interface AppendDebugReportRevisionInput {
+  projectId: string;
+  reportId: string;
+  createdBy: string;
+  content: string;
+  metadata?: unknown;
+}
+
 const MIGRATION = `
 CREATE SCHEMA IF NOT EXISTS ${schema};
 
@@ -119,6 +226,83 @@ CREATE INDEX IF NOT EXISTS debug_artifacts_installation_created_idx
   ON ${schema}.debug_artifacts (installation_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS debug_artifacts_installation_sha256_idx
   ON ${schema}.debug_artifacts (installation_id, sha256);
+
+ALTER TABLE ${schema}.debug_artifacts
+  ADD COLUMN IF NOT EXISTS case_id uuid;
+CREATE INDEX IF NOT EXISTS debug_artifacts_case_created_idx
+  ON ${schema}.debug_artifacts (case_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ${schema}.debug_cases (
+  id uuid PRIMARY KEY,
+  project_id uuid NOT NULL,
+  target_unit_ref varchar(256),
+  state text NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'in_progress', 'resolved', 'closed')),
+  title varchar(256) NOT NULL,
+  created_by uuid NOT NULL,
+  assigned_to uuid,
+  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS debug_cases_project_updated_idx
+  ON ${schema}.debug_cases (project_id, updated_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS ${schema}.debug_sessions (
+  id uuid PRIMARY KEY,
+  case_id uuid NOT NULL REFERENCES ${schema}.debug_cases(id) ON DELETE CASCADE,
+  soulcloud_device_ref uuid NOT NULL,
+  execution_ref uuid,
+  state text NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'paused', 'completed', 'failed', 'cancelled')),
+  plugin_version varchar(128) NOT NULL,
+  manifest_hash char(64) NOT NULL CHECK (manifest_hash ~ '^[0-9a-fA-F]{64}$'),
+  device_firmware_version varchar(256),
+  started_by uuid NOT NULL,
+  controller uuid,
+  started_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS debug_sessions_case_started_idx
+  ON ${schema}.debug_sessions (case_id, started_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS debug_sessions_device_started_idx
+  ON ${schema}.debug_sessions (soulcloud_device_ref, started_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS ${schema}.debug_observations (
+  id uuid PRIMARY KEY,
+  session_id uuid NOT NULL REFERENCES ${schema}.debug_sessions(id) ON DELETE CASCADE,
+  source varchar(64) NOT NULL,
+  kind varchar(128) NOT NULL,
+  structured_data jsonb NOT NULL,
+  artifact_id uuid,
+  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS debug_observations_session_created_idx
+  ON ${schema}.debug_observations (session_id, created_at ASC, id ASC);
+
+CREATE TABLE IF NOT EXISTS ${schema}.debug_reports (
+  id uuid PRIMARY KEY,
+  case_id uuid NOT NULL REFERENCES ${schema}.debug_cases(id) ON DELETE CASCADE,
+  state text NOT NULL DEFAULT 'draft' CHECK (state IN ('draft', 'final')),
+  title varchar(256) NOT NULL,
+  current_revision integer NOT NULL DEFAULT 0 CHECK (current_revision >= 0),
+  created_by uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS debug_reports_case_updated_idx
+  ON ${schema}.debug_reports (case_id, updated_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS ${schema}.debug_report_revisions (
+  id uuid PRIMARY KEY,
+  report_id uuid NOT NULL REFERENCES ${schema}.debug_reports(id) ON DELETE CASCADE,
+  revision integer NOT NULL CHECK (revision > 0),
+  content text NOT NULL,
+  content_sha256 char(64) NOT NULL CHECK (content_sha256 ~ '^[0-9a-fA-F]{64}$'),
+  metadata jsonb NOT NULL,
+  created_by uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (report_id, revision)
+);
+CREATE INDEX IF NOT EXISTS debug_report_revisions_created_idx
+  ON ${schema}.debug_report_revisions (report_id, revision DESC);
 
 CREATE TABLE IF NOT EXISTS ${schema}.artifact_uploads (
   id uuid PRIMARY KEY,
@@ -185,6 +369,116 @@ function asArtifactRecord(row: QueryResultRow): DebugArtifactRecord {
     createdBy: asString(row.created_by, "artifact creator"),
     createdAt: new Date(row.created_at as string | Date).toISOString(),
   };
+}
+
+function asCaseState(value: unknown): DebugCaseState {
+  if (value === "open" || value === "in_progress" || value === "resolved" || value === "closed") return value;
+  throw new Error("private plugin database returned invalid debug case state");
+}
+
+function asSessionState(value: unknown): DebugSessionState {
+  if (value === "active" || value === "paused" || value === "completed" || value === "failed" || value === "cancelled") return value;
+  throw new Error("private plugin database returned invalid debug session state");
+}
+
+function asReportState(value: unknown): DebugReportState {
+  if (value === "draft" || value === "final") return value;
+  throw new Error("private plugin database returned invalid debug report state");
+}
+
+function optionalString(value: unknown, field: string): string | null {
+  return value === null || value === undefined ? null : asString(value, field);
+}
+
+function asCaseRecord(row: QueryResultRow): DebugCaseRecord {
+  return {
+    id: asString(row.id, "case id"),
+    projectId: asString(row.project_id, "case project id"),
+    targetUnitRef: optionalString(row.target_unit_ref, "target unit reference"),
+    state: asCaseState(row.state),
+    title: asString(row.title, "case title"),
+    createdBy: asString(row.created_by, "case creator"),
+    assignedTo: optionalString(row.assigned_to, "case assignee"),
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString(),
+  };
+}
+
+function asSessionRecord(row: QueryResultRow): DebugSessionRecord {
+  return {
+    id: asString(row.id, "session id"),
+    caseId: asString(row.case_id, "session case id"),
+    soulcloudDeviceRef: asString(row.soulcloud_device_ref, "Soulcloud Device reference"),
+    executionRef: optionalString(row.execution_ref, "execution reference"),
+    state: asSessionState(row.state),
+    pluginVersion: asString(row.plugin_version, "plugin version"),
+    manifestHash: asString(row.manifest_hash, "manifest hash").trim().toLowerCase(),
+    deviceFirmwareVersion: optionalString(row.device_firmware_version, "device firmware version"),
+    startedBy: asString(row.started_by, "session starter"),
+    controller: optionalString(row.controller, "session controller"),
+    startedAt: new Date(row.started_at as string | Date).toISOString(),
+    endedAt: row.ended_at === null || row.ended_at === undefined ? null : new Date(row.ended_at as string | Date).toISOString(),
+  };
+}
+
+function asObservationRecord(row: QueryResultRow): DebugObservationRecord {
+  return {
+    id: asString(row.id, "observation id"),
+    sessionId: asString(row.session_id, "observation session id"),
+    source: asString(row.source, "observation source"),
+    kind: asString(row.kind, "observation kind"),
+    structuredData: row.structured_data,
+    artifactId: optionalString(row.artifact_id, "observation artifact id"),
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+  };
+}
+
+function asReportRecord(row: QueryResultRow): DebugReportRecord {
+  return {
+    id: asString(row.id, "report id"),
+    caseId: asString(row.case_id, "report case id"),
+    state: asReportState(row.state),
+    title: asString(row.title, "report title"),
+    currentRevision: Number(row.current_revision),
+    createdBy: asString(row.created_by, "report creator"),
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString(),
+  };
+}
+
+function asReportRevisionRecord(row: QueryResultRow): DebugReportRevisionRecord {
+  return {
+    id: asString(row.id, "report revision id"),
+    reportId: asString(row.report_id, "report id"),
+    revision: Number(row.revision),
+    content: asString(row.content, "report content"),
+    contentSha256: asString(row.content_sha256, "report content hash").trim().toLowerCase(),
+    metadata: row.metadata,
+    createdBy: asString(row.created_by, "report revision creator"),
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+  };
+}
+
+function boundedText(value: string, field: string, maxBytes: number): string {
+  if (typeof value !== "string" || value.trim().length === 0 || new TextEncoder().encode(value).byteLength > maxBytes) {
+    throw new RangeError(`${field} must be non-empty and at most ${maxBytes} UTF-8 bytes`);
+  }
+  return value;
+}
+
+function jsonValue(value: unknown, field: string, maxBytes: number): string {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value ?? null);
+  } catch (error) {
+    throw new RangeError(`${field} is not JSON serializable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (new TextEncoder().encode(serialized).byteLength > maxBytes) throw new RangeError(`${field} exceeds ${maxBytes} UTF-8 bytes`);
+  return serialized;
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 export class SoulInjectorRepository {
@@ -433,6 +727,254 @@ export class SoulInjectorRepository {
       [installationId, projectId],
     );
     return result.rows.map(asArtifactRecord);
+  }
+
+  async createDebugCase(input: CreateDebugCaseInput): Promise<DebugCaseRecord> {
+    const title = boundedText(input.title, "case title", 256);
+    const targetUnitRef = input.targetUnitRef === null || input.targetUnitRef === undefined
+      ? null
+      : boundedText(input.targetUnitRef, "target unit reference", 256);
+    const result = await this.pool.query<QueryResultRow>(
+      `INSERT INTO ${schema}.debug_cases (id, project_id, target_unit_ref, title, created_by)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [randomUUID(), input.projectId, targetUnitRef, title, input.createdBy],
+    );
+    return asCaseRecord(result.rows[0]!);
+  }
+
+  async getDebugCase(id: string, projectId: string): Promise<DebugCaseRecord | null> {
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT * FROM ${schema}.debug_cases WHERE id = $1 AND project_id = $2`,
+      [id, projectId],
+    );
+    return result.rows[0] ? asCaseRecord(result.rows[0]) : null;
+  }
+
+  async setDebugCaseState(id: string, projectId: string, state: DebugCaseState): Promise<DebugCaseRecord | null> {
+    const result = await this.pool.query<QueryResultRow>(
+      `UPDATE ${schema}.debug_cases
+       SET state = $3, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND project_id = $2
+       RETURNING *`,
+      [id, projectId, state],
+    );
+    return result.rows[0] ? asCaseRecord(result.rows[0]) : null;
+  }
+
+  async assignDebugCase(id: string, projectId: string, assignedTo: string | null): Promise<DebugCaseRecord | null> {
+    const result = await this.pool.query<QueryResultRow>(
+      `UPDATE ${schema}.debug_cases
+       SET assigned_to = $3, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND project_id = $2
+       RETURNING *`,
+      [id, projectId, assignedTo],
+    );
+    return result.rows[0] ? asCaseRecord(result.rows[0]) : null;
+  }
+
+  async createDebugSession(input: CreateDebugSessionInput): Promise<DebugSessionRecord> {
+    const pluginVersion = boundedText(input.pluginVersion, "plugin version", 128);
+    const deviceFirmwareVersion = input.deviceFirmwareVersion === null || input.deviceFirmwareVersion === undefined
+      ? null
+      : boundedText(input.deviceFirmwareVersion, "device firmware version", 256);
+    if (!/^[0-9a-f]{64}$/i.test(input.manifestHash)) throw new RangeError("manifestHash must be a SHA-256 hex digest");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const caseResult = await client.query(`SELECT id FROM ${schema}.debug_cases WHERE id = $1 AND project_id = $2 FOR UPDATE`, [input.caseId, input.projectId]);
+      if (!caseResult.rows[0]) throw new Error("debug case is not available to this project");
+      const result = await client.query<QueryResultRow>(
+        `INSERT INTO ${schema}.debug_sessions
+          (id, case_id, soulcloud_device_ref, execution_ref, plugin_version, manifest_hash, device_firmware_version, started_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [randomUUID(), input.caseId, input.soulcloudDeviceRef, input.executionRef ?? null, pluginVersion, input.manifestHash.toLowerCase(), deviceFirmwareVersion, input.startedBy],
+      );
+      await client.query("COMMIT");
+      return asSessionRecord(result.rows[0]!);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async finishDebugSession(id: string, projectId: string, state: Exclude<DebugSessionState, "active" | "paused">): Promise<DebugSessionRecord | null> {
+    const result = await this.pool.query<QueryResultRow>(
+      `UPDATE ${schema}.debug_sessions s
+       SET state = $3, ended_at = COALESCE(s.ended_at, CURRENT_TIMESTAMP)
+       FROM ${schema}.debug_cases c
+       WHERE s.id = $1 AND s.case_id = c.id AND c.project_id = $2
+       RETURNING s.*`,
+      [id, projectId, state],
+    );
+    return result.rows[0] ? asSessionRecord(result.rows[0]) : null;
+  }
+
+  async getDebugSession(id: string, projectId: string): Promise<DebugSessionRecord | null> {
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT s.* FROM ${schema}.debug_sessions s
+       JOIN ${schema}.debug_cases c ON c.id = s.case_id
+       WHERE s.id = $1 AND c.project_id = $2`,
+      [id, projectId],
+    );
+    return result.rows[0] ? asSessionRecord(result.rows[0]) : null;
+  }
+
+  async appendDebugObservation(input: AppendDebugObservationInput): Promise<DebugObservationRecord> {
+    const source = boundedText(input.source, "observation source", 64);
+    const kind = boundedText(input.kind, "observation kind", 128);
+    const structuredData = jsonValue(input.structuredData, "observation data", 512 * 1024);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const sessionResult = await client.query(
+        `SELECT s.id FROM ${schema}.debug_sessions s
+         JOIN ${schema}.debug_cases c ON c.id = s.case_id
+         WHERE s.id = $1 AND c.project_id = $2 FOR UPDATE`,
+        [input.sessionId, input.projectId],
+      );
+      if (!sessionResult.rows[0]) throw new Error("debug session is not available to this project");
+      if (input.artifactId !== null && input.artifactId !== undefined) {
+        const artifactResult = await client.query(
+          `SELECT id FROM ${schema}.debug_artifacts WHERE id = $1 AND project_id = $2`,
+          [input.artifactId, input.projectId],
+        );
+        if (!artifactResult.rows[0]) throw new Error("observation artifact is not available to this project");
+      }
+      const result = await client.query<QueryResultRow>(
+        `INSERT INTO ${schema}.debug_observations (id, session_id, source, kind, structured_data, artifact_id)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING *`,
+        [randomUUID(), input.sessionId, source, kind, structuredData, input.artifactId ?? null],
+      );
+      await client.query("COMMIT");
+      return asObservationRecord(result.rows[0]!);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listDebugObservations(sessionId: string, projectId: string, limit = 128): Promise<DebugObservationRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new RangeError("observation limit must be between 1 and 512");
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT o.* FROM ${schema}.debug_observations o
+       JOIN ${schema}.debug_sessions s ON s.id = o.session_id
+       JOIN ${schema}.debug_cases c ON c.id = s.case_id
+       WHERE o.session_id = $1 AND c.project_id = $2
+       ORDER BY o.created_at ASC, o.id ASC
+       LIMIT $3`,
+      [sessionId, projectId, limit],
+    );
+    return result.rows.map(asObservationRecord);
+  }
+
+  async createDebugReport(input: CreateDebugReportInput): Promise<DebugReportRecord> {
+    const title = boundedText(input.title, "report title", 256);
+    const content = input.content ?? "";
+    boundedText(content || "empty", "report content", 4 * 1024 * 1024);
+    const metadata = jsonValue(input.metadata ?? null, "report metadata", 256 * 1024);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const caseResult = await client.query(`SELECT id FROM ${schema}.debug_cases WHERE id = $1 AND project_id = $2 FOR UPDATE`, [input.caseId, input.projectId]);
+      if (!caseResult.rows[0]) throw new Error("debug case is not available to this project");
+      const reportId = randomUUID();
+      const reportResult = await client.query<QueryResultRow>(
+        `INSERT INTO ${schema}.debug_reports (id, case_id, title, created_by)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [reportId, input.caseId, title, input.createdBy],
+      );
+      if (content.length > 0) {
+        await client.query(
+          `INSERT INTO ${schema}.debug_report_revisions
+            (id, report_id, revision, content, content_sha256, metadata, created_by)
+           VALUES ($1, $2, 1, $3, $4, $5::jsonb, $6)`,
+          [randomUUID(), reportId, content, sha256Text(content), metadata, input.createdBy],
+        );
+        await client.query(`UPDATE ${schema}.debug_reports SET current_revision = 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [reportId]);
+      }
+      const finalReport = await client.query<QueryResultRow>(`SELECT * FROM ${schema}.debug_reports WHERE id = $1`, [reportId]);
+      await client.query("COMMIT");
+      return asReportRecord(finalReport.rows[0] ?? reportResult.rows[0]!);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async appendDebugReportRevision(input: AppendDebugReportRevisionInput): Promise<DebugReportRevisionRecord> {
+    boundedText(input.content, "report content", 4 * 1024 * 1024);
+    const metadata = jsonValue(input.metadata ?? null, "report metadata", 256 * 1024);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const reportResult = await client.query<QueryResultRow>(
+        `SELECT r.id, r.state, r.current_revision
+         FROM ${schema}.debug_reports r
+         JOIN ${schema}.debug_cases c ON c.id = r.case_id
+         WHERE r.id = $1 AND c.project_id = $2 FOR UPDATE`,
+        [input.reportId, input.projectId],
+      );
+      const report = reportResult.rows[0];
+      if (!report) throw new Error("debug report is not available to this project");
+      if (asReportState(report.state) !== "draft") throw new Error("final debug reports are immutable");
+      const revision = Number(report.current_revision) + 1;
+      const revisionResult = await client.query<QueryResultRow>(
+        `INSERT INTO ${schema}.debug_report_revisions
+          (id, report_id, revision, content, content_sha256, metadata, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING *`,
+        [randomUUID(), input.reportId, revision, input.content, sha256Text(input.content), metadata, input.createdBy],
+      );
+      await client.query(`UPDATE ${schema}.debug_reports SET current_revision = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [input.reportId, revision]);
+      await client.query("COMMIT");
+      return asReportRevisionRecord(revisionResult.rows[0]!);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async finalizeDebugReport(reportId: string, projectId: string): Promise<DebugReportRecord | null> {
+    const result = await this.pool.query<QueryResultRow>(
+      `UPDATE ${schema}.debug_reports r
+       SET state = 'final', updated_at = CURRENT_TIMESTAMP
+       FROM ${schema}.debug_cases c
+       WHERE r.id = $1 AND r.case_id = c.id AND c.project_id = $2 AND r.state = 'draft'
+       RETURNING r.*`,
+      [reportId, projectId],
+    );
+    return result.rows[0] ? asReportRecord(result.rows[0]) : null;
+  }
+
+  async getDebugReport(reportId: string, projectId: string): Promise<DebugReportRecord | null> {
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT r.* FROM ${schema}.debug_reports r
+       JOIN ${schema}.debug_cases c ON c.id = r.case_id
+       WHERE r.id = $1 AND c.project_id = $2`,
+      [reportId, projectId],
+    );
+    return result.rows[0] ? asReportRecord(result.rows[0]) : null;
+  }
+
+  async listDebugReportRevisions(reportId: string, projectId: string, limit = 64): Promise<DebugReportRevisionRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("report revision limit must be between 1 and 256");
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT v.* FROM ${schema}.debug_report_revisions v
+       JOIN ${schema}.debug_reports r ON r.id = v.report_id
+       JOIN ${schema}.debug_cases c ON c.id = r.case_id
+       WHERE v.report_id = $1 AND c.project_id = $2
+       ORDER BY v.revision DESC
+       LIMIT $3`,
+      [reportId, projectId, limit],
+    );
+    return result.rows.map(asReportRevisionRecord);
   }
 
   async purgeExpiredArtifactUploads(batchSize = 256): Promise<number> {
