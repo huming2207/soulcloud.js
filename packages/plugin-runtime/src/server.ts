@@ -511,7 +511,7 @@ function createRuntimeConnection(
           if (!(chunk instanceof Uint8Array)) rpcError("INVALID_EVENT_INPUT", "artifact chunk is not binary");
           let result: unknown;
           try {
-            result = await runWithDeadline(input.deadlineMs, (signal) => definition.storeArtifactChunk!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, uploadId: input.uploadId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset: input.offset, final: input.final, chunk }, { signal }));
+            result = await runWithDeadline(input.deadlineMs, (signal) => definition.storeArtifactChunk!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId, uploadId: input.uploadId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset: input.offset, final: input.final, chunk }, { signal }));
           } catch (error) {
             const code = typeof error === "object" && error !== null && "code" in error
               ? (error as { code?: unknown }).code

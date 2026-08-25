@@ -157,7 +157,7 @@ describe("artifact chunk contract", () => {
   test("requires a non-final chunk to leave room for the final chunk", () => {
     expect(artifactChunkInput.safeParse({ ...base, final: false, chunk: new Blob([Uint8Array.of(1, 2, 3, 4)]) }).success).toBe(false);
     expect(artifactChunkInput.safeParse({ ...base, final: true, chunk: new Blob([Uint8Array.of(1, 2, 3, 4)]) }).success).toBe(true);
-    expect(artifactChunkInput.safeParse({ ...base, final: false, chunk: new Blob([Uint8Array.of(1, 2, 3)]) }).success).toBe(true);
+    expect(artifactChunkInput.safeParse({ ...base, caseId: "00000000-0000-4000-8000-000000000005", final: false, chunk: new Blob([Uint8Array.of(1, 2, 3)]) }).success).toBe(true);
   });
 
   test("rejects final chunks that overrun or stop before the declared size", () => {

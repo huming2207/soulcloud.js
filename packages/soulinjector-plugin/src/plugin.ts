@@ -78,7 +78,7 @@ interface SoulInjectorPluginStore {
   getTargetConfig(installationId: string, revision: number): Promise<TargetConfigRecord | null>;
   listTargetConfigs?(installationId: string, projectId: string): Promise<TargetConfigSummary[]>;
   listArtifacts?(installationId: string, projectId: string): Promise<DebugArtifactRecord[]>;
-  storeArtifactChunk(input: { installationId: string; projectId: string; userId: string; uploadId: string; kind: "elf" | "firmware"; filename: string; contentType: string; totalSize: number; offset: number; final: boolean; chunk: Uint8Array }): Promise<StoreArtifactChunkOutput>;
+  storeArtifactChunk(input: { installationId: string; projectId: string; userId: string; uploadId: string; caseId?: string; kind: "elf" | "firmware"; filename: string; contentType: string; totalSize: number; offset: number; final: boolean; chunk: Uint8Array }): Promise<StoreArtifactChunkOutput>;
 }
 
 function value(input: unknown, key: string): unknown {
@@ -181,7 +181,7 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
         createdAt: artifact.createdAt,
       }));
     },
-    storeArtifactChunk: async (input) => repository.storeArtifactChunk(input),
+    storeArtifactChunk: async (input) => repository.storeArtifactChunk({ ...input, caseId: input.caseId }),
     render: {
       debugger: async (input) => {
         const saved = await repository.getLatestTargetConfig(input.installationId);

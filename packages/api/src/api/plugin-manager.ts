@@ -69,7 +69,7 @@ const actionBody = z.object({ device_id: z.string().uuid(), input: z.unknown() }
 const stateBody = z.object({ state: z.enum(["enabled", "disabled"]) }).strict();
 const migrateBody = z.object({ plugin_version: z.string().min(1).max(128), manifest_hash: z.string().regex(/^[0-9a-f]{64}$/), config: z.unknown().optional() }).strict();
 const targetConfigBody = z.object({ yaml: z.string().min(1).max(65_536) }).strict();
-const debuggerArtifactQuery = z.object({ kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), content_type: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)).default("application/octet-stream") }).strict();
+const debuggerArtifactQuery = z.object({ kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), case_id: z.string().uuid().optional(), content_type: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)).default("application/octet-stream") }).strict();
 
 /** Human API is the only browser-facing authority for plugin metadata. */
 export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, options?: PluginManagerOptions) {
@@ -209,6 +209,7 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
         const result = await callManagerBinary(options, `/internal/plugins/debugger/installations/${params.id}/artifacts`, request, {
           "x-soulcloud-project-id": installation.projectId,
           "x-soulcloud-user-id": user.user.id,
+          ...(parsed.data.case_id ? { "x-soulcloud-case-id": parsed.data.case_id } : {}),
           "x-soulcloud-artifact-kind": parsed.data.kind,
           "x-soulcloud-artifact-filename": parsed.data.filename,
           "x-soulcloud-artifact-content-type": parsed.data.content_type,

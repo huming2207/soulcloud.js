@@ -730,6 +730,7 @@ export class PluginManager {
     installationId: string;
     projectId: string;
     userId: string;
+    caseId?: string;
     kind: "elf" | "firmware";
     filename: string;
     contentType: string;
@@ -756,7 +757,7 @@ export class PluginManager {
       bodyBytes += chunk.byteLength;
       if (bodyBytes > input.totalSize) throw publicError("artifact body exceeds the declared content length", 400, "invalid_request");
       if (previous) {
-        const progress = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: false, chunk: previous }, timeoutMs);
+        const progress = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: false, chunk: previous }, timeoutMs);
         if (typeof progress !== "number") throw publicError("plugin completed an artifact before the final chunk", 502, "invalid_plugin_output");
         offset = progress;
       }
@@ -764,14 +765,14 @@ export class PluginManager {
     }
     if (!previous) throw Object.assign(new Error("artifact body is empty"), { status: 400 });
     if (bodyBytes !== input.totalSize) throw publicError("artifact body is shorter than the declared content length", 400, "invalid_request");
-    const result = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: true, chunk: previous }, timeoutMs, true);
+    const result = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: true, chunk: previous }, timeoutMs, true);
     if (typeof result === "number") throw publicError("plugin did not complete artifact upload", 502, "invalid_plugin_output");
     return { uploadId, artifactId: result.artifactId, sha256: result.sha256, size: input.totalSize, kind: input.kind, filename: input.filename };
   }
 
   private async sendArtifactChunk(
     connection: PluginConnection,
-    input: { installation: { id: string; projectId: string; pluginId: string; pluginVersion: string }; uploadId: string; userId: string; kind: "elf" | "firmware"; filename: string; contentType: string; totalSize: number; offset: number; final: boolean; chunk: Uint8Array },
+    input: { installation: { id: string; projectId: string; pluginId: string; pluginVersion: string }; uploadId: string; userId: string; caseId?: string; kind: "elf" | "firmware"; filename: string; contentType: string; totalSize: number; offset: number; final: boolean; chunk: Uint8Array },
     timeoutMs: number,
     expectFinal = false,
   ): Promise<number | { artifactId: string; sha256: string }> {
@@ -804,6 +805,7 @@ export class PluginManager {
           projectId: input.installation.projectId,
           userId: input.userId,
           uploadId: input.uploadId,
+          ...(input.caseId ? { caseId: input.caseId } : {}),
           kind: input.kind,
           filename: input.filename,
           contentType: input.contentType,

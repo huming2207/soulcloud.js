@@ -49,6 +49,7 @@ export interface SaveArtifactInput {
   installationId: string;
   projectId: string;
   createdBy: string;
+  caseId?: string | null;
   kind: DebugArtifactKind;
   filename: string;
   contentType?: string;
@@ -60,6 +61,7 @@ export interface StoreArtifactChunkInput {
   projectId: string;
   userId: string;
   uploadId: string;
+  caseId?: string | null;
   kind: DebugArtifactKind;
   filename: string;
   contentType: string;
@@ -308,6 +310,7 @@ CREATE TABLE IF NOT EXISTS ${schema}.artifact_uploads (
   id uuid PRIMARY KEY,
   installation_id uuid NOT NULL,
   project_id uuid NOT NULL,
+  case_id uuid,
   kind text NOT NULL CHECK (kind IN ('elf', 'firmware')),
   filename varchar(128) NOT NULL,
   content_type varchar(128) NOT NULL,
@@ -321,6 +324,7 @@ CREATE TABLE IF NOT EXISTS ${schema}.artifact_uploads (
 );
 
 ALTER TABLE ${schema}.artifact_uploads
+  ADD COLUMN IF NOT EXISTS case_id uuid,
   ADD COLUMN IF NOT EXISTS completed_artifact_id uuid,
   ADD COLUMN IF NOT EXISTS completed_sha256 char(64);
 
@@ -590,12 +594,16 @@ export class SoulInjectorRepository {
 
   async storeArtifact(input: SaveArtifactInput): Promise<DebugArtifactRecord> {
     const artifact = validateArtifact(input);
+    if (input.caseId !== null && input.caseId !== undefined) {
+      const caseResult = await this.pool.query(`SELECT id FROM ${schema}.debug_cases WHERE id = $1 AND project_id = $2`, [input.caseId, input.projectId]);
+      if (!caseResult.rows[0]) throw new Error("artifact case is not available to this project");
+    }
     const id = randomUUID();
     const result = await this.pool.query<QueryResultRow>(
       `INSERT INTO ${schema}.debug_artifacts
-        (id, installation_id, project_id, kind, filename, content_type, size, sha256, content, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, installation_id, project_id, kind, filename, content_type, size, sha256, created_by, created_at`,
-      [id, input.installationId, input.projectId, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, Buffer.isBuffer(artifact.bytes) ? artifact.bytes : Buffer.from(artifact.bytes), input.createdBy],
+        (id, installation_id, project_id, case_id, kind, filename, content_type, size, sha256, content, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, installation_id, project_id, kind, filename, content_type, size, sha256, created_by, created_at`,
+      [id, input.installationId, input.projectId, input.caseId ?? null, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, Buffer.isBuffer(artifact.bytes) ? artifact.bytes : Buffer.from(artifact.bytes), input.createdBy],
     );
     return asArtifactRecord(result.rows[0]!);
   }
@@ -614,9 +622,9 @@ export class SoulInjectorRepository {
       await client.query(`DELETE FROM ${schema}.artifact_uploads WHERE id = $1 AND expires_at < CURRENT_TIMESTAMP`, [input.uploadId]);
       await client.query(
         `INSERT INTO ${schema}.artifact_uploads
-          (id, installation_id, project_id, kind, filename, content_type, expected_size, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
-        [input.uploadId, input.installationId, input.projectId, input.kind, input.filename, input.contentType, input.totalSize, input.userId],
+          (id, installation_id, project_id, case_id, kind, filename, content_type, expected_size, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING`,
+        [input.uploadId, input.installationId, input.projectId, input.caseId ?? null, input.kind, input.filename, input.contentType, input.totalSize, input.userId],
       );
       const uploadResult = await client.query<QueryResultRow>(
         `SELECT * FROM ${schema}.artifact_uploads WHERE id = $1 FOR UPDATE`,
@@ -624,8 +632,12 @@ export class SoulInjectorRepository {
       );
       const upload = uploadResult.rows[0];
       if (!upload) throw new Error("artifact upload disappeared");
-      if (asString(upload.installation_id, "installation id") !== input.installationId || asString(upload.project_id, "project id") !== input.projectId || asString(upload.created_by, "artifact uploader") !== input.userId || upload.kind !== input.kind || asString(upload.filename, "artifact filename") !== input.filename || asString(upload.content_type, "artifact content type") !== input.contentType || Number(upload.expected_size) !== input.totalSize) {
+      if (asString(upload.installation_id, "installation id") !== input.installationId || asString(upload.project_id, "project id") !== input.projectId || optionalString(upload.case_id, "case id") !== (input.caseId ?? null) || asString(upload.created_by, "artifact uploader") !== input.userId || upload.kind !== input.kind || asString(upload.filename, "artifact filename") !== input.filename || asString(upload.content_type, "artifact content type") !== input.contentType || Number(upload.expected_size) !== input.totalSize) {
         throw new Error("artifact upload metadata changed");
+      }
+      if (input.caseId !== null && input.caseId !== undefined) {
+        const caseResult = await client.query(`SELECT id FROM ${schema}.debug_cases WHERE id = $1 AND project_id = $2`, [input.caseId, input.projectId]);
+        if (!caseResult.rows[0]) throw new Error("artifact case is not available to this project");
       }
       if (upload.completed_artifact_id) {
         const completed = await client.query<QueryResultRow>(
@@ -684,9 +696,9 @@ export class SoulInjectorRepository {
       const artifactId = randomUUID();
       await client.query(
         `INSERT INTO ${schema}.debug_artifacts
-          (id, installation_id, project_id, kind, filename, content_type, size, sha256, content, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [artifactId, input.installationId, input.projectId, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, bytes, input.userId],
+          (id, installation_id, project_id, case_id, kind, filename, content_type, size, sha256, content, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [artifactId, input.installationId, input.projectId, input.caseId ?? null, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, bytes, input.userId],
       );
       await client.query(
         `UPDATE ${schema}.artifact_uploads

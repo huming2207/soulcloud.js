@@ -260,6 +260,7 @@ export interface ArtifactChunkInput {
   projectId: string;
   userId: string;
   uploadId: string;
+  caseId?: string;
   kind: "elf" | "firmware";
   filename: string;
   contentType: string;
