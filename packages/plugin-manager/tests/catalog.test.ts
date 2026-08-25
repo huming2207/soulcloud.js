@@ -143,6 +143,52 @@ describe("plugin catalog connection state", () => {
     expect(reads).toBe(2);
   });
 
+  test("does not return an artifact chunk after the installation changes in flight", async () => {
+    const persisted = manifest("1.0.0");
+    const manifestHash = await sha256Hex(canonicalJson(persisted));
+    const installationId = randomUUID();
+    const projectId = randomUUID();
+    const artifactId = randomUUID();
+    let reads = 0;
+    const connection = {
+      id: "connection",
+      isOpen: true,
+      manifest: { pluginVersion: persisted.version, manifestHash },
+      request: async () => ({ artifactId, offset: 0, totalSize: 1, sha256: "a".repeat(64), chunk: new Blob([Uint8Array.of(1)]), final: true }),
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000,
+      prisma: {
+        pluginInstallation: {
+          findUnique: async () => {
+            reads += 1;
+            return reads === 1
+              ? { id: installationId, projectId, pluginId: persisted.id, pluginVersion: persisted.version, manifestHash, state: "enabled" }
+              : { id: installationId, projectId, pluginId: persisted.id, pluginVersion: "2.0.0", manifestHash, state: "enabled" };
+          },
+        },
+      } as never,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+      connections: Map<string, PluginConnection>;
+    };
+    internals.catalog.set(`${persisted.id}@${persisted.version}`, { pluginId: persisted.id, pluginVersion: persisted.version, manifestHash, manifest: persisted, connected: true });
+    internals.connections.set(persisted.id, connection as unknown as PluginConnection);
+
+    await expect(manager.readArtifactChunk({
+      installationId,
+      projectId,
+      userId: randomUUID(),
+      artifactId,
+      offset: 0,
+      length: 1,
+    })).rejects.toMatchObject({ status: 409, publicCode: "conflict" });
+    expect(reads).toBe(2);
+  });
+
   test("enforces reverse command operation scope and staged bytes before database work", async () => {
     let databaseReads = 0;
     const prisma = {

@@ -922,20 +922,7 @@ export class PluginManager {
       } catch (error) {
         throw publicError(`plugin target configuration output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
       }
-      const current = await this.options.prisma!.pluginInstallation.findUnique({
-        where: { id: installation.id },
-        select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
-      });
-      if (
-        !current ||
-        current.projectId !== installation.projectId ||
-        current.pluginId !== installation.pluginId ||
-        current.pluginVersion !== installation.pluginVersion ||
-        current.manifestHash.trim().toLowerCase() !== installation.manifestHash.trim().toLowerCase() ||
-        current.state !== "enabled"
-      ) {
-        throw publicError("plugin installation changed while configuring target", 409, "conflict");
-      }
+      await this.assertInstallationSnapshotCurrent(installation, "plugin installation changed while configuring target");
       return output;
     } finally {
       this.finishOperation(operationId);
@@ -985,12 +972,15 @@ export class PluginManager {
         projectId: installation.projectId,
         userId: input.userId,
       }, timeoutMs);
+      let output: ReturnType<typeof listTargetConfigsOutput.parse>;
       try {
         assertRpcValueBudget(result, this.valueBudget);
-        return listTargetConfigsOutput.parse(result);
+        output = listTargetConfigsOutput.parse(result);
       } catch (error) {
         throw publicError(`plugin target configuration list output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
       }
+      await this.assertInstallationSnapshotCurrent(installation, "plugin installation changed while listing target configurations");
+      return output;
     } finally {
       this.finishOperation(operationId);
     }
@@ -1039,12 +1029,15 @@ export class PluginManager {
         projectId: installation.projectId,
         userId: input.userId,
       }, timeoutMs);
+      let output: ReturnType<typeof listArtifactsOutput.parse>;
       try {
         assertRpcValueBudget(result, this.valueBudget);
-        return listArtifactsOutput.parse(result);
+        output = listArtifactsOutput.parse(result);
       } catch (error) {
         throw publicError(`plugin artifact list output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
       }
+      await this.assertInstallationSnapshotCurrent(installation, "plugin installation changed while listing artifacts");
+      return output;
     } finally {
       this.finishOperation(operationId);
     }
@@ -1104,6 +1097,7 @@ export class PluginManager {
         offset: input.offset,
         length: input.length,
       }, timeoutMs);
+      let output: { artifactId: string; offset: number; totalSize: number; sha256: string; chunk: Uint8Array; final: boolean };
       try {
         assertRpcValueBudget(result, this.valueBudget);
         const parsed = artifactReadChunkOutput.parse(result);
@@ -1111,10 +1105,12 @@ export class PluginManager {
         if (parsed.artifactId !== input.artifactId || parsed.offset !== input.offset || chunk.byteLength > input.length || parsed.offset + chunk.byteLength > parsed.totalSize || parsed.final !== (parsed.offset + chunk.byteLength === parsed.totalSize)) {
           throw new Error("artifact chunk bounds or identity do not match the request");
         }
-        return { artifactId: parsed.artifactId, offset: parsed.offset, totalSize: parsed.totalSize, sha256: parsed.sha256, chunk, final: parsed.final };
+        output = { artifactId: parsed.artifactId, offset: parsed.offset, totalSize: parsed.totalSize, sha256: parsed.sha256, chunk, final: parsed.final };
       } catch (error) {
         throw publicError(`plugin artifact chunk output invalid: ${(error as Error).message}`, 502, "invalid_plugin_output");
       }
+      await this.assertInstallationSnapshotCurrent(installation, "plugin installation changed while reading artifact");
+      return output;
     } finally {
       this.finishOperation(operationId);
     }
@@ -1195,6 +1191,18 @@ export class PluginManager {
     installation: { id: string; projectId: string; pluginId: string; pluginVersion: string; manifestHash: string },
     uiSession?: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
   ): Promise<void> {
+    await this.assertInstallationSnapshotCurrent(
+      installation,
+      uiSession ? "plugin UI session is no longer valid" : "plugin installation changed while uploading artifact",
+      uiSession ? { status: 403, publicCode: "plugin_ui_session_invalid" } : undefined,
+    );
+  }
+
+  private async assertInstallationSnapshotCurrent(
+    installation: { id: string; projectId: string; pluginId: string; pluginVersion: string; manifestHash: string },
+    message: string,
+    options?: { status: number; publicCode: string },
+  ): Promise<void> {
     const current = await this.options.prisma!.pluginInstallation.findUnique({
       where: { id: installation.id },
       select: { projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
@@ -1207,8 +1215,7 @@ export class PluginManager {
       current.manifestHash.trim().toLowerCase() !== installation.manifestHash.trim().toLowerCase() ||
       current.state !== "enabled"
     ) {
-      if (uiSession) throw publicError("plugin UI session is no longer valid", 403, "plugin_ui_session_invalid");
-      throw publicError("plugin installation changed while uploading artifact", 409, "conflict");
+      throw publicError(message, options?.status ?? 409, options?.publicCode ?? "conflict");
     }
   }
 
