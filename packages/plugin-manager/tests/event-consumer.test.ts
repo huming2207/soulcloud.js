@@ -442,6 +442,36 @@ describe("plugin event consumer", () => {
     ]);
   });
 
+  test("reopens an abandoned half-open probe after its bounded lease expires", () => {
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "x".repeat(32),
+      maxFrameBytes: 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024,
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+    });
+    const circuitKey = "plugin\u0000installation";
+    const now = Date.now();
+    const internals = manager as unknown as {
+      circuits: Map<string, { failures: number; openedAt: number; probeInProgress: boolean; probeStartedAt?: number; lastTouchedAt?: number }>;
+      circuitAllows(key: string): boolean;
+    };
+    internals.circuits.set(circuitKey, {
+      failures: 5,
+      openedAt: now - 60_000,
+      probeInProgress: true,
+      probeStartedAt: now - 35_001,
+      lastTouchedAt: now - 35_001,
+    });
+
+    expect(internals.circuitAllows(circuitKey)).toBe(true);
+    expect(internals.circuits.get(circuitKey)?.probeInProgress).toBe(true);
+    expect(internals.circuits.get(circuitKey)?.probeStartedAt).toBeGreaterThan(now - 1_000);
+  });
+
   test("prunes idle circuit entries without removing an active probe", () => {
     const manager = new PluginManager({
       endpoints: new Map(),
@@ -455,11 +485,11 @@ describe("plugin event consumer", () => {
     });
     const now = 1_000_000;
     const internals = manager as unknown as {
-      circuits: Map<string, { failures: number; openedAt: number; probeInProgress: boolean; lastTouchedAt?: number }>;
+      circuits: Map<string, { failures: number; openedAt: number; probeInProgress: boolean; probeStartedAt?: number; lastTouchedAt?: number }>;
       pruneCircuits(value: number): void;
     };
     internals.circuits.set("idle", { failures: 1, openedAt: 0, probeInProgress: false, lastTouchedAt: now - 600_001 });
-    internals.circuits.set("probe", { failures: 5, openedAt: now - 31_000, probeInProgress: true, lastTouchedAt: now - 600_001 });
+    internals.circuits.set("probe", { failures: 5, openedAt: now - 31_000, probeInProgress: true, probeStartedAt: now - 100, lastTouchedAt: now - 100 });
     internals.circuits.set("recent", { failures: 2, openedAt: 0, probeInProgress: false, lastTouchedAt: now - 1 });
 
     internals.pruneCircuits(now);

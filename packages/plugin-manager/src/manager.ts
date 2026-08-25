@@ -304,10 +304,16 @@ interface PluginCircuit {
   failures: number;
   openedAt: number;
   probeInProgress: boolean;
+  probeStartedAt?: number;
   lastTouchedAt?: number;
 }
 
 const PLUGIN_CIRCUIT_IDLE_RETENTION_MS = 10 * 60_000;
+// A half-open probe must not pin an installation forever if the process loses
+// the leased event or exits before dispatch reaches its normal cleanup path.
+// The event RPC deadline is at most 30 seconds, so this leaves a small grace
+// period without allowing overlapping probes during a healthy request.
+const PLUGIN_CIRCUIT_PROBE_TIMEOUT_MS = 35_000;
 
 export class PluginManager {
   private readonly connections = new Map<string, PluginConnection>();
@@ -2512,6 +2518,13 @@ export class PluginManager {
     const circuit = this.circuits.get(key);
     if (!circuit) return true;
     const now = Date.now();
+    if (
+      circuit.probeInProgress &&
+      now - (circuit.probeStartedAt ?? circuit.lastTouchedAt ?? circuit.openedAt) >= PLUGIN_CIRCUIT_PROBE_TIMEOUT_MS
+    ) {
+      circuit.probeInProgress = false;
+      circuit.probeStartedAt = undefined;
+    }
     if (!circuit.probeInProgress && now - (circuit.lastTouchedAt ?? circuit.openedAt) >= PLUGIN_CIRCUIT_IDLE_RETENTION_MS) {
       this.circuits.delete(key);
       return true;
@@ -2521,6 +2534,7 @@ export class PluginManager {
     if (now - circuit.openedAt < 30_000) return false;
     if (circuit.probeInProgress) return false;
     circuit.probeInProgress = true;
+    circuit.probeStartedAt = now;
     return true;
   }
 
@@ -2529,6 +2543,7 @@ export class PluginManager {
     const circuit = this.circuits.get(key) ?? { failures: 0, openedAt: 0, probeInProgress: false, lastTouchedAt: now };
     circuit.failures += 1;
     circuit.probeInProgress = false;
+    circuit.probeStartedAt = undefined;
     circuit.lastTouchedAt = now;
     if (circuit.failures >= 5) circuit.openedAt = now;
     this.circuits.set(key, circuit);
@@ -2542,12 +2557,20 @@ export class PluginManager {
     const circuit = this.circuits.get(key);
     if (circuit) {
       circuit.probeInProgress = false;
+      circuit.probeStartedAt = undefined;
       circuit.lastTouchedAt = Date.now();
     }
   }
 
   private pruneCircuits(now = Date.now()): void {
     for (const [key, circuit] of this.circuits) {
+      if (
+        circuit.probeInProgress &&
+        now - (circuit.probeStartedAt ?? circuit.lastTouchedAt ?? circuit.openedAt) >= PLUGIN_CIRCUIT_PROBE_TIMEOUT_MS
+      ) {
+        circuit.probeInProgress = false;
+        circuit.probeStartedAt = undefined;
+      }
       if (!circuit.probeInProgress && now - (circuit.lastTouchedAt ?? circuit.openedAt) >= PLUGIN_CIRCUIT_IDLE_RETENTION_MS) {
         this.circuits.delete(key);
       }
