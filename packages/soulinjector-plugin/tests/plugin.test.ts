@@ -339,6 +339,7 @@ describe("SoulInjector plugin", () => {
     expect(result.html).toContain('id="artifact-upload"');
     expect(result.html).toContain('id="artifact-file"');
     expect(result.html).toContain('id="artifact-kind"');
+    expect(result.html).toContain('id="artifact-case"');
     expect(result.html).toContain('id="yaml-file"');
     expect(result.html).not.toContain("ELF header");
     expect(result.html).not.toContain("yaml_content");
