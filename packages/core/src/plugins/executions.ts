@@ -437,6 +437,95 @@ export async function releaseDebugExecution(prisma: PrismaClient, executionId: s
   return mapExecution(rows[0]);
 }
 
+export interface DebugExecutionUserScope {
+  executionId: string;
+  tokenHash: string;
+  installationId: string;
+  projectId: string;
+  userId: string;
+}
+
+/**
+ * Release a human-controlled execution lease with the authorization check in
+ * the same transaction as the state mutation. The immutable execution device
+ * is observed before locking, then the rows are locked in the lifecycle order
+ * installation -> device -> execution.
+ */
+export async function releaseDebugExecutionForUser(
+  prisma: PrismaClient,
+  input: DebugExecutionUserScope,
+): Promise<DebugExecutionRecord> {
+  if (!UUID.test(input.executionId) || !SHA256.test(input.tokenHash) || !UUID.test(input.installationId) || !UUID.test(input.projectId) || !UUID.test(input.userId)) {
+    throw new DebugExecutionCapabilityError();
+  }
+  return prisma.$transaction(async (tx) => {
+    const observedRows = await tx.$queryRaw<Array<{ installation_id: string; device_id: string }>>`
+      SELECT installation_id, device_id
+      FROM debug_executions
+      WHERE id = ${input.executionId}::uuid AND token_hash = ${input.tokenHash}
+      LIMIT 1
+    `;
+    const observed = observedRows[0];
+    if (!observed || observed.installation_id !== input.installationId) throw new DebugExecutionCapabilityError();
+
+    const installationRows = await tx.$queryRaw<Array<{ id: string; project_id: string; state: string }>>`
+      SELECT id, project_id, state
+      FROM plugin_installations
+      WHERE id = ${input.installationId}::uuid
+      FOR UPDATE
+    `;
+    const installation = installationRows[0];
+    if (!installation || installation.project_id !== input.projectId || installation.state !== "enabled") {
+      throw new DebugExecutionCapabilityError("debug execution installation scope is no longer valid");
+    }
+
+    const deviceRows = await tx.$queryRaw<Array<{ id: string; project_id: string }>>`
+      SELECT id, project_id
+      FROM devices
+      WHERE id = ${observed.device_id}::uuid
+      FOR UPDATE
+    `;
+    const device = deviceRows[0];
+    if (!device || device.project_id !== input.projectId) throw new DebugExecutionCapabilityError("debug execution device scope is no longer valid");
+
+    const executionRows = await tx.$queryRaw<RawExecutionRow[]>`
+      SELECT id, installation_id, device_id, initiating_user_id, plugin_id, plugin_version,
+        manifest_hash, allowed_capabilities, state, device_lease_expires_at, expires_at,
+        created_at, updated_at, finished_at
+      FROM debug_executions
+      WHERE id = ${input.executionId}::uuid
+        AND token_hash = ${input.tokenHash}
+        AND installation_id = ${input.installationId}::uuid
+        AND device_id = ${observed.device_id}::uuid
+        AND initiating_user_id = ${input.userId}::uuid
+        AND state = 'active'
+        AND expires_at > CURRENT_TIMESTAMP
+      FOR UPDATE
+    `;
+    const execution = executionRows[0];
+    if (!execution) throw new DebugExecutionCapabilityError();
+    const userProjectRows = await tx.$queryRaw<Array<{ user_id: string }>>`
+      SELECT user_id
+      FROM user_projects
+      WHERE user_id = ${input.userId}::uuid
+        AND project_id = ${input.projectId}::uuid
+      FOR SHARE
+    `;
+    if (!userProjectRows[0]) throw new DebugExecutionCapabilityError("debug execution initiating user is no longer a project member");
+
+    const rows = await tx.$queryRaw<RawExecutionRow[]>`
+      UPDATE debug_executions
+      SET state = 'paused', device_lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${execution.id}::uuid
+      RETURNING id, installation_id, device_id, initiating_user_id, plugin_id, plugin_version,
+        manifest_hash, allowed_capabilities, state, device_lease_expires_at, expires_at,
+        created_at, updated_at, finished_at
+    `;
+    if (!rows[0]) throw new DebugExecutionCapabilityError();
+    return mapExecution(rows[0]);
+  });
+}
+
 export async function completeDebugExecution(
   prisma: PrismaClient,
   executionId: string,

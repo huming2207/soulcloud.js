@@ -10,6 +10,7 @@ import {
   getDebugExecutionCapability,
   revalidateDebugSessionExecution,
   releaseDebugExecution,
+  releaseDebugExecutionForUser,
   renewDebugExecutionLease,
 } from "../../src/plugins/executions";
 import { setPluginInstallationState } from "../../src/plugins/installations";
@@ -38,6 +39,7 @@ const tokenHashF = "1".repeat(64);
 const tokenHashG = "2".repeat(64);
 const tokenHashH = "3".repeat(64);
 const tokenHashI = "4".repeat(64);
+const tokenHashJ = "5".repeat(64);
 let installationId: string;
 
 beforeAll(async () => {
@@ -182,6 +184,24 @@ describe.serial("durable debug execution capability", () => {
     const completed = await completeDebugExecution(prisma, second.id, tokenHashB, "completed");
     expect(completed.state).toBe("completed");
     expect(await getDebugExecutionCapability(prisma, second.id, tokenHashB)).toBeNull();
+  });
+
+  test("rechecks project membership in the scoped human pause mutation", async () => {
+    const execution = await createDebugExecution(prisma, input(tokenHashJ));
+    await prisma.userProject.delete({ where: { userId_projectId: { userId, projectId } } });
+    try {
+      await expect(releaseDebugExecutionForUser(prisma, {
+        executionId: execution.id,
+        tokenHash: tokenHashJ,
+        installationId,
+        projectId,
+        userId,
+      })).rejects.toBeInstanceOf(DebugExecutionCapabilityError);
+      expect(await prisma.debugExecution.findUniqueOrThrow({ where: { id: execution.id }, select: { state: true } })).toEqual({ state: "active" });
+    } finally {
+      await prisma.userProject.create({ data: { userId, projectId } });
+      await completeDebugExecution(prisma, execution.id, tokenHashJ, "failed");
+    }
   });
 
   test("expires execution TTL and releases an expired device lease with database time", async () => {

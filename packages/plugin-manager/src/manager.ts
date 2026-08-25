@@ -52,6 +52,7 @@ import {
   migratePluginInstallation,
   reconcilePluginInstallation,
   releaseDebugExecution,
+  releaseDebugExecutionForUser,
   requestDebugCommandCancellation,
   renewDebugExecutionLease,
   setPluginInstallationState,
@@ -740,7 +741,13 @@ export class PluginManager {
       this.forgetExecutionCapability(execution.id);
       throw publicError("debug execution capability is no longer available", 409, "conflict");
     }
-    const released = await releaseDebugExecution(this.options.prisma, execution.id, hashCapabilityToken(cached.token));
+    const released = await releaseDebugExecutionForUser(this.options.prisma, {
+      executionId: execution.id,
+      tokenHash: hashCapabilityToken(cached.token),
+      installationId: session.installationId,
+      projectId: session.projectId,
+      userId: session.sub,
+    });
     this.forgetExecutionDeviceScope(execution.id);
     return released;
   }
@@ -771,7 +778,13 @@ export class PluginManager {
       this.forgetExecutionCapability(execution.id);
       throw publicError("debug execution capability is no longer available", 409, "conflict");
     }
-    const paused = await releaseDebugExecution(this.options.prisma, execution.id, hashCapabilityToken(cached.token));
+    const paused = await releaseDebugExecutionForUser(this.options.prisma, {
+      executionId: execution.id,
+      tokenHash: hashCapabilityToken(cached.token),
+      installationId: input.installationId,
+      projectId: input.projectId,
+      userId: input.userId,
+    });
     this.forgetExecutionDeviceScope(execution.id);
     return paused;
   }
