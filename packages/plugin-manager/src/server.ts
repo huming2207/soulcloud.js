@@ -121,6 +121,12 @@ const startDebugSessionSchema = z.object({
   return hasId === hasRevision && hasRevision === hasTarget;
 }, "target configuration id, revision and target id must be provided together");
 const pluginUiBootstrapSchema = z.object({ bootstrap_token: z.string().min(32).max(4096) }).strict();
+export const pluginUiArtifactQuerySchema = z.object({
+  kind: z.enum(["elf", "firmware"]),
+  filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+  case_id: z.string().uuid().optional(),
+  content_type: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value)).default("application/octet-stream"),
+}).strict();
 
 function parseBody<T>(schema: ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -193,6 +199,34 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         } catch { return json(401, { error: "invalid_plugin_ui_session" }); }
         if (!url.pathname.startsWith(`/plugins/${session.installationId}/`)) return json(403, { error: "plugin_ui_scope_mismatch" });
         const manifest = options.manager.getManifest(session.pluginId, session.pluginVersion);
+        const uiArtifactPath = `/plugins/${session.installationId}/debugger/artifacts`;
+        if (request.method === "POST" && url.pathname === uiArtifactPath && session.routeId === "debugger") {
+          try {
+            const parsed = parseBody(pluginUiArtifactQuerySchema, {
+              kind: url.searchParams.get("kind"),
+              filename: url.searchParams.get("filename"),
+              case_id: url.searchParams.get("case_id") ?? undefined,
+              content_type: url.searchParams.get("content_type") ?? undefined,
+            });
+            const uploadId = z.string().uuid().safeParse(request.headers.get("idempotency-key") ?? "");
+            if (!uploadId.success) throw invalidRequest("Idempotency-Key must be a UUID");
+            const totalSize = Number(request.headers.get("content-length") ?? "0");
+            if (!request.body || !Number.isSafeInteger(totalSize) || totalSize < 1) throw Object.assign(new Error("content-length is required for artifact upload"), { status: 411 });
+            if (totalSize > (options.maxArtifactBytes ?? 64 * 1024 * 1024)) throw Object.assign(new Error("artifact is too large"), { status: 413 });
+            return json(201, await options.manager.uploadArtifact({
+              installationId: session.installationId,
+              projectId: session.projectId,
+              userId: session.sub,
+              caseId: parsed.case_id,
+              kind: parsed.kind,
+              filename: parsed.filename,
+              contentType: parsed.content_type,
+              uploadId: uploadId.data,
+              totalSize,
+              body: request.body as ReadableStream<Uint8Array>,
+            }));
+          } catch (error) { return failure(error); }
+        }
         const assetPrefix = `/plugins/${session.installationId}/assets/`;
         if (url.pathname.startsWith(assetPrefix)) {
           const relative = url.pathname.slice(assetPrefix.length);
