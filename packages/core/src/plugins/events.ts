@@ -304,19 +304,25 @@ export async function completePluginEventWithUpdates(
       ...entityContext,
       writeCurrentState: snapshotIsCurrent,
     });
-    for (const intent of entityContext.commands ?? []) {
-      if (intent.deviceId !== entityContext.deviceId) {
-        throw new Error("plugin event command target does not match its routing snapshot");
+    // Preserve stale event observations in history, but never let an event
+    // from an old binding/manifest issue a new device command after lifecycle
+    // state changed. The installation/device locks above make this decision
+    // atomic with the command enqueue.
+    if (snapshotIsCurrent) {
+      for (const intent of entityContext.commands ?? []) {
+        if (intent.deviceId !== entityContext.deviceId) {
+          throw new Error("plugin event command target does not match its routing snapshot");
+        }
+        await enqueueBatchInTransaction(tx, [intent.deviceId], intent.command, {
+          provenance: {
+            originType: "plugin",
+            pluginInstallationId: entityContext.installationId,
+            pluginVersion: entityContext.pluginVersion,
+            manifestHash: entityContext.manifestHash,
+            correlationId: eventId,
+          },
+        });
       }
-      await enqueueBatchInTransaction(tx, [intent.deviceId], intent.command, {
-        provenance: {
-          originType: "plugin",
-          pluginInstallationId: entityContext.installationId,
-          pluginVersion: entityContext.pluginVersion,
-          manifestHash: entityContext.manifestHash,
-          correlationId: eventId,
-        },
-      });
     }
     const updated = await tx.$executeRaw`
       UPDATE plugin_events

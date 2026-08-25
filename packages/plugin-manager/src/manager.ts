@@ -435,7 +435,14 @@ export class PluginManager {
         if (!lockedInstallation || lockedInstallation.state !== "enabled" || lockedInstallation.plugin_id !== installation.pluginId || lockedInstallation.plugin_version !== installation.pluginVersion || lockedInstallation.manifest_hash.trim() !== installation.manifestHash.trim()) {
           throw new Error("plugin installation changed while encoding action");
         }
-        await tx.$queryRaw`SELECT id FROM devices WHERE id = ${input.deviceId}::uuid FOR UPDATE`;
+        const deviceRows = await tx.$queryRaw<Array<{ id: string; project_id: string }>>`
+          SELECT id, project_id FROM devices WHERE id = ${input.deviceId}::uuid FOR UPDATE
+        `;
+        const lockedDevice = deviceRows[0];
+        if (!lockedDevice) throw new Error("device not found");
+        if (lockedDevice.project_id !== lockedInstallation.project_id) {
+          throw new Error("device and plugin installation belong to different projects");
+        }
         const binding = await tx.pluginDeviceBinding.findUnique({ where: { deviceId: input.deviceId }, select: { installationId: true } });
         if (!binding || binding.installationId !== installation.id) throw new Error("device is not bound to the plugin installation");
         return enqueueBatchInTransaction(tx, [input.deviceId], { cmd: encoded.command, args }, {

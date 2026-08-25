@@ -187,7 +187,7 @@ describe("plugin event completion lifecycle snapshots", () => {
     expect(history[0]!.descriptorRevision).toBe(1);
   });
 
-  test("uses the immutable old descriptor after installation migration", async () => {
+  test("uses the immutable old descriptor after installation migration without issuing stale commands", async () => {
     const data = await fixture();
     const event = await leasedEvent({ ...data, manifestHash: data.oldHash });
     await migratePluginInstallation(
@@ -244,6 +244,6 @@ describe("plugin event completion lifecycle snapshots", () => {
     expect(history).toHaveLength(1);
     expect(history[0]!.value).toBe(22);
     expect(history[0]!.descriptorRevision).toBe(1);
-    expect(await prisma.deviceCommand.count({ where: { deviceId: data.deviceId } })).toBe(1);
+    expect(await prisma.deviceCommand.count({ where: { deviceId: data.deviceId } })).toBe(0);
   });
 });

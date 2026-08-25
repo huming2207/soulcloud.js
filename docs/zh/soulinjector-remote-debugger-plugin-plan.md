@@ -477,6 +477,10 @@ debug.report.signoff
 常规 payload、源码和 memory dump 不应完整复制到平台审计日志；使用 ID/hash/size 和受控
 artifact reference。
 
+事件完成与 installation/device 生命周期锁在同一事务内判断 routing snapshot 是否仍为当前
+binding：过期事件可以保留 history，但不能在迁移、禁用或换 profile 后继续提交旧的设备
+command intent。
+
 ## 13. 分阶段实施
 
 ### 阶段 D0：产品契约冻结
