@@ -48,6 +48,7 @@ CMD ["bun", "run", "packages/broker/src/index.ts"]
 
 # --- plugin-manager ----------------------------------------------------------
 FROM base AS plugin-manager
+USER bun
 EXPOSE 8091
 CMD ["bun", "run", "packages/plugin-manager/src/index.ts"]
 

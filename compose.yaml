@@ -144,6 +144,24 @@ services:
       PLUGIN_RETENTION_MAX_BATCHES: ${PLUGIN_RETENTION_MAX_BATCHES:-8}
       PLUGIN_ARTIFACT_MAX_BYTES: ${PLUGIN_ARTIFACT_MAX_BYTES:-67108864}
       PLUGIN_ARTIFACT_UPLOAD_TIMEOUT_MS: ${PLUGIN_ARTIFACT_UPLOAD_TIMEOUT_MS:-600000}
+    # Keep the independent Plugin Manager service bounded as well.  Its
+    # application budgets protect individual operations; these deployment
+    # limits protect the host when a plugin floods events or responses.
+    mem_limit: ${PLUGIN_MANAGER_MEMORY_LIMIT:-768m}
+    cpus: ${PLUGIN_MANAGER_CPU_LIMIT:-1.0}
+    pids_limit: ${PLUGIN_MANAGER_PIDS_LIMIT:-256}
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: ${PLUGIN_MANAGER_LOG_MAX_SIZE:-10m}
+        max-file: ${PLUGIN_MANAGER_LOG_MAX_FILES:-3}
     ports:
       - "127.0.0.1:8091:8091"
     restart: unless-stopped
