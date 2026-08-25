@@ -120,8 +120,10 @@ token。目标入口仍使用 `/plugins/{installation}/...`，但位于独立 pl
 
 Human API 权威校验用户后签发一次性、短期、绑定 user/project/installation/route/version/hash
 的 bootstrap grant；Browser 以 POST 或等价的不泄露 URL 方式交给 Plugin Manager，换取只在
-plugin UI origin 有效、path-scoped、HttpOnly 的 session cookie。精确 host、POST bootstrap
-格式和 CSRF 机制在 UI 阶段开始前冻结。
+plugin UI origin 有效、path-scoped、HttpOnly 的 session cookie。当前已实现最小 POST
+\`/bootstrap\` grant 消费和 nonce replay 防护；API 通过 \`PLUGIN_UI_ORIGIN\` 返回 bootstrap URL，
+Traefik 需要把该独立 host（示例 \`plugins.example.com\`）路由到 Plugin Manager。Web 前端尚未
+接入自动 POST/跳转，生产环境必须先配置真实 origin/DNS/证书，不能把示例域名直接投入使用。
 
 ## 4. 职责划分
 
@@ -603,8 +605,10 @@ MQTT/oRPC 热路径。
 工作：
 
 1. 扩展 manifest UI asset 声明和 handshake capability；**已完成受限 asset RPC/manifest 基础**；
-2. Manager 实现 asset fetch/hash/MIME/cache/独立 origin；**已完成 manifest hash/MIME/cache/代理基础；独立 origin bootstrap 尚未完成**；
-3. 实现 Human API 一次性 bootstrap 和 plugin-origin session；
+2. Manager 实现 asset fetch/hash/MIME/cache/独立 origin；**已完成 manifest hash/MIME/cache/
+   代理和 dedicated-origin bootstrap 基础；Web 前端接入仍待完成**；
+3. 实现 Human API 一次性 bootstrap 和 plugin-origin session；**已完成 grant 签发/单次消费
+   与 path-scoped cookie 基础；Web 前端 POST/跳转和 HA replay store 仍待补齐**；
 4. 实现 Browser ↔ Manager live channel 与 plugin oRPC stream/call；
 5. 实现 terminal、progress、register/memory 和多人观察 UI；
 6. 测试主站 token 不可见、session 撤销、慢消费者、backpressure、bundle 漂移和 plugin crash。
