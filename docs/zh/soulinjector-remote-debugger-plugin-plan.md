@@ -1,6 +1,6 @@
 # SoulInjector 远程 Debugger Plugin 实施计划
 
-**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地命令来源审计基础；设备固件、case/LLM 和长时 execution 尚未实现）
+**状态**：计划 + 第一轮代码已开始实现（D1、D4、D6 的基础能力已落地；D3 已落地 durable execution、lease 和受限 execution reverse RPC 基础；设备固件、case/LLM、Human API execution 启动入口和长时设备 command 闭环尚未实现）
 **日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
 
@@ -53,6 +53,14 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   当前
   Human API 的人工 action 请求显式传递 approval；真正可审计的长期 approval/execution record
   仍属于后续阶段。
+- `DebugExecution` 已保存平台侧长时 capability：不可变 plugin/version/manifest snapshot、
+  initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
+  device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
+  时钟。execution 私有 token 不写入数据库。
+- oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`；
+  Manager 会绑定父 operation、plugin/version、installation、device、token hash 和 capability
+  白名单。`release` 只释放设备控制权并把 execution 置为 `paused`，不删除历史记录；数据库维护任务
+  会释放过期 lease 并把达到 TTL 的 execution 标记为 `expired`。
 - `DeviceCommand` 已保存平台侧 provenance：`origin_type`、发起用户、plugin installation、
   plugin version/manifest hash、execution/correlation/idempotency 字段和取消请求时间；这些
   字段不进入设备下发的 MessagePack payload。插件/LLM 来源在入队前必须带 installation、版本
@@ -67,7 +75,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   行，不替产品决定完整 artifact 的 retention/deletion 策略。
 
 尚未实现：SoulInjector 设备固件 command handler、HTTPS 设备文件 gateway、case/session/report
-业务表、LLM harness、长时间 device lease，以及独立 plugin-origin bootstrap/live channel。不要
+业务表、Human API 的 start/pause/cancel/take-over 与 plugin token handoff、execution 绑定的
+device enqueue/get/cancel、LLM harness，以及独立 plugin-origin bootstrap/live channel。不要
 把上述未完成项误认为已经可以进行生产远程诊断。
 
 ## 3. 已确认的架构决定
@@ -318,9 +327,15 @@ context.artifacts.getMetadata
 context.artifacts.issueTransfer
 ```
 
+当前 lifecycle RPC 使用的 capability 名称是 `execution.get`、`execution.renew_lease`、
+`execution.release` 和 `execution.complete`。这些名称只控制平台 capability 生命周期，不等同于
+`debug.read_memory` 或 `debug.reset` 等设备动作；后者仍须逐次经过 manifest 风险声明和 Human API
+人工审批。
+
 plugin 可在父 event/UI RPC 返回后凭 execution capability 继续调用，但 Manager 必须保存 token
-hash，并检查 connection/plugin/version/installation/device/expiry/allowed command/rate。不能退化为
-一个 plugin 级永久万能 token。
+hash，并检查 connection/plugin/version/installation/device/expiry/allowed capability/rate。不能退化为
+一个 plugin 级永久万能 token。当前已经实现的四个 execution RPC 只管理 capability 生命周期；
+设备 command 的 enqueue/get/cancel 仍必须在 capability 与人工审批闭环完成后再开放。
 
 ## 8. Artifact 与 HTTPS 传输
 
@@ -539,12 +554,13 @@ command intent。
 
 工作：
 
-1. 增加最小 debug execution 平台记录；
-2. 实现 device control lease、renew/release/expiry；
-3. 增加 command origin/execution/plugin/user correlation；
-4. 实现 plugin 在短父 RPC 结束后的受限 command/get/cancel RPC；
-5. Human API 实现 start/pause/cancel/take-over 权限入口；
-6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试。
+1. 增加最小 debug execution 平台记录；**已完成基础版本**；
+2. 实现 device control lease、renew/release/expiry；**已完成基础版本**；
+3. 增加 command origin/execution/plugin/user correlation；**已完成基础版本**；
+4. 实现 plugin 在短父 RPC 结束后的受限 execution lifecycle RPC；**已完成基础版本；device command get/enqueue/cancel 尚未完成**；
+5. Human API 实现 start/pause/cancel/take-over 权限入口；**尚未完成，token handoff 方案仍需冻结**；
+6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试；**数据库
+   集成测试已写入 CI，跨进程/真实 plugin reconnect 测试仍待补齐**。
 
 退出条件：插件可以安全运行数小时 case，但 Manager 没有 step/DAG/agent state。
 
