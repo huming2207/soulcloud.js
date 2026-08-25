@@ -679,6 +679,38 @@ export class PluginManager {
     return listDebugCommands(this.options.prisma, executionId, 64);
   }
 
+  /** Request cancellation of one command from the authenticated debugger UI.
+   * The initiating user and the in-memory execution capability remain
+   * required; a browser cannot manufacture a cancellation token after a
+   * Manager restart. */
+  async cancelDebugCommandFromUiSession(
+    session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
+    executionId: string,
+    commandId: string,
+  ): Promise<ReturnType<typeof requestDebugCommandCancellation>> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    if (!UUID.test(executionId) || !UUID.test(commandId)) throw publicError("debug execution or command ID must be a UUID", 400, "invalid_request");
+    await this.assertUiSessionCurrent(session as PluginUiSession);
+    const execution = await this.getDebugExecutionForScope({
+      executionId,
+      installationId: session.installationId,
+      projectId: session.projectId,
+      userId: session.sub,
+    });
+    if (!execution || execution.pluginId !== session.pluginId || execution.pluginVersion !== session.pluginVersion || execution.manifestHash !== session.manifestHash) {
+      throw publicError("debug execution is not available to this plugin UI session", 404, "not_found");
+    }
+    if (execution.initiatingUserId !== session.sub) {
+      throw publicError("only the execution initiating user can cancel its commands", 403, "forbidden");
+    }
+    const cached = this.executionTokens.get(execution.id);
+    if (!cached || cached.installationId !== execution.installationId || cached.deviceId !== execution.deviceId || cached.expiresAt <= Date.now()) {
+      this.forgetExecutionCapability(execution.id);
+      throw publicError("debug execution capability is no longer available", 409, "conflict");
+    }
+    return requestDebugCommandCancellation(this.options.prisma, execution.id, hashCapabilityToken(cached.token), commandId);
+  }
+
   /**
    * Release a debugger device lease from the authenticated plugin-origin UI.
    * The raw execution token is intentionally only available in this Manager

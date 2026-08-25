@@ -269,6 +269,16 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
             return json(200, await options.manager.renewDebugExecutionFromUiSession(session, executionId, input.leaseMs));
           } catch (error) { return failure(error); }
         }
+        if (request.method === "POST" && url.pathname.startsWith(uiExecutionReleasePrefix)) {
+          const commandPath = url.pathname.slice(uiExecutionReleasePrefix.length).match(/^([^/]+)\/commands\/([^/]+)\/cancel$/);
+          if (commandPath) {
+            try {
+              const executionId = parseInstallationId(commandPath[1]!);
+              const commandId = parseInstallationId(commandPath[2]!);
+              return json(200, await options.manager.cancelDebugCommandFromUiSession(session, executionId, commandId));
+            } catch (error) { return failure(error); }
+          }
+        }
         const uiDebuggerSessionPath = `/plugins/${session.installationId}/debugger/sessions`;
         if (request.method === "POST" && url.pathname === uiDebuggerSessionPath && session.routeId === "debugger") {
           try {

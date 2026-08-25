@@ -33,6 +33,7 @@ let actionTimeout: number | undefined;
 let uiDeviceActionInput: unknown;
 let uiExecutionReleaseInput: unknown;
 let uiExecutionRenewInput: unknown;
+let uiCommandCancelInput: unknown;
 let uiActionError: unknown;
 let sessionStartInput: unknown;
 let uiSessionStartInput: unknown;
@@ -65,6 +66,10 @@ const manager = {
   renewDebugExecutionFromUiSession: async (session: unknown, executionId: string, leaseMs: number) => {
     uiExecutionRenewInput = { session, executionId, leaseMs };
     return { id: executionId, installationId, deviceId: randomUUID(), initiatingUserId: randomUUID(), pluginId: manifest.id, pluginVersion: manifest.version, manifestHash: "a".repeat(64), allowedCapabilities: [], state: "active", deviceLeaseExpiresAt: new Date(Date.now() + leaseMs).toISOString(), expiresAt: new Date(Date.now() + 3_600_000).toISOString(), createdAt: new Date(0).toISOString(), updatedAt: new Date().toISOString(), finishedAt: null };
+  },
+  cancelDebugCommandFromUiSession: async (session: unknown, executionId: string, commandId: string) => {
+    uiCommandCancelInput = { session, executionId, commandId };
+    return { id: commandId, batchId: randomUUID(), deviceId: randomUUID(), sequence: 1n, state: "delivery_failed", resultCode: null, cancelRequestedAt: new Date().toISOString(), brokerAcceptedAt: null, deviceCompletedAt: null, createdAt: new Date().toISOString() };
   },
   startDebugSession: async (input: unknown) => {
     sessionStartInput = input;
@@ -242,6 +247,18 @@ describe("plugin SSR route", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ id: executionId, state: "active" });
     expect(uiExecutionRenewInput).toMatchObject({ executionId, leaseMs: 120_000, session: { installationId, projectId } });
+  });
+
+  test("cancels a debugger command through the scoped plugin-origin session", async () => {
+    const executionId = randomUUID();
+    const commandId = randomUUID();
+    const response = await fetch(`${server.url}plugins/${installationId}/debugger/executions/${executionId}/commands/${commandId}/cancel`, {
+      method: "POST",
+      headers: { cookie: debuggerCookie },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: commandId, state: "delivery_failed" });
+    expect(uiCommandCancelInput).toMatchObject({ executionId, commandId, session: { installationId, projectId } });
   });
 
   test("preserves an explicit public error code from a UI action", async () => {
