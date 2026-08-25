@@ -50,6 +50,7 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   project、user、plugin version 和 manifest hash 快照，安装迁移/禁用后不会把旧会话的流改投到
   新版本 plugin；上传时可选择 installation 下的 debugger case
   作为归属；Manager 在最终 chunk 后再次复核该 snapshot，迁移/禁用竞态不会把旧 plugin 的结果报告为当前 UI 会话成功；网络异常时浏览器最多用同一幂等键重试一次，上传完成后页面只重新读取 metadata 摘要。
+  UI 上传开始时还会重新校验 session 对应的 installation 快照和当前 project membership；用户被撤权后，旧页面不能继续把 artifact 流写入 plugin 私库。
   非 UI 的 Human API artifact 上传也在最终 chunk 前后复核 installation 的 project、plugin/version、manifest
   hash 和 enabled 状态，迁移或禁用时拒绝接受旧 plugin 的 artifact 结果。
 - target architecture/chip、transport 和 required debugger primitives 的受限 YAML schema，
