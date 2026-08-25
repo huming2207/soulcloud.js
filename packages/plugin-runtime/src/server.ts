@@ -18,6 +18,7 @@ import {
   hasRpcPrefix,
   managerToPluginContract,
   pluginToManagerContract,
+  rpcBinaryToBlob,
   rpcBinaryFromBlob,
   sha256BytesHex,
   sha256Hex,
@@ -303,6 +304,11 @@ function createRuntimeConnection(
                 const result = await reverse.context.commands.enqueue({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, command, args: commandWire(args) });
                 return result.accepted ? undefined : undefined;
               },
+              callPlugin: async (pluginId: string, procedure: string, callInput?: unknown) => {
+                assertRpcValueBudget(callInput, budget);
+                const result = await reverse.context.plugins.callScoped({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, pluginId, procedure, input: rpcBinaryToBlob(callInput) });
+                return rpcBinaryFromBlob(result);
+              },
             };
             return definition.onEvent!(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload, installation: input.installation, device: input.device });
           });
@@ -320,6 +326,29 @@ function createRuntimeConnection(
           const parsed = eventOutputSchema.safeParse(wireOutput);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
+        } finally { operations.running -= 1; }
+      }),
+      call: implemented.plugin.call.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        const handler = definition.handleCall?.[input.procedure];
+        if (!handler) rpcError("NOT_FOUND", "unknown plugin procedure");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
+        try {
+          const callInput = await rpcBinaryFromBlob(input.input);
+          assertRpcValueBudget(callInput, budget);
+          const result = await runWithDeadline(input.deadlineMs, (signal) => handler(callInput, {
+            operationId: input.operationId,
+            signal,
+            caller: input.caller,
+            callPlugin: async (pluginId: string, procedure: string, nestedInput?: unknown) => {
+              assertRpcValueBudget(nestedInput, budget);
+              const nestedResult = await reverse.context.plugins.callScoped({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, pluginId, procedure, input: rpcBinaryToBlob(nestedInput) });
+              return rpcBinaryFromBlob(nestedResult);
+            },
+          }));
+          assertRpcValueBudget(result, budget);
+          return rpcBinaryToBlob(result);
         } finally { operations.running -= 1; }
       }),
     },

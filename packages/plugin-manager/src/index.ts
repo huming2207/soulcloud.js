@@ -16,6 +16,7 @@ const manager = new PluginManager({
   maxOperationsPerPlugin: config.PLUGIN_MANAGER_MAX_OPERATIONS_PER_PLUGIN,
   maxOperationsPerInstallation: config.PLUGIN_MANAGER_MAX_OPERATIONS_PER_INSTALLATION,
   maxReverseCallsPerOperation: config.PLUGIN_RPC_MAX_REVERSE_CALLS,
+  maxPluginCallDepth: config.PLUGIN_RPC_MAX_PLUGIN_CALL_DEPTH,
   maxReverseConcurrency: config.PLUGIN_RPC_MAX_REVERSE_CONCURRENCY,
   maxReverseConcurrencyPerPlugin: config.PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_PLUGIN,
   maxReverseConcurrencyPerInstallation: config.PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_INSTALLATION,

@@ -237,8 +237,7 @@ Entity completion 已落地。真实设备 publish/掉电 sequence 仍是退出�
 
 **状态：已完成基础纵切。** Action 输入/encoder 输出分类、profile descriptor revision、
 多 profile binding、deprecated 收敛、stale DB 时钟、完整 uint64 sequence、批量 Entity upsert
-和升级后不兼容 current state 清理已落地；历史查询 API、
-scoped plugin-to-plugin 和更完整的 UI catalog 仍待后续阶段补齐。
+和升级后不兼容 current state 清理已落地；历史查询 API 和更完整的 UI catalog 仍待后续阶段补齐。
 
 ### 工作
 
@@ -317,8 +316,9 @@ RSC 与 Manager 进程内执行 plugin code 仍不在范围内。
 
 ## 阶段 7：公网 egress 与跨 plugin 调用
 
-**状态：待实施。** 当前只保留 RPC contract 和部署文档边界，尚未提供通用 scoped
-plugin-to-plugin/data capability 实现。
+**状态：已完成受限 plugin-to-plugin 基础；公网 egress policy 和 UI/data capability 仍待实施。**
+`context.plugins.callScoped` 只能调用 target plugin 显式注册的 procedure，Manager 继承并收窄
+当前 scope，同时限制调用深度、operation、并发、deadline 和 payload budget。
 
 ### Public API
 

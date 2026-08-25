@@ -10,6 +10,7 @@ import {
   type CommandEnqueueInput,
   type EntityGetInput,
   type HandshakeOutput,
+  type PluginCallInput,
   type RpcValueBudget,
 } from "@soulcloud/plugin-rpc-contract";
 import {
@@ -50,6 +51,7 @@ export interface PluginManagerOptions {
   maxOperationsPerPlugin?: number;
   maxOperationsPerInstallation?: number;
   maxReverseCallsPerOperation?: number;
+  maxPluginCallDepth?: number;
   maxReverseConcurrency?: number;
   maxReverseConcurrencyPerPlugin?: number;
   maxReverseConcurrencyPerInstallation?: number;
@@ -192,7 +194,7 @@ export async function normalizeCommandArguments(value: unknown): Promise<Command
 const unavailable = async (): Promise<never> => { throw new Error("plugin reverse RPC is not configured"); };
 
 interface ActiveOperation {
-  kind: "action" | "event" | "ui" | "configure";
+  kind: "action" | "event" | "ui" | "configure" | "plugin-call";
   operationTokenHash: Buffer;
   connectionId: string;
   installationId: string;
@@ -211,6 +213,8 @@ interface ActiveOperation {
   reverseCalls: number;
   inFlightReverseCalls: number;
   reverseSettledWaiters: Set<() => void>;
+  userId?: string;
+  pluginCallDepth?: number;
 }
 
 interface PluginCircuit {
@@ -384,6 +388,7 @@ export class PluginManager {
       pluginId: installation.pluginId,
       pluginVersion: installation.pluginVersion,
       deviceId: input.deviceId,
+      userId: input.userId,
       deadline: performance.now() + (input.timeoutMs ?? 30_000),
       state: "active",
       reverseCalls: 0,
@@ -491,6 +496,7 @@ export class PluginManager {
       projectId: installation.projectId,
       pluginId: installation.pluginId,
       pluginVersion: installation.pluginVersion,
+      userId: input.userId,
       deadline: performance.now() + timeoutMs,
       state: "active",
       reverseCalls: 0,
@@ -574,6 +580,7 @@ export class PluginManager {
       projectId: input.installation.projectId,
       pluginId: input.installation.pluginId,
       pluginVersion: input.installation.pluginVersion,
+      userId: input.userId,
       deadline: performance.now() + timeoutMs,
       state: "active",
       reverseCalls: 0,
@@ -634,6 +641,7 @@ export class PluginManager {
       projectId: session.projectId,
       pluginId: session.pluginId,
       pluginVersion: session.pluginVersion,
+      userId: session.sub,
       deadline: performance.now() + 30_000,
       state: "active",
       reverseCalls: 0,
@@ -689,6 +697,7 @@ export class PluginManager {
       projectId: session.projectId,
       pluginId: session.pluginId,
       pluginVersion: session.pluginVersion,
+      userId: session.sub,
       deadline: performance.now() + 30_000,
       state: "active",
       reverseCalls: 0,
@@ -760,7 +769,7 @@ export class PluginManager {
     const handlers: ReverseHandlers = {
       entityGet: this.options.reverseHandlers?.entityGet ?? ((input, signal, connectionId) => this.reverseEntityGet(input, signal, connectionId)),
       commandEnqueue: this.options.reverseHandlers?.commandEnqueue ?? ((input, signal, connectionId) => this.reverseCommandEnqueue(input, signal, connectionId)),
-      pluginCall: this.options.reverseHandlers?.pluginCall ?? unavailable,
+      pluginCall: this.options.reverseHandlers?.pluginCall ?? ((input, signal, connectionId) => this.reversePluginCall(input, signal, connectionId)),
       uiGetData: this.options.reverseHandlers?.uiGetData ?? unavailable,
     };
     const config: PluginConnectionOptions = {
@@ -1151,6 +1160,68 @@ export class PluginManager {
       ]);
     } finally {
       if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async reversePluginCall(input: PluginCallInput, signal: AbortSignal, connectionId: string): Promise<unknown> {
+    if (signal.aborted) throw new Error("operation aborted");
+    const source = this.acquireOperation(input, connectionId);
+    let targetOperationId: string | undefined;
+    try {
+      if (input.pluginId === source.pluginId) throw new Error("plugin-to-plugin calls cannot target the caller plugin");
+      const maxDepth = this.options.maxPluginCallDepth ?? 4;
+      const depth = source.pluginCallDepth ?? 0;
+      if (depth >= maxDepth) throw new Error("plugin-to-plugin call depth limit exceeded");
+      assertRpcValueBudget(input.input, this.valueBudget);
+      const targetConnection = this.connections.get(input.pluginId);
+      const targetHandshake = targetConnection?.manifest;
+      if (!targetConnection?.isOpen || !targetHandshake) throw new Error("target plugin is unavailable");
+      const targetManifest = this.catalog.get(`${input.pluginId}@${targetHandshake.pluginVersion}`);
+      if (!targetManifest || targetManifest.manifestHash !== targetHandshake.manifestHash) throw new Error("target plugin manifest is unavailable");
+      const remaining = Math.floor(Math.min(30_000, source.deadline - performance.now()));
+      if (remaining < 1) throw new Error("operation expired");
+      targetOperationId = crypto.randomUUID();
+      const targetToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+      this.registerOperation(targetOperationId, {
+        kind: "plugin-call",
+        operationTokenHash: hashOperationToken(targetToken),
+        connectionId: targetConnection.id,
+        installationId: source.installationId,
+        projectId: source.projectId,
+        pluginId: input.pluginId,
+        pluginVersion: targetHandshake.pluginVersion,
+        manifestHash: targetHandshake.manifestHash,
+        deviceId: source.deviceId,
+        userId: source.userId,
+        pluginCallDepth: depth + 1,
+        deadline: performance.now() + remaining,
+        state: "active",
+        reverseCalls: 0,
+        inFlightReverseCalls: 0,
+        stagedCommandCount: 0,
+        stagedCommandBytes: 0,
+        reverseSettledWaiters: new Set(),
+      });
+      const result = await targetConnection.request("plugin.call", {
+        operationId: targetOperationId,
+        operationToken: targetToken,
+        caller: {
+          pluginId: source.pluginId,
+          pluginVersion: source.pluginVersion,
+          projectId: source.projectId,
+          installationId: source.installationId,
+          ...(source.deviceId ? { deviceId: source.deviceId } : {}),
+          ...(source.userId ? { userId: source.userId } : {}),
+        },
+        procedure: input.procedure,
+        input: input.input,
+      }, remaining);
+      assertRpcValueBudget(result, this.valueBudget);
+      await this.sealOperation(targetOperationId);
+      return result;
+    } finally {
+      if (targetOperationId) this.finishOperation(targetOperationId);
+      this.releaseOperation(source);
     }
   }
 

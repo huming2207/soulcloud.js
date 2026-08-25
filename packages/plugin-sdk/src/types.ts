@@ -129,6 +129,7 @@ export interface PluginContext {
   readonly device: PluginEventInput["device"];
   getEntity(entityKey: string): Promise<PluginEntityState | null>;
   enqueueCommand(command: string, args?: CommandArgument[]): Promise<void>;
+  callPlugin(pluginId: string, procedure: string, input?: unknown): Promise<unknown>;
 }
 
 export type EventHandler = (context: PluginContext, event: PluginEventInput) => Promise<PluginEventOutput>;
@@ -213,6 +214,21 @@ export interface ArtifactChunkOutput {
 }
 export type ArtifactChunkHandler = (input: ArtifactChunkInput, context: { signal: AbortSignal }) => Promise<ArtifactChunkOutput>;
 
+export interface PluginCallContext {
+  operationId: string;
+  signal: AbortSignal;
+  caller: {
+    pluginId: string;
+    pluginVersion: string;
+    projectId: string;
+    installationId: string;
+    deviceId?: string;
+    userId?: string;
+  };
+  callPlugin(pluginId: string, procedure: string, input?: unknown): Promise<unknown>;
+}
+export type PluginCallHandler = (input: unknown, context: PluginCallContext) => Promise<unknown>;
+
 export interface PluginDefinition {
   manifest: PluginManifest;
   onEvent?: EventHandler;
@@ -223,6 +239,8 @@ export interface PluginDefinition {
   /** Optional product-specific configuration hook used by the SoulInjector plugin. */
   configureTarget?: TargetConfigHandler;
   storeArtifactChunk?: ArtifactChunkHandler;
+  /** Explicitly named procedures callable through Plugin Manager scope checks. */
+  handleCall?: Record<string, PluginCallHandler>;
 }
 
 export type InputSchema = z.ZodTypeAny;

@@ -368,12 +368,12 @@ ui.handleAction
 ```text
 context.entities.get
 context.commands.enqueue
+context.plugins.callScoped（受限显式 procedure）
 ```
 
 已保留 contract、但尚未提供生产 handler 的 procedure：
 
 ```text
-context.plugins.callScoped
 context.ui.getData
 ```
 

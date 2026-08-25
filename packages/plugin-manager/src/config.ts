@@ -14,6 +14,7 @@ const envSchema = z.object({
   PLUGIN_MANAGER_MAX_OPERATIONS_PER_PLUGIN: z.coerce.number().int().positive().max(1024).default(64),
   PLUGIN_MANAGER_MAX_OPERATIONS_PER_INSTALLATION: z.coerce.number().int().positive().max(256).default(32),
   PLUGIN_RPC_MAX_REVERSE_CALLS: z.coerce.number().int().positive().max(1024).default(64),
+  PLUGIN_RPC_MAX_PLUGIN_CALL_DEPTH: z.coerce.number().int().positive().max(8).default(4),
   PLUGIN_RPC_MAX_REVERSE_CONCURRENCY: z.coerce.number().int().positive().max(4096).default(256),
   PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_PLUGIN: z.coerce.number().int().positive().max(1024).default(64),
   PLUGIN_RPC_MAX_REVERSE_CONCURRENCY_PER_INSTALLATION: z.coerce.number().int().positive().max(256).default(16),

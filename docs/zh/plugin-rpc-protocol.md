@@ -241,12 +241,12 @@ stream/call 转发。具体 procedure 和 Human API → plugin UI origin 的一�
 ```text
 context.entities.get
 context.commands.enqueue
+context.plugins.callScoped
 ```
 
-contract 已保留但生产 handler 尚未实现：
+当前仍保留但默认未提供业务 handler：
 
 ```text
-context.plugins.callScoped
 context.ui.getData
 ```
 
@@ -276,8 +276,10 @@ plugin 只传 command + arguments，不传 target device。Manager 固定使用�
 ### 6.3 Scoped plugin-to-plugin
 
 涉及 project、installation、device、Entity、Command、用户数据或当前 operation 的跨 plugin
-调用必须经 `context.plugins.callScoped`。Manager 验证 caller、找到 target plugin/version、
-派生更窄的短期 capability，并限制调用深度、fan-out、并发、deadline 和字节。
+调用必须经 `context.plugins.callScoped`。Manager 验证 caller、找到当前连接的 target
+plugin/version、派生独立且更窄的短期 operation capability，并限制调用深度、fan-out、并发、
+deadline 和字节。target plugin 只能执行自己显式注册的 procedure；不能通过这个调用获得
+Device Broker、设备、Soulcloud PostgreSQL 或 Manager service credential。
 
 plugin 可直接访问公网 API，也可直接调用其他 plugin 的无租户/纯计算接口；这类直连不能携带
 Soulcloud project/device/user identity，不能调用 Manager reverse RPC。

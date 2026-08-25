@@ -187,7 +187,7 @@ export class PluginConnection {
     this.heartbeatTimer.unref?.();
   }
 
-  async request(method: "plugin.handleEvent" | "action.encode" | "ui.render" | "ui.handleAction" | "ui.asset" | "debugger.configureTarget" | "debugger.storeArtifactChunk", input: unknown, timeoutMs: number): Promise<unknown> {
+  async request(method: "plugin.handleEvent" | "plugin.call" | "action.encode" | "ui.render" | "ui.handleAction" | "ui.asset" | "debugger.configureTarget" | "debugger.storeArtifactChunk", input: unknown, timeoutMs: number): Promise<unknown> {
     await this.connect();
     if (!this.forward || !this.socket) throw new PluginConnectionError("plugin is unavailable");
     if (this.socket.bufferedAmount > this.options.backpressureBytes) throw new PluginConnectionError("plugin send queue is full");
@@ -205,6 +205,7 @@ export class PluginConnection {
           event: { ...event, payload: rpcBinaryToBlob(event.payload) },
         }, { signal: controller.signal });
       }
+      if (method === "plugin.call") return await this.forward.plugin.call({ ...operation, deadlineMs: timeoutMs, input: rpcBinaryToBlob(operation.input) }, { signal: controller.signal });
       if (method === "action.encode") return await this.forward.action.encode({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
       if (method === "ui.render") return await this.forward.ui.render({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
       if (method === "ui.handleAction") return await this.forward.ui.handleAction({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });

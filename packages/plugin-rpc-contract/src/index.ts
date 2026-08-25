@@ -82,6 +82,18 @@ export const commandEnqueueInput = operation.extend({ command: z.string().min(1)
 export const commandEnqueueOutput = z.object({ accepted: z.literal(true) }).strict();
 export const pluginCallInput = operation.extend({ pluginId: z.string().min(1).max(128), procedure: z.string().min(1).max(256), input: z.unknown() }).strict();
 export const pluginCallOutput = z.unknown();
+export const pluginInvokeInput = operation.extend({
+  caller: z.object({
+    pluginId: z.string().min(1).max(128),
+    pluginVersion: z.string().min(1).max(128),
+    projectId: z.string().uuid(),
+    installationId: z.string().uuid(),
+    deviceId: z.string().uuid().optional(),
+    userId: z.string().uuid().optional(),
+  }).strict(),
+  procedure: z.string().min(1).max(256),
+  input: z.unknown(),
+}).strict();
 export const uiDataInput = operation.extend({ key: z.string().min(1).max(128), input: z.unknown().optional() }).strict();
 export const uiDataOutput = z.unknown();
 export const pingInput = z.object({ nonce: z.string().min(1).max(128) }).strict();
@@ -94,7 +106,10 @@ export const managerToPluginContract = {
     handshake: procedure(handshakeInput, handshakeOutput, ["system", "handshake"]),
     ping: procedure(pingInput, pingOutput, ["system", "ping"]),
   },
-  plugin: { handleEvent: procedure(eventInput, eventOutput, ["plugin", "handleEvent"]) },
+  plugin: {
+    handleEvent: procedure(eventInput, eventOutput, ["plugin", "handleEvent"]),
+    call: procedure(pluginInvokeInput, pluginCallOutput, ["plugin", "call"]),
+  },
   action: { encode: procedure(actionInput, actionOutput, ["action", "encode"]) },
   ui: {
     render: procedure(uiRenderInput, uiRenderOutput, ["ui", "render"]),
@@ -138,6 +153,7 @@ export type EntityGetOutput = z.infer<typeof entityGetOutput>;
 export type EntityGetInput = z.infer<typeof entityGetInput>;
 export type CommandEnqueueInput = z.infer<typeof commandEnqueueInput>;
 export type PluginCallInput = z.infer<typeof pluginCallInput>;
+export type PluginInvokeInput = z.infer<typeof pluginInvokeInput>;
 
 export interface RpcValueBudget { maxDepth: number; maxNodes: number; maxArrayItems: number; maxStringBytes: number; maxBlobs: number; maxBlobBytes: number; maxTotalBlobBytes: number }
 export const DEFAULT_RPC_VALUE_BUDGET: Readonly<RpcValueBudget> = Object.freeze({

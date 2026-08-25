@@ -46,6 +46,9 @@ beforeAll(async () => {
         ],
       };
     },
+    handleCall: {
+      echo: async (input, context) => ({ input, caller: context.caller }),
+    },
     render: {
       main: async (input) => {
         uiInputHasOperationProof = "operationToken" in input || "deadlineMs" in input;
@@ -135,6 +138,27 @@ describe("plugin oRPC WebSocket transport", () => {
     }, 1_000) as { command: string; args: Array<{ name: string; value: bigint }> };
     expect(output.command).toBe("reboot");
     expect(output.args).toEqual([{ name: "delay", value: 3n }]);
+  });
+
+  test("routes an explicitly declared plugin procedure with scoped caller context", async () => {
+    const caller = {
+      pluginId: "caller.plugin",
+      pluginVersion: "2.0.0",
+      projectId: randomUUID(),
+      installationId: randomUUID(),
+      deviceId: randomUUID(),
+      userId: randomUUID(),
+    };
+    const output = await connection.request("plugin.call", {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      caller,
+      procedure: "echo",
+      input: { bytes: Uint8Array.of(1, 2, 3) },
+    }, 1_000) as { input: { bytes: Blob }; caller: typeof caller };
+    expect(output.caller).toEqual(caller);
+    expect(output.input.bytes).toBeInstanceOf(Blob);
+    expect(new Uint8Array(await output.input.bytes.arrayBuffer())).toEqual(Uint8Array.of(1, 2, 3));
   });
 
   test("routes target configuration through the typed plugin procedure", async () => {
