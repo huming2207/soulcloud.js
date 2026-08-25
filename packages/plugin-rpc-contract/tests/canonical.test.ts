@@ -92,4 +92,9 @@ describe("artifact chunk contract", () => {
     expect(artifactChunkInput.safeParse({ ...base, final: true, chunk: new Blob([Uint8Array.of(1, 2, 3, 4)]) }).success).toBe(true);
     expect(artifactChunkInput.safeParse({ ...base, final: false, chunk: new Blob([Uint8Array.of(1, 2, 3)]) }).success).toBe(true);
   });
+
+  test("rejects final chunks that overrun or stop before the declared size", () => {
+    expect(artifactChunkInput.safeParse({ ...base, offset: 3, final: true, chunk: new Blob([Uint8Array.of(1, 2)]) }).success).toBe(false);
+    expect(artifactChunkInput.safeParse({ ...base, offset: 0, final: true, chunk: new Blob([Uint8Array.of(1, 2, 3)]) }).success).toBe(false);
+  });
 });
