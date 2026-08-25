@@ -278,7 +278,10 @@ export class SoulInjectorRepository {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query(`DELETE FROM ${schema}.artifact_uploads WHERE expires_at < CURRENT_TIMESTAMP`);
+      // Cleanup is handled by the bounded maintenance job. On the upload hot
+      // path only remove a stale row for this ID, keeping the transaction
+      // indexed and independent of the total number of expired uploads.
+      await client.query(`DELETE FROM ${schema}.artifact_uploads WHERE id = $1 AND expires_at < CURRENT_TIMESTAMP`, [input.uploadId]);
       await client.query(
         `INSERT INTO ${schema}.artifact_uploads
           (id, installation_id, project_id, kind, filename, content_type, expected_size, created_by)
