@@ -17,6 +17,7 @@ export async function targetSelectionArgs(
     : undefined;
   if (!target) throw new Error("target configuration revision or target id is not available");
   return [
+    { targetConfigRevision: input.targetConfigRevision },
     { targetId: target.id },
     { architecture: target.architecture },
     { chip: target.chip },

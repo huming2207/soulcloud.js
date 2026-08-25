@@ -34,7 +34,7 @@ describe("SoulInjector plugin", () => {
   test("encodes bounded high-level device commands", async () => {
     const plugin = createSoulInjectorPlugin(store());
     const args = await plugin.encodeAction!["debug.read_memory"]!({ targetConfigRevision: 3, targetId: "fixture", address: 4096, length: 32 }, { operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, deviceId: saved.installationId, userId: saved.createdBy });
-    expect(args).toEqual([{ targetId: "fixture" }, { architecture: "cortex-m" }, { chip: "fixture" }, { transport: "swd" }, { requiredPrimitives: "identify" }, { address: 4096 }, { length: 32 }]);
+    expect(args).toEqual([{ targetConfigRevision: 3 }, { targetId: "fixture" }, { architecture: "cortex-m" }, { chip: "fixture" }, { transport: "swd" }, { requiredPrimitives: "identify" }, { address: 4096 }, { length: 32 }]);
   });
 
   test("does not encode a target from another project or missing revision", async () => {

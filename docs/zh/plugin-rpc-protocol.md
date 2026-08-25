@@ -177,8 +177,8 @@ interface ActionEncodingContext {
 
 SoulInjector plugin 的 `targetConfigRevision` 与 `targetId` 只允许引用同一
 installation/project 的私有配置 revision。encoder 会把该 revision 中的 architecture、chip、
-transport 和 requiredPrimitives 快照编码进 DeviceCommand，避免设备按云端当前配置隐式解释
-旧 command。缺少 revision、target 或 scope 不匹配时属于 plugin encoder/output 错误（502）；
+transport、requiredPrimitives 以及 revision 编码进 DeviceCommand，避免设备按云端当前配置隐式
+解释旧 command。缺少 revision、target 或 scope 不匹配时属于 plugin encoder/output 错误（502）；
 用户 schema 不满足则仍是 400 `invalid_action_input`。
 
 ### 5.3 `ui.render`
