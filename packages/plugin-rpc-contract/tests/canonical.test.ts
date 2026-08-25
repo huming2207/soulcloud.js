@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, artifactChunkInput, canonicalJson, eventOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
+import { assertRpcValueBudget, artifactChunkInput, canonicalJson, eventInput, eventOutput, executionCompleteInput, executionOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256BytesHex, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
   test("sorts object keys without changing array order", async () => {
@@ -30,6 +30,50 @@ describe("RPC integer bounds", () => {
     const update = (sequence: bigint) => ({ updates: [{ entityKey: "counter", sequence }], logs: [] });
     expect(eventOutput.safeParse(update((1n << 64n) - 1n)).success).toBe(true);
     expect(eventOutput.safeParse(update(1n << 64n)).success).toBe(false);
+  });
+});
+
+describe("debug execution RPC contract", () => {
+  const base = {
+    operationId: "execution-operation",
+    operationToken: "execution-operation-token-12345678901234567890",
+    deadlineMs: 1_000,
+    executionId: "00000000-0000-4000-8000-000000000001",
+    executionToken: "execution-capability-token-12345678901234567890",
+  };
+
+  test("validates execution output without exposing a token hash", () => {
+    const output = executionOutput.parse({
+      id: base.executionId,
+      installationId: "00000000-0000-4000-8000-000000000002",
+      deviceId: "00000000-0000-4000-8000-000000000003",
+      initiatingUserId: "00000000-0000-4000-8000-000000000004",
+      pluginId: "debugger",
+      pluginVersion: "1.0.0",
+      manifestHash: "a".repeat(64),
+      allowedCapabilities: ["execution.get"],
+      state: "active",
+      deviceLeaseExpiresAt: new Date(1_000).toISOString(),
+      expiresAt: new Date(2_000).toISOString(),
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(1_000).toISOString(),
+      finishedAt: null,
+    });
+    expect(output).not.toHaveProperty("executionToken");
+    expect(executionCompleteInput.safeParse({ ...base, state: "completed" }).success).toBe(true);
+  });
+
+  test("allows an optional execution context on event input", () => {
+    const result = eventInput.safeParse({
+      operationId: base.operationId,
+      operationToken: base.operationToken,
+      deadlineMs: base.deadlineMs,
+      event: { id: "event", seq: 1n, kind: "debug", schema: 1, receivedAt: new Date(0).toISOString(), payload: {} },
+      installation: { id: "installation", projectId: "00000000-0000-4000-8000-000000000002", pluginId: "debugger", pluginVersion: "1.0.0", config: {} },
+      device: { id: "00000000-0000-4000-8000-000000000003", uid: "device", profileId: "debug", profileVersion: 1 },
+      execution: { executionId: base.executionId, executionToken: base.executionToken },
+    });
+    expect(result.success).toBe(true);
   });
 });
 

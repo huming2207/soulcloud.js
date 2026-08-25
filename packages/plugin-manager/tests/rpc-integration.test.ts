@@ -12,6 +12,26 @@ let reverseCommand: string | undefined;
 let reverseEntityValue: unknown;
 let uiInputHasOperationProof = false;
 let eventPayloadValue: unknown;
+let executionRpcCalls = 0;
+
+function executionRecord(state: "active" | "paused" | "completed") {
+  return {
+    id: "00000000-0000-4000-8000-000000000001",
+    installationId: "00000000-0000-4000-8000-000000000002",
+    deviceId: "00000000-0000-4000-8000-000000000003",
+    initiatingUserId: "00000000-0000-4000-8000-000000000004",
+    pluginId: "integration.plugin",
+    pluginVersion: "1.0.0",
+    manifestHash: "a".repeat(64),
+    allowedCapabilities: ["execution.get", "execution.renew_lease", "execution.release", "execution.complete"],
+    state,
+    deviceLeaseExpiresAt: state === "paused" || state === "completed" ? null : new Date(1_000).toISOString(),
+    expiresAt: new Date(2_000).toISOString(),
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(1_000).toISOString(),
+    finishedAt: state === "completed" ? new Date(1_000).toISOString() : null,
+  };
+}
 
 beforeAll(async () => {
   runtime = await startPluginRuntime(definePlugin({
@@ -42,6 +62,12 @@ beforeAll(async () => {
       eventPayloadValue = event.payload;
       reverseEntityValue = await context.getEntity("temperature");
       await context.enqueueCommand("acknowledge");
+      if (context.execution) {
+        expect((await context.execution.get()).state).toBe("active");
+        expect((await context.execution.renewLease(5_000)).state).toBe("active");
+        expect((await context.execution.release()).state).toBe("paused");
+        expect((await context.execution.complete("completed")).state).toBe("completed");
+      }
       return {
         updates: [
           { entityKey: "temperature", value: 24 },
@@ -94,6 +120,10 @@ beforeAll(async () => {
       },
       pluginCall: async () => { throw new Error("not used"); },
       uiGetData: async () => { throw new Error("not used"); },
+      executionGet: async () => { executionRpcCalls += 1; return executionRecord("active"); },
+      executionRenewLease: async () => { executionRpcCalls += 1; return executionRecord("active"); },
+      executionRelease: async () => { executionRpcCalls += 1; return executionRecord("paused"); },
+      executionComplete: async () => { executionRpcCalls += 1; return executionRecord("completed"); },
     },
   });
   await connection.connect();
@@ -176,6 +206,21 @@ describe("plugin oRPC WebSocket transport", () => {
       yaml: "version: 1\ntargets:\n  - id: fixture\n    displayName: Fixture\n    architecture: cortex-m\n    chip: fixture\n    transport: swd\n    requiredPrimitives: [identify]",
     }, 1_000);
     expect(output).toMatchObject({ revision: 1, targetCount: 1 });
+  });
+
+  test("routes durable execution capability calls through the reverse prefix", async () => {
+    executionRpcCalls = 0;
+    const output = await connection.request("plugin.handleEvent", {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      deadlineMs: 1_000,
+      event: { id: "execution-event", seq: 1n, kind: "reading", schema: 1, receivedAt: new Date(0).toISOString(), payload: {} },
+      installation: { id: randomUUID(), projectId: randomUUID(), pluginId: "integration.plugin", pluginVersion: "1.0.0", config: {} },
+      device: { id: randomUUID(), uid: "fixture-device", profileId: "fixture", profileVersion: 1 },
+      execution: { executionId: randomUUID(), executionToken: `${randomUUID()}${randomUUID()}` },
+    }, 1_000) as { updates: unknown[] };
+    expect(output.updates).toHaveLength(2);
+    expect(executionRpcCalls).toBe(4);
   });
 
   test("routes target configuration revision metadata through the typed plugin procedure", async () => {

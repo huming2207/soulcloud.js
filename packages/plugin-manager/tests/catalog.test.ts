@@ -164,6 +164,64 @@ describe("plugin catalog connection state", () => {
     expect(operation.stagedCommandBytes).toBe(0);
   });
 
+  test("checks durable execution scope and capability before allowing reverse access", async () => {
+    const operationToken = "operation-token-for-execution";
+    const executionToken = "execution-token-for-manager";
+    const executionId = "00000000-0000-4000-8000-000000000001";
+    const installationId = "00000000-0000-4000-8000-000000000002";
+    const deviceId = "00000000-0000-4000-8000-000000000003";
+    const row = {
+      id: executionId,
+      installation_id: installationId,
+      device_id: deviceId,
+      initiating_user_id: "00000000-0000-4000-8000-000000000004",
+      plugin_id: "example.plugin",
+      plugin_version: "1.0.0",
+      manifest_hash: "a".repeat(64),
+      allowed_capabilities: ["execution.get"],
+      state: "active",
+      device_lease_expires_at: new Date(1_000),
+      expires_at: new Date(2_000),
+      created_at: new Date(0),
+      updated_at: new Date(1_000),
+      finished_at: null,
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000,
+      prisma: { $queryRaw: async () => [row] } as never,
+    });
+    const operation = {
+      kind: "event" as const,
+      operationTokenHash: createHash("sha256").update(operationToken).digest(),
+      connectionId: "connection",
+      installationId,
+      projectId: "00000000-0000-4000-8000-000000000005",
+      pluginId: "example.plugin",
+      pluginVersion: "1.0.0",
+      manifestHash: "a".repeat(64),
+      deviceId,
+      deadline: performance.now() + 1_000,
+      state: "active" as const,
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set<() => void>(),
+    };
+    const internals = manager as unknown as {
+      operations: Map<string, typeof operation>;
+      reverseExecutionGet(input: object, signal: AbortSignal, connectionId: string): Promise<unknown>;
+    };
+    internals.operations.set("operation", operation);
+    await expect(internals.reverseExecutionGet({ operationId: "operation", operationToken, deadlineMs: 1_000, executionId, executionToken }, new AbortController().signal, "connection"))
+      .resolves.toMatchObject({ id: executionId, state: "active" });
+    row.allowed_capabilities = ["execution.release"];
+    await expect(internals.reverseExecutionGet({ operationId: "operation", operationToken, deadlineMs: 1_000, executionId, executionToken }, new AbortController().signal, "connection"))
+      .rejects.toThrow("execution.get is not granted");
+  });
+
   test("does not return SSR output after the installation is disabled in flight", async () => {
     const persisted: PluginManifest = {
       ...manifest("1.0.0"),

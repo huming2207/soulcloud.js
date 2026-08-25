@@ -310,11 +310,18 @@ function createRuntimeConnection(
         operations.running += 1;
         try {
           const result = await runWithDeadline(input.deadlineMs, async (signal) => {
+            const execution = input.execution;
             const ctx = {
               operationId: input.operationId,
               signal,
               installation: input.installation,
               device: input.device,
+              execution: execution ? {
+                get: async () => reverse.context.executions.get({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, executionId: execution.executionId, executionToken: execution.executionToken }),
+                renewLease: async (leaseMs: number) => reverse.context.executions.renewLease({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, executionId: execution.executionId, executionToken: execution.executionToken, leaseMs }),
+                release: async () => reverse.context.executions.release({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, executionId: execution.executionId, executionToken: execution.executionToken }),
+                complete: async (state: "completed" | "failed") => reverse.context.executions.complete({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, executionId: execution.executionId, executionToken: execution.executionToken, state }),
+              } : null,
               getEntity: async (entityKey: string) => entityStateFromWire(await reverse.context.entities.get({ operationId: input.operationId, operationToken: input.operationToken, deadlineMs: input.deadlineMs, entityKey })),
               enqueueCommand: async (command: string, args: CommandArgument[] = []) => {
                 assertRpcValueBudget(args, budget);
@@ -327,7 +334,7 @@ function createRuntimeConnection(
                 return rpcBinaryFromBlob(result);
               },
             };
-            return definition.onEvent!(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload, installation: input.installation, device: input.device });
+            return definition.onEvent!(ctx, { id: input.event.id, seq: typeof input.event.seq === "number" ? BigInt(input.event.seq) : input.event.seq, kind: input.event.kind, schema: input.event.schema, receivedAt: input.event.receivedAt, payload, installation: input.installation, device: input.device, ...(execution ? { execution } : {}) });
           });
           const updates = result?.updates ?? [];
           try {

@@ -55,6 +55,7 @@ export const eventInput = operation.extend({
   event: z.object({ id: z.string().min(1).max(128), seq: uint64, kind: z.string().min(1).max(256), schema: z.number().int().positive(), receivedAt: z.string().datetime({ offset: true }), payload: z.unknown() }).strict(),
   installation: z.object({ id: z.string().min(1).max(128), projectId: z.string().uuid(), pluginId: z.string().min(1).max(128), pluginVersion: z.string().min(1).max(128), config: z.unknown() }).strict(),
   device: z.object({ id: z.string().uuid(), uid: z.string().min(1).max(256), profileId: z.string().min(1).max(128), profileVersion: z.number().int().positive() }).strict(),
+  execution: z.object({ executionId: z.string().uuid(), executionToken: z.string().min(32).max(256) }).strict().optional(),
 }).strict();
 
 export const eventOutput = z.object({
@@ -105,6 +106,29 @@ export const uiDataOutput = z.unknown();
 export const pingInput = z.object({ nonce: z.string().min(1).max(128) }).strict();
 export const pingOutput = pingInput;
 
+const executionCapability = z.object({ executionId: z.string().uuid(), executionToken: z.string().min(32).max(256) }).strict();
+const executionState = z.enum(["active", "paused", "cancelling", "completed", "failed", "expired"]);
+export const executionOutput = z.object({
+  id: z.string().uuid(),
+  installationId: z.string().uuid(),
+  deviceId: z.string().uuid(),
+  initiatingUserId: z.string().uuid(),
+  pluginId: z.string().min(1).max(128),
+  pluginVersion: z.string().min(1).max(128),
+  manifestHash: z.string().regex(/^[0-9a-f]{64}$/),
+  allowedCapabilities: z.array(z.string().min(1).max(128)).max(128),
+  state: executionState,
+  deviceLeaseExpiresAt: z.string().datetime({ offset: true }).nullable(),
+  expiresAt: z.string().datetime({ offset: true }),
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
+  finishedAt: z.string().datetime({ offset: true }).nullable(),
+}).strict();
+export const executionGetInput = operation.extend(executionCapability.shape).strict();
+export const executionRenewLeaseInput = operation.extend({ ...executionCapability.shape, leaseMs: z.number().int().positive().max(900_000) }).strict();
+export const executionReleaseInput = operation.extend(executionCapability.shape).strict();
+export const executionCompleteInput = operation.extend({ ...executionCapability.shape, state: z.enum(["completed", "failed"]) }).strict();
+
 const procedure = <Input extends z.ZodTypeAny, Output extends z.ZodTypeAny>(input: Input, output: Output, path: string[]) => oc.input(input).output(output).meta(meta.path(path));
 
 export const managerToPluginContract = {
@@ -137,6 +161,12 @@ export const pluginToManagerContract = {
     commands: { enqueue: procedure(commandEnqueueInput, commandEnqueueOutput, ["context", "commands", "enqueue"]) },
     plugins: { callScoped: procedure(pluginCallInput, pluginCallOutput, ["context", "plugins", "callScoped"]) },
     ui: { getData: procedure(uiDataInput, uiDataOutput, ["context", "ui", "getData"]) },
+    executions: {
+      get: procedure(executionGetInput, executionOutput, ["context", "executions", "get"]),
+      renewLease: procedure(executionRenewLeaseInput, executionOutput, ["context", "executions", "renewLease"]),
+      release: procedure(executionReleaseInput, executionOutput, ["context", "executions", "release"]),
+      complete: procedure(executionCompleteInput, executionOutput, ["context", "executions", "complete"]),
+    },
   },
 };
 
@@ -145,6 +175,11 @@ export type PluginToManagerContract = typeof pluginToManagerContract;
 export type HandshakeOutput = z.infer<typeof handshakeOutput>;
 export type EventInput = z.infer<typeof eventInput>;
 export type EventOutput = z.infer<typeof eventOutput>;
+export type ExecutionOutput = z.infer<typeof executionOutput>;
+export type ExecutionGetInput = z.infer<typeof executionGetInput>;
+export type ExecutionRenewLeaseInput = z.infer<typeof executionRenewLeaseInput>;
+export type ExecutionReleaseInput = z.infer<typeof executionReleaseInput>;
+export type ExecutionCompleteInput = z.infer<typeof executionCompleteInput>;
 export type ActionInput = z.infer<typeof actionInput>;
 export type ActionOutput = z.infer<typeof actionOutput>;
 export type UiRenderInput = z.infer<typeof uiRenderInput>;

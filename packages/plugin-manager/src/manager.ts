@@ -11,6 +11,11 @@ import {
   sha256Hex,
   type CommandEnqueueInput,
   type EntityGetInput,
+  type ExecutionCompleteInput,
+  type ExecutionGetInput,
+  type ExecutionOutput,
+  type ExecutionReleaseInput,
+  type ExecutionRenewLeaseInput,
   type HandshakeOutput,
   type PluginCallInput,
   type RpcValueBudget,
@@ -22,9 +27,16 @@ import {
   enqueueBatchInTransaction,
   getPluginEntityState,
   bindDeviceToPluginInstallation,
+  completeDebugExecution,
   createPluginInstallation,
+  createDebugExecution,
+  expireDebugExecutions,
+  getDebugExecutionCapability,
+  getDebugExecution,
   migratePluginInstallation,
   reconcilePluginInstallation,
+  releaseDebugExecution,
+  renewDebugExecutionLease,
   setPluginInstallationState,
   leasePluginEvents,
   releasePluginEvent,
@@ -36,6 +48,7 @@ import {
   type EntityDescriptorInput,
   type CommandArgument,
   type DeviceCommand,
+  type DebugExecutionRecord,
   type PluginUiSession,
   type BindDeviceInput,
   type CreateInstallationInput,
@@ -266,16 +279,16 @@ export class PluginManager {
       this.eventTimer = setInterval(() => this.consumeEvents(), interval);
       this.eventTimer.unref?.();
       this.consumeEvents();
-      if (this.options.eventStore.purge) {
-        const interval = this.options.maintenanceIntervalMs ?? 3_600_000;
-        this.maintenanceTimer = setInterval(() => this.maintain(), interval);
-        this.maintenanceTimer.unref?.();
-      }
+    }
+    if (this.options.eventStore?.purge || this.options.prisma) {
+      const interval = this.options.maintenanceIntervalMs ?? 3_600_000;
+      this.maintenanceTimer = setInterval(() => this.maintain(), interval);
+      this.maintenanceTimer.unref?.();
     }
   }
 
   private maintain(): void {
-    if (this.stopping || this.maintenanceRunning || !this.options.eventStore?.purge) return;
+    if (this.stopping || this.maintenanceRunning || (!this.options.eventStore?.purge && !this.options.prisma)) return;
     const running = this.runMaintenance();
     this.maintenanceRunning = running;
     void running.finally(() => {
@@ -288,18 +301,27 @@ export class PluginManager {
     const maxBatches = this.options.retentionMaxBatches ?? 8;
     let events = 0;
     let history = 0;
+    let executions = 0;
+    let leases = 0;
     try {
-      for (let batch = 0; batch < maxBatches && !this.stopping; batch += 1) {
-        const result = await this.options.eventStore!.purge!(
-          this.options.eventRetentionDays ?? 30,
-          this.options.historyRetentionDays ?? 30,
-          batchSize,
-        );
-        events += result.events;
-        history += result.history;
-        if (result.events < batchSize && result.history < batchSize) break;
+      if (this.options.prisma) {
+        const result = await expireDebugExecutions(this.options.prisma, Math.min(batchSize, 10_000));
+        executions = result.executions;
+        leases = result.leases;
       }
-      this.log("plugin retention sweep completed", { events, history });
+      if (this.options.eventStore?.purge) {
+        for (let batch = 0; batch < maxBatches && !this.stopping; batch += 1) {
+          const result = await this.options.eventStore.purge(
+            this.options.eventRetentionDays ?? 30,
+            this.options.historyRetentionDays ?? 30,
+            batchSize,
+          );
+          events += result.events;
+          history += result.history;
+          if (result.events < batchSize && result.history < batchSize) break;
+        }
+      }
+      this.log("plugin maintenance sweep completed", { events, history, executions, leases });
     } catch (error) {
       this.log("plugin retention sweep failed", { error: (error as Error).message });
     }
@@ -315,6 +337,61 @@ export class PluginManager {
   async bindDevice(input: BindDeviceInput): Promise<void> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     return bindDeviceToPluginInstallation(this.options.prisma, input);
+  }
+
+  /** Start a durable capability after Human API has authorized the request. */
+  async startDebugExecution(input: {
+    installationId: string;
+    projectId: string;
+    deviceId: string;
+    userId: string;
+    allowedCapabilities: readonly string[];
+    leaseMs: number;
+    ttlMs: number;
+  }): Promise<{ execution: DebugExecutionRecord; executionToken: string }> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    const installation = await this.options.prisma.pluginInstallation.findUnique({
+      where: { id: input.installationId },
+      select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
+    });
+    if (!installation) throw Object.assign(new Error("plugin installation not found"), { status: 404 });
+    if (installation.projectId !== input.projectId) throw Object.assign(new Error("plugin installation project mismatch"), { status: 403 });
+    if (installation.state !== "enabled") throw Object.assign(new Error("plugin installation is disabled"), { status: 409 });
+    this.requireConnectedManifest(installation.pluginId, installation.pluginVersion, installation.manifestHash.trim());
+    const executionToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const execution = await createDebugExecution(this.options.prisma, {
+      installationId: installation.id,
+      deviceId: input.deviceId,
+      initiatingUserId: input.userId,
+      pluginId: installation.pluginId,
+      pluginVersion: installation.pluginVersion,
+      manifestHash: installation.manifestHash.trim(),
+      allowedCapabilities: input.allowedCapabilities,
+      tokenHash: hashCapabilityToken(executionToken),
+      leaseMs: input.leaseMs,
+      ttlMs: input.ttlMs,
+    });
+    return { execution, executionToken };
+  }
+
+  async getDebugExecution(executionId: string): Promise<DebugExecutionRecord | null> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return getDebugExecution(this.options.prisma, executionId);
+  }
+
+  async renewDebugExecution(executionId: string, executionToken: string, leaseMs: number): Promise<DebugExecutionRecord> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return renewDebugExecutionLease(this.options.prisma, executionId, hashCapabilityToken(executionToken), leaseMs);
+  }
+
+  async releaseDebugExecution(executionId: string, executionToken: string): Promise<DebugExecutionRecord> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return releaseDebugExecution(this.options.prisma, executionId, hashCapabilityToken(executionToken));
+  }
+
+  async completeDebugExecution(executionId: string, executionToken: string, state: "completed" | "failed"): Promise<DebugExecutionRecord> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    return completeDebugExecution(this.options.prisma, executionId, hashCapabilityToken(executionToken), state);
   }
 
   async setInstallationState(installationId: string, state: "enabled" | "disabled"): Promise<void> {
@@ -899,6 +976,10 @@ export class PluginManager {
       commandEnqueue: this.options.reverseHandlers?.commandEnqueue ?? ((input, signal, connectionId) => this.reverseCommandEnqueue(input, signal, connectionId)),
       pluginCall: this.options.reverseHandlers?.pluginCall ?? ((input, signal, connectionId) => this.reversePluginCall(input, signal, connectionId)),
       uiGetData: this.options.reverseHandlers?.uiGetData ?? unavailable,
+      executionGet: this.options.reverseHandlers?.executionGet ?? ((input, signal, connectionId) => this.reverseExecutionGet(input, signal, connectionId)),
+      executionRenewLease: this.options.reverseHandlers?.executionRenewLease ?? ((input, signal, connectionId) => this.reverseExecutionRenewLease(input, signal, connectionId)),
+      executionRelease: this.options.reverseHandlers?.executionRelease ?? ((input, signal, connectionId) => this.reverseExecutionRelease(input, signal, connectionId)),
+      executionComplete: this.options.reverseHandlers?.executionComplete ?? ((input, signal, connectionId) => this.reverseExecutionComplete(input, signal, connectionId)),
     };
     const config: PluginConnectionOptions = {
       pluginId,
@@ -1380,6 +1461,70 @@ export class PluginManager {
     }
   }
 
+  private async executionForOperation(
+    input: { executionId: string; executionToken: string },
+    operation: ActiveOperation,
+    capability: string,
+  ): Promise<{ execution: DebugExecutionRecord; tokenHash: string }> {
+    if (!this.options.prisma) throw new Error("plugin execution RPC is not configured");
+    const tokenHash = hashCapabilityToken(input.executionToken);
+    const execution = await getDebugExecutionCapability(this.options.prisma, input.executionId, tokenHash);
+    if (!execution ||
+      execution.installationId !== operation.installationId ||
+      execution.pluginId !== operation.pluginId ||
+      execution.pluginVersion !== operation.pluginVersion ||
+      (operation.deviceId !== undefined && execution.deviceId !== operation.deviceId)) {
+      throw new Error("debug execution capability is outside the operation scope");
+    }
+    if (!execution.allowedCapabilities.includes(capability)) {
+      throw new Error(`debug execution capability ${capability} is not granted`);
+    }
+    return { execution, tokenHash };
+  }
+
+  private async reverseExecutionGet(input: ExecutionGetInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput> {
+    if (signal.aborted) throw new Error("operation aborted");
+    const operation = this.acquireOperation(input, connectionId);
+    try {
+      return (await this.executionForOperation(input, operation, "execution.get")).execution;
+    } finally {
+      this.releaseOperation(operation);
+    }
+  }
+
+  private async reverseExecutionRenewLease(input: ExecutionRenewLeaseInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput> {
+    if (signal.aborted) throw new Error("operation aborted");
+    const operation = this.acquireOperation(input, connectionId);
+    try {
+      const { execution, tokenHash } = await this.executionForOperation(input, operation, "execution.renew_lease");
+      return renewDebugExecutionLease(this.options.prisma!, execution.id, tokenHash, input.leaseMs);
+    } finally {
+      this.releaseOperation(operation);
+    }
+  }
+
+  private async reverseExecutionRelease(input: ExecutionReleaseInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput> {
+    if (signal.aborted) throw new Error("operation aborted");
+    const operation = this.acquireOperation(input, connectionId);
+    try {
+      const { execution, tokenHash } = await this.executionForOperation(input, operation, "execution.release");
+      return releaseDebugExecution(this.options.prisma!, execution.id, tokenHash);
+    } finally {
+      this.releaseOperation(operation);
+    }
+  }
+
+  private async reverseExecutionComplete(input: ExecutionCompleteInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput> {
+    if (signal.aborted) throw new Error("operation aborted");
+    const operation = this.acquireOperation(input, connectionId);
+    try {
+      const { execution, tokenHash } = await this.executionForOperation(input, operation, "execution.complete");
+      return completeDebugExecution(this.options.prisma!, execution.id, tokenHash, input.state);
+    } finally {
+      this.releaseOperation(operation);
+    }
+  }
+
   private async reverseCommandEnqueue(input: CommandEnqueueInput, signal: AbortSignal, connectionId: string): Promise<{ accepted: true }> {
     if (signal.aborted) throw new Error("operation aborted");
     const operation = this.acquireOperation(input, connectionId);
@@ -1561,6 +1706,10 @@ async function* splitArtifactBody(body: ReadableStream<Uint8Array>): AsyncGenera
 
 function hashOperationToken(token: string): Buffer {
   return createHash("sha256").update(token).digest();
+}
+
+function hashCapabilityToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 function decrementCounter(counters: Map<string, number>, key: string): void {

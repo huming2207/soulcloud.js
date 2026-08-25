@@ -18,6 +18,11 @@ import {
   type PluginCallInput,
   type UiDataInput,
   type HandshakeOutput,
+  type ExecutionGetInput,
+  type ExecutionRenewLeaseInput,
+  type ExecutionReleaseInput,
+  type ExecutionCompleteInput,
+  type ExecutionOutput,
 } from "@soulcloud/plugin-rpc-contract";
 
 export interface ReverseHandlers {
@@ -25,6 +30,10 @@ export interface ReverseHandlers {
   commandEnqueue(input: CommandEnqueueInput, signal: AbortSignal, connectionId: string): Promise<{ accepted: true }>;
   pluginCall(input: PluginCallInput, signal: AbortSignal, connectionId: string): Promise<unknown>;
   uiGetData(input: UiDataInput, signal: AbortSignal, connectionId: string): Promise<unknown>;
+  executionGet?(input: ExecutionGetInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput>;
+  executionRenewLease?(input: ExecutionRenewLeaseInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput>;
+  executionRelease?(input: ExecutionReleaseInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput>;
+  executionComplete?(input: ExecutionCompleteInput, signal: AbortSignal, connectionId: string): Promise<ExecutionOutput>;
 }
 
 export interface PluginConnectionOptions {
@@ -126,6 +135,12 @@ export class PluginConnection {
             commands: { enqueue: reverseImpl.context.commands.enqueue.handler(({ input, context }) => this.options.reverseHandlers.commandEnqueue(input, context.signal, this.connectionId)) },
             plugins: { callScoped: reverseImpl.context.plugins.callScoped.handler(({ input, context }) => this.options.reverseHandlers.pluginCall(input, context.signal, this.connectionId)) },
             ui: { getData: reverseImpl.context.ui.getData.handler(({ input, context }) => this.options.reverseHandlers.uiGetData(input, context.signal, this.connectionId)) },
+            executions: {
+              get: reverseImpl.context.executions.get.handler(({ input, context }) => this.options.reverseHandlers.executionGet ? this.options.reverseHandlers.executionGet(input, context.signal, this.connectionId) : Promise.reject(new Error("execution RPC is not configured"))),
+              renewLease: reverseImpl.context.executions.renewLease.handler(({ input, context }) => this.options.reverseHandlers.executionRenewLease ? this.options.reverseHandlers.executionRenewLease(input, context.signal, this.connectionId) : Promise.reject(new Error("execution RPC is not configured"))),
+              release: reverseImpl.context.executions.release.handler(({ input, context }) => this.options.reverseHandlers.executionRelease ? this.options.reverseHandlers.executionRelease(input, context.signal, this.connectionId) : Promise.reject(new Error("execution RPC is not configured"))),
+              complete: reverseImpl.context.executions.complete.handler(({ input, context }) => this.options.reverseHandlers.executionComplete ? this.options.reverseHandlers.executionComplete(input, context.signal, this.connectionId) : Promise.reject(new Error("execution RPC is not configured"))),
+            },
           },
         };
         this.reverseHandler = new RPCHandler(handler, { encodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX }, decodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX } });

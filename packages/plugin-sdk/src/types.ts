@@ -106,6 +106,7 @@ export interface PluginEventInput {
     config: unknown;
   };
   device: { id: string; uid: string; profileId: string; profileVersion: number };
+  execution?: { executionId: string; executionToken: string };
 }
 
 export interface PluginEventOutput {
@@ -122,11 +123,36 @@ export interface PluginEntityState {
   alarm: { level: "info" | "warning" | "critical"; code: string } | null;
 }
 
+export interface PluginExecutionState {
+  id: string;
+  installationId: string;
+  deviceId: string;
+  initiatingUserId: string;
+  pluginId: string;
+  pluginVersion: string;
+  manifestHash: string;
+  allowedCapabilities: string[];
+  state: "active" | "paused" | "cancelling" | "completed" | "failed" | "expired";
+  deviceLeaseExpiresAt: string | null;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+}
+
+export interface PluginExecutionContext {
+  get(): Promise<PluginExecutionState>;
+  renewLease(leaseMs: number): Promise<PluginExecutionState>;
+  release(): Promise<PluginExecutionState>;
+  complete(state: "completed" | "failed"): Promise<PluginExecutionState>;
+}
+
 export interface PluginContext {
   readonly operationId: string;
   readonly signal: AbortSignal;
   readonly installation: PluginEventInput["installation"];
   readonly device: PluginEventInput["device"];
+  readonly execution: PluginExecutionContext | null;
   getEntity(entityKey: string): Promise<PluginEntityState | null>;
   enqueueCommand(command: string, args?: CommandArgument[]): Promise<void>;
   callPlugin(pluginId: string, procedure: string, input?: unknown): Promise<unknown>;
