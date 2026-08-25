@@ -2056,7 +2056,7 @@ export class PluginManager {
         ? String((error as { code: unknown }).code)
         : "";
       const permanent = code === "INVALID_EVENT_INPUT" || code === "INVALID_PLUGIN_OUTPUT" || code === "MANAGER_DATA_CORRUPTION" || /INVALID_(EVENT_INPUT|PLUGIN_OUTPUT)/.test(message);
-      const managerDeferral = code === "MANAGER_OVERLOADED" || code === "MANAGER_STATE_UNAVAILABLE";
+      const managerDeferral = code === "MANAGER_OVERLOADED" || code === "MANAGER_STATE_UNAVAILABLE" || code === "MANAGER_DEPENDENCY_UNAVAILABLE";
       // Manager-capacity/catalog deferrals are not delivery attempts. A
       // failed database commit after a valid plugin response still needs a
       // finite retry budget, but it must not count against plugin health.
@@ -2233,9 +2233,13 @@ export class PluginManager {
       assertRpcValueBudget(input.input, this.valueBudget);
       const targetConnection = this.connections.get(input.pluginId);
       const targetHandshake = targetConnection?.manifest;
-      if (!targetConnection?.isOpen || !targetHandshake) throw new Error("target plugin is unavailable");
+      if (!targetConnection?.isOpen || !targetHandshake) {
+        throw Object.assign(new Error("target plugin is unavailable"), { code: "MANAGER_DEPENDENCY_UNAVAILABLE" });
+      }
       const targetManifest = this.catalog.get(`${input.pluginId}@${targetHandshake.pluginVersion}`);
-      if (!targetManifest || targetManifest.manifestHash !== targetHandshake.manifestHash) throw new Error("target plugin manifest is unavailable");
+      if (!targetManifest || targetManifest.manifestHash !== targetHandshake.manifestHash) {
+        throw Object.assign(new Error("target plugin manifest is unavailable"), { code: "MANAGER_DEPENDENCY_UNAVAILABLE" });
+      }
       const remaining = Math.floor(Math.min(30_000, source.deadline - performance.now()));
       if (remaining < 1) throw new Error("operation expired");
       targetOperationId = crypto.randomUUID();

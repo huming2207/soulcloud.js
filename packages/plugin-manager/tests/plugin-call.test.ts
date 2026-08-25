@@ -100,6 +100,40 @@ describe("scoped plugin-to-plugin calls", () => {
     expect(instance.operationsByPlugin.has("target.plugin")).toBe(false);
   });
 
+  test("classifies an unavailable peer plugin as a manager dependency deferral", async () => {
+    const instance = manager() as unknown as Record<string, any>;
+    const sourceToken = `${randomUUID()}${randomUUID()}`;
+    instance.registerOperation("source-operation", {
+      kind: "event",
+      operationTokenHash: tokenHash(sourceToken),
+      connectionId: "source-connection",
+      installationId: randomUUID(),
+      projectId: randomUUID(),
+      pluginId: "source.plugin",
+      pluginVersion: "1.0.0",
+      deadline: performance.now() + 5_000,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set(),
+      pluginCallDepth: 0,
+    });
+
+    await expect(instance.reversePluginCall({
+      operationId: "source-operation",
+      operationToken: sourceToken,
+      deadlineMs: 5_000,
+      pluginId: "missing.plugin",
+      procedure: "echo",
+      input: null,
+    }, new AbortController().signal, "source-connection")).rejects.toMatchObject({
+      code: "MANAGER_DEPENDENCY_UNAVAILABLE",
+    });
+    expect(instance.operations.size).toBe(1);
+  });
+
   test("rejects recursive calls beyond the configured depth", async () => {
     const instance = manager() as unknown as Record<string, any>;
     const sourceToken = `${randomUUID()}${randomUUID()}`;
