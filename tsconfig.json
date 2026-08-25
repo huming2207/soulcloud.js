@@ -21,7 +21,8 @@
         "./packages/core/src/index.ts"
       ],
       "@soulcloud/plugin-sdk": ["./packages/plugin-sdk/src/index.ts"],
-      "@soulcloud/plugin-rpc-contract": ["./packages/plugin-rpc-contract/src/index.ts"]
+      "@soulcloud/plugin-rpc-contract": ["./packages/plugin-rpc-contract/src/index.ts"],
+      "@soulcloud/soulinjector-plugin": ["./packages/soulinjector-plugin/src/index.ts"]
     }
   },
   "include": [
@@ -32,6 +33,7 @@
     "packages/plugin-rpc-contract",
     "packages/plugin-manager",
     "packages/plugin-runtime",
+    "packages/soulinjector-plugin",
     "scripts",
     "tests"
   ]

@@ -1,0 +1,15 @@
+{
+  "name": "@soulcloud/soulinjector-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@soulcloud/plugin-sdk": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "typescript": "^5"
+  }
+}

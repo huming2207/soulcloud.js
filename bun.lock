@@ -113,6 +113,18 @@
         "typescript": "^5",
       },
     },
+    "packages/soulinjector-plugin": {
+      "name": "@soulcloud/soulinjector-plugin",
+      "version": "0.1.0",
+      "dependencies": {
+        "@soulcloud/plugin-sdk": "workspace:*",
+        "zod": "^4.4.3",
+      },
+      "devDependencies": {
+        "@types/bun": "1.4.0",
+        "typescript": "^5",
+      },
+    },
     "packages/plugin-sdk": {
       "name": "@soulcloud/plugin-sdk",
       "version": "0.1.0",
