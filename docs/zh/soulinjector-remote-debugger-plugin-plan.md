@@ -80,6 +80,11 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   当前
   Human API 的人工 action 请求显式传递 approval；真正可审计的长期 approval/execution record
   仍属于后续阶段。
+- Plugin Manager 提供绑定短期 plugin-origin UI session 的
+  `/plugins/{installation}/actions/{actionId}` 人工 action route；SoulInjector SSR 页面在选中的
+  active/paused session 上提供 bounded identify/read-registers/halt/resume/reset/start 按钮。
+  每次点击都走 manifest/schema、设备绑定和 provenance 校验，destructive action 仍只能由该次
+  人工点击批准，plugin/LLM 没有同一入口。
 - `DebugExecution` 已保存平台侧长时 capability：不可变 plugin/version/manifest snapshot、
   initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
   device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
@@ -668,7 +673,8 @@ MQTT/oRPC 热路径。
 1. case 创建、device/target/artifact 关联；**已完成私有 case 创建、artifact→case、target-config
    revision 存储，以及 execution→session 输入快照关联基础**；
 2. SSR case/debugger 页面；**已完成最小 case 列表/创建、session 摘要、installation-scoped
-   observation timeline 和 target 配置页面；session 控制 UI 仍待实现**；
+   observation timeline、target 配置页面和基于 plugin-origin session 的人工 action 控件；
+   session 创建/控制闭环和实时状态 UI 仍待实现**；
 3. 人工执行 identify/halt/read/reset/capture/close；
 4. command timeline、observation、错误与报告草稿；
 5. overseas guided view 和国内工程师 take-over；
@@ -686,7 +692,8 @@ MQTT/oRPC 热路径。
 3. 实现 Human API 一次性 bootstrap 和 plugin-origin session；**已完成 grant 签发、PostgreSQL
    原子单次消费、过期清理、path-scoped cookie 以及 Web 前端 POST/跳转**；
 4. 实现 Browser ↔ Manager live channel 与 plugin oRPC stream/call；
-5. 实现 terminal、progress、register/memory 和多人观察 UI；
+5. 实现 terminal、progress、register/memory 和多人观察 UI；**当前已提供非实时的人工
+   identify/read-registers/halt/resume/reset/start 控件，实时 channel 和完整视图仍待实现**；
 6. 测试主站 token 不可见、session 撤销、慢消费者、backpressure、bundle 漂移和 plugin crash。
 
 退出条件：Human Web 不 import plugin code；Browser 不直连 plugin；主站 refresh/access token
