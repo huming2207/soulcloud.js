@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Pool, PoolClient } from "pg";
-import { SoulInjectorRepository } from "../src/repository";
+import { DebugSessionConflictError, SoulInjectorRepository } from "../src/repository";
 
 function fakePool(failMigration = false): { pool: Pool; queries: string[]; released: boolean } {
   const queries: string[] = [];
@@ -86,5 +86,62 @@ describe("SoulInjector observation scope", () => {
       kind: "debug.status",
       structuredData: { state: "running" },
     })).rejects.toThrow("debug session is not available to this project");
+  });
+});
+
+describe("SoulInjector debug session idempotency", () => {
+  const input = {
+    projectId: "00000000-0000-4000-8000-000000000001",
+    caseId: "00000000-0000-4000-8000-000000000002",
+    soulcloudDeviceRef: "00000000-0000-4000-8000-000000000003",
+    executionRef: "00000000-0000-4000-8000-000000000004",
+    pluginVersion: "0.1.0",
+    manifestHash: "A".repeat(64),
+    deviceFirmwareVersion: "firmware-1",
+    startedBy: "00000000-0000-4000-8000-000000000005",
+  };
+  const existing = {
+    id: "00000000-0000-4000-8000-000000000006",
+    case_id: input.caseId,
+    soulcloud_device_ref: input.soulcloudDeviceRef,
+    execution_ref: input.executionRef,
+    state: "active",
+    plugin_version: input.pluginVersion,
+    manifest_hash: input.manifestHash.toLowerCase(),
+    device_firmware_version: input.deviceFirmwareVersion,
+    started_by: input.startedBy,
+    controller: null,
+    started_at: new Date(0),
+    ended_at: null,
+  };
+
+  function repositoryForExistingSession(row: Record<string, unknown>) {
+    const queries: string[] = [];
+    const client = {
+      query: async (query: string) => {
+        queries.push(query);
+        if (query === "BEGIN" || query === "COMMIT" || query === "ROLLBACK") return { rows: [], rowCount: 0 };
+        if (query.includes("SELECT id FROM soul_injector_plugin.debug_cases")) return { rows: [{ id: input.caseId }], rowCount: 1 };
+        if (query.includes("INSERT INTO soul_injector_plugin.debug_sessions")) return { rows: [], rowCount: 0 };
+        if (query.includes("SELECT s.* FROM soul_injector_plugin.debug_sessions")) return { rows: [row], rowCount: 1 };
+        throw new Error(`unexpected query: ${query}`);
+      },
+      release: () => {},
+    } as unknown as PoolClient;
+    return { repository: new SoulInjectorRepository({ connect: async () => client } as unknown as Pool), queries };
+  }
+
+  test("reuses an existing session for a retried execution", async () => {
+    const fake = repositoryForExistingSession(existing);
+    const result = await fake.repository.createDebugSession(input);
+    expect(result.id).toBe(existing.id);
+    expect(result.manifestHash).toBe(input.manifestHash.toLowerCase());
+    expect(fake.queries).toContain("COMMIT");
+  });
+
+  test("rejects an execution retry with conflicting session metadata", async () => {
+    const fake = repositoryForExistingSession({ ...existing, case_id: "00000000-0000-4000-8000-000000000099" });
+    await expect(fake.repository.createDebugSession(input)).rejects.toBeInstanceOf(DebugSessionConflictError);
+    expect(fake.queries).toContain("ROLLBACK");
   });
 });

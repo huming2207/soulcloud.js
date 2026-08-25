@@ -84,6 +84,13 @@ export type DebugCaseState = "open" | "in_progress" | "resolved" | "closed";
 export type DebugSessionState = "active" | "paused" | "completed" | "failed" | "cancelled";
 export type DebugReportState = "draft" | "final";
 
+export class DebugSessionConflictError extends Error {
+  constructor() {
+    super("execution reference is already associated with a different debug session");
+    this.name = "DebugSessionConflictError";
+  }
+}
+
 export interface DebugCaseRecord {
   id: string;
   projectId: string;
@@ -271,6 +278,9 @@ CREATE INDEX IF NOT EXISTS debug_sessions_case_started_idx
   ON ${schema}.debug_sessions (case_id, started_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS debug_sessions_device_started_idx
   ON ${schema}.debug_sessions (soulcloud_device_ref, started_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS debug_sessions_execution_unique
+  ON ${schema}.debug_sessions (execution_ref)
+  WHERE execution_ref IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS ${schema}.debug_observations (
   id uuid PRIMARY KEY,
@@ -823,10 +833,32 @@ export class SoulInjectorRepository {
       if (!caseResult.rows[0]) throw new Error("debug case is not available to this project");
       const result = await client.query<QueryResultRow>(
         `INSERT INTO ${schema}.debug_sessions
-          (id, case_id, soulcloud_device_ref, execution_ref, plugin_version, manifest_hash, device_firmware_version, started_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+         (id, case_id, soulcloud_device_ref, execution_ref, plugin_version, manifest_hash, device_firmware_version, started_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (execution_ref) WHERE execution_ref IS NOT NULL DO NOTHING
+         RETURNING *`,
         [randomUUID(), input.caseId, input.soulcloudDeviceRef, input.executionRef ?? null, pluginVersion, input.manifestHash.toLowerCase(), deviceFirmwareVersion, input.startedBy],
       );
+      if (!result.rows[0] && input.executionRef) {
+        const existingResult = await client.query<QueryResultRow>(
+          `SELECT s.* FROM ${schema}.debug_sessions s
+           JOIN ${schema}.debug_cases c ON c.id = s.case_id
+           WHERE s.execution_ref = $1 AND c.project_id = $2
+           FOR UPDATE`,
+          [input.executionRef, input.projectId],
+        );
+        const existing = existingResult.rows[0];
+        if (!existing) throw new Error("debug session disappeared after idempotent insert");
+        const sameSession = existing.case_id === input.caseId
+          && existing.soulcloud_device_ref === input.soulcloudDeviceRef
+          && existing.plugin_version === pluginVersion
+          && String(existing.manifest_hash).trim().toLowerCase() === input.manifestHash.toLowerCase()
+          && (existing.device_firmware_version ?? null) === deviceFirmwareVersion
+          && existing.started_by === input.startedBy;
+        if (!sameSession) throw new DebugSessionConflictError();
+        await client.query("COMMIT");
+        return asSessionRecord(existing);
+      }
       await client.query("COMMIT");
       return asSessionRecord(result.rows[0]!);
     } catch (error) {

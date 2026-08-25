@@ -65,6 +65,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   Manager 会绑定父 operation、plugin/version、installation、device、token hash 和 capability
   白名单。`release` 只释放设备控制权并把 execution 置为 `paused`，不删除历史记录；数据库维护任务
   会释放过期 lease 并把达到 TTL 的 execution 标记为 `expired`。
+- plugin 私有 `debug_sessions.execution_ref` 已建立非空唯一约束；同一个 execution 的重试会
+  返回原 session，若 case、设备、plugin manifest 或发起人等快照不一致则明确拒绝，避免重试
+  在私有库中产生两条互相竞争的 debugger session。
 - `DeviceCommand` 已保存平台侧 provenance：`origin_type`、发起用户、plugin installation、
   plugin version/manifest hash、execution/correlation/idempotency 字段和取消请求时间；这些
   字段不进入设备下发的 MessagePack payload。插件/LLM 来源在入队前必须带 installation、版本
