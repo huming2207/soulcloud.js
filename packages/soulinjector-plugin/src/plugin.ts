@@ -1,5 +1,6 @@
 import { definePlugin, type ActionEncoder, type EntityUpdate, type PluginDefinition, type PluginManifest } from "@soulcloud/plugin-sdk";
 import type { SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord } from "./repository";
+import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 
 export const SOULINJECTOR_PLUGIN_ID = "soulcloud.soulinjector-debugger";
 export const SOULINJECTOR_PLUGIN_VERSION = "0.1.0";
@@ -9,22 +10,22 @@ const targetRevision = { type: "integer" as const, required: true, min: 1, max: 
 const artifactId = { type: "string" as const, required: true };
 
 const actions: PluginManifest["actions"] = [
-  { id: "debug.identify", inputSchema: { targetConfigRevision: targetRevision }, wire: { command: "soulinjector.debug.identify", schemaVersion: 1 } },
-  { id: "debug.halt", inputSchema: {}, wire: { command: "soulinjector.debug.halt", schemaVersion: 1 }, requiresHumanApproval: true },
-  { id: "debug.resume", inputSchema: {}, wire: { command: "soulinjector.debug.resume", schemaVersion: 1 }, requiresHumanApproval: true },
-  { id: "debug.reset", inputSchema: {}, wire: { command: "soulinjector.debug.reset", schemaVersion: 1 }, requiresHumanApproval: true },
+  { id: "debug.identify", inputSchema: { targetConfigRevision: targetRevision }, wire: { command: SOULINJECTOR_COMMAND.identify, schemaVersion: 1 } },
+  { id: "debug.halt", inputSchema: {}, wire: { command: SOULINJECTOR_COMMAND.halt, schemaVersion: 1 }, requiresHumanApproval: true },
+  { id: "debug.resume", inputSchema: {}, wire: { command: SOULINJECTOR_COMMAND.resume, schemaVersion: 1 }, requiresHumanApproval: true },
+  { id: "debug.reset", inputSchema: {}, wire: { command: SOULINJECTOR_COMMAND.reset, schemaVersion: 1 }, requiresHumanApproval: true },
   { id: "debug.read_memory", inputSchema: {
     targetConfigRevision: targetRevision,
     address: { type: "integer" as const, required: true, min: 0, max: Number.MAX_SAFE_INTEGER },
     length: { type: "integer" as const, required: true, min: 1, max: 1_048_576 },
-  }, wire: { command: "soulinjector.debug.read_memory", schemaVersion: 1 } },
-  { id: "debug.read_registers", inputSchema: { targetConfigRevision: targetRevision }, wire: { command: "soulinjector.debug.read_registers", schemaVersion: 1 } },
-  { id: "debug.flash_write", inputSchema: { targetConfigRevision: targetRevision, artifactId }, wire: { command: "soulinjector.debug.flash_write", schemaVersion: 1 }, requiresHumanApproval: true },
+  }, wire: { command: SOULINJECTOR_COMMAND.readMemory, schemaVersion: 1 } },
+  { id: "debug.read_registers", inputSchema: { targetConfigRevision: targetRevision }, wire: { command: SOULINJECTOR_COMMAND.readRegisters, schemaVersion: 1 } },
+  { id: "debug.flash_write", inputSchema: { targetConfigRevision: targetRevision, artifactId }, wire: { command: SOULINJECTOR_COMMAND.flashWrite, schemaVersion: 1 }, requiresHumanApproval: true },
   { id: "debug.start", inputSchema: {
     targetConfigRevision: targetRevision,
     artifactId,
     mode: { type: "string" as const, required: true, enum: ["automatic", "assisted"] },
-  }, wire: { command: "soulinjector.debug.start", schemaVersion: 1 }, requiresHumanApproval: true },
+  }, wire: { command: SOULINJECTOR_COMMAND.start, schemaVersion: 1 }, requiresHumanApproval: true },
 ];
 
 const entities: PluginManifest["profiles"][number]["entities"] = [
@@ -109,30 +110,21 @@ const encoders: Record<string, ActionEncoder> = {
   "debug.start": (input) => [one("targetConfigRevision", input), one("artifactId", input), one("mode", input)],
 };
 
-function asObject(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
 function updateIf<T extends EntityUpdate["value"]>(updates: EntityUpdate[], key: string, value: T): void {
   if (value !== undefined) updates.push({ entityKey: key, value });
 }
 
 function eventUpdates(payload: unknown): EntityUpdate[] {
-  const record = asObject(payload);
-  if (!record) return [];
+  const parsed = debugStatusSchema.safeParse(payload);
+  if (!parsed.success) return [];
+  const record = parsed.data;
   const updates: EntityUpdate[] = [];
-  const state = record.state;
-  if (typeof state === "string" && ["idle", "running", "halted", "failed", "completed", "awaiting_approval"].includes(state)) updateIf(updates, "debug.state", state);
-  const progress = record.progress;
-  if (typeof progress === "number" && Number.isFinite(progress) && progress >= 0 && progress <= 100) updateIf(updates, "debug.progress", progress);
-  const target = record.target;
-  if (typeof target === "string" && target.length <= 128) updateIf(updates, "debug.target", target);
-  const sessionId = record.sessionId;
-  if (typeof sessionId === "string" && sessionId.length <= 128) updateIf(updates, "debug.session_id", sessionId);
-  const error = record.error;
-  if (typeof error === "string" && error.length <= 4096) updateIf(updates, "debug.error", error);
-  const message = record.message;
-  if (typeof message === "string" && message.length <= 4096) updateIf(updates, "debug.last_message", message);
+  updateIf(updates, "debug.state", record.state);
+  if (record.connectionState) updateIf(updates, "connection.state", record.connectionState);
+  if (record.progress !== undefined) updateIf(updates, "debug.progress", record.progress);
+  if (record.target) updateIf(updates, "debug.target", record.target);
+  if (record.sessionId) updateIf(updates, "debug.session_id", record.sessionId);
+  if (record.error) updateIf(updates, "debug.error", record.error);
   return updates;
 }
 
@@ -148,9 +140,16 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
   return definePlugin({
     manifest,
     encodeAction: encoders,
-    onEvent: async (_context, event) => ({
-      updates: event.kind === "debug.status" ? eventUpdates(event.payload) : event.kind === "debug.log" ? eventUpdates({ message: asObject(event.payload)?.message }) : [],
-    }),
+    onEvent: async (_context, event) => {
+      if (event.kind === "debug.status") {
+        const parsed = debugStatusSchema.safeParse(event.payload);
+        return parsed.success ? { updates: eventUpdates(parsed.data) } : { logs: [{ level: "warn", message: "ignored malformed SoulInjector debug.status event" }] };
+      }
+      const parsed = debugLogSchema.safeParse(event.payload);
+      return parsed.success
+        ? { updates: [{ entityKey: "debug.last_message", value: parsed.data.message }], logs: [{ level: parsed.data.level, message: parsed.data.message }] }
+        : { logs: [{ level: "warn", message: "ignored malformed SoulInjector debug.log event" }] };
+    },
     configureTarget: async (input) => {
       const saved = await repository.saveTargetConfig({ installationId: input.installationId, projectId: input.projectId, createdBy: input.userId, yaml: input.yaml });
       return { configId: saved.id, revision: saved.revision, sha256: saved.sha256, targetCount: saved.config.targets.length };

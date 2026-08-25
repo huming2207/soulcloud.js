@@ -11,3 +11,4 @@ export {
 export { SoulInjectorRepository, type DebugArtifactRecord, type SaveArtifactInput, type SaveTargetConfigInput, type StoreArtifactChunkInput, type StoreArtifactChunkOutput, type TargetConfigRecord } from "./repository";
 export { ArtifactValidationError, MAX_ARTIFACT_BYTES, validateArtifact, type DebugArtifactKind, type ValidatedArtifact } from "./artifact";
 export { createSoulInjectorPlugin, SOULINJECTOR_PLUGIN_ID, SOULINJECTOR_PLUGIN_VERSION } from "./plugin";
+export { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema, type DebugLog, type DebugStatus } from "./device-protocol";
