@@ -260,6 +260,11 @@ plugin 是可信但可能有 bug 的云端代码。每个 plugin 独立构建和
 容量承诺；systemd/Kubernetes 部署必须配置等价的 Memory/CPU/PID/Filesystem/Capability
 限制，并为日志设置独立配额。Compose 默认还将 plugin 的 Docker JSON 日志限制为
 `SOULINJECTOR_PLUGIN_LOG_MAX_SIZE=10m`、最多 `SOULINJECTOR_PLUGIN_LOG_MAX_FILES=3`。
+独立的 Plugin Manager service 也以非 root 用户运行，并默认使用
+`PLUGIN_MANAGER_MEMORY_LIMIT=768m`、`PLUGIN_MANAGER_CPU_LIMIT=1.0`、
+`PLUGIN_MANAGER_PIDS_LIMIT=256`、只读根文件系统、64 MiB `/tmp`、
+`no-new-privileges`、`cap_drop: ALL` 以及同样的 10 MiB/3 文件日志轮转；这些值同样可由
+`.env` 覆盖。
 
 ### 6.1 Plugin-to-plugin
 
