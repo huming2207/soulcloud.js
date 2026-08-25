@@ -122,7 +122,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   `debugger.startSession` RPC 将一次性 execution token 交给同一 plugin，并只向 Human API 返回
   execution/session 摘要。bootstrap RPC 返回后，Manager 会按 installation → device → binding
   的统一锁顺序重新验证启用状态、manifest/device scope、数据库时钟 lease 和 execution state，
-  不把并发禁用、迁移或重绑定期间已经失效的 active execution 返回给 Human API。plugin 私有
+  并用数据库共享锁确认 initiating user 仍是 project member；不把并发禁用、迁移、重绑定或
+  撤权期间已经失效的 active execution 返回给 Human API。plugin 私有
   session 保存 execution 引用但不保存原始 token；如果 bootstrap 已在 plugin 私库创建 session
   但后续 scope revalidation 失败、插件返回了格式错误的 execution echo，或 bootstrap 响应在插件
   已提交后丢失，Manager 会通过有界、仅 Manager 可调用的 `debugger.abortSession` 按 session ID
