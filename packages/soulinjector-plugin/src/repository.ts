@@ -275,6 +275,7 @@ export class SoulInjectorRepository {
     if (input.chunk.byteLength === 0 || input.chunk.byteLength > 64 * 1024) throw new Error("artifact chunk must be 1..65536 bytes");
     if (!Number.isSafeInteger(input.totalSize) || input.totalSize <= 0 || input.totalSize > 64 * 1024 * 1024) throw new Error("invalid artifact total size");
     if (!Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset + input.chunk.byteLength > input.totalSize) throw new Error("invalid artifact chunk offset");
+    if (!input.final && input.offset + input.chunk.byteLength === input.totalSize) throw new Error("a non-final artifact chunk must leave bytes for a final chunk");
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");

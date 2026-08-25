@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertRpcValueBudget, canonicalJson, eventOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256Hex } from "../src";
+import { assertRpcValueBudget, artifactChunkInput, canonicalJson, eventOutput, rpcBinaryFromBlob, rpcBinaryToBlob, sha256Hex } from "../src";
 
 describe("manifest canonicalization", () => {
   test("sorts object keys without changing array order", async () => {
@@ -64,5 +64,28 @@ describe("RPC binary adapter", () => {
     expect(wire).toEqual(original);
     expect((wire as { blob: Blob }).blob).toBe(original.blob);
     expect(await rpcBinaryFromBlob({ text: "plain" })).toEqual({ text: "plain" });
+  });
+});
+
+describe("artifact chunk contract", () => {
+  const base = {
+    operationId: "operation-id-123456",
+    operationToken: "operation-token-12345678901234567890",
+    deadlineMs: 1_000,
+    installationId: "00000000-0000-4000-8000-000000000001",
+    projectId: "00000000-0000-4000-8000-000000000002",
+    userId: "00000000-0000-4000-8000-000000000003",
+    uploadId: "00000000-0000-4000-8000-000000000004",
+    kind: "firmware" as const,
+    filename: "image.bin",
+    contentType: "application/octet-stream",
+    totalSize: 4,
+    offset: 0,
+  };
+
+  test("requires a non-final chunk to leave room for the final chunk", () => {
+    expect(artifactChunkInput.safeParse({ ...base, final: false, chunk: new Blob([Uint8Array.of(1, 2, 3, 4)]) }).success).toBe(false);
+    expect(artifactChunkInput.safeParse({ ...base, final: true, chunk: new Blob([Uint8Array.of(1, 2, 3, 4)]) }).success).toBe(true);
+    expect(artifactChunkInput.safeParse({ ...base, final: false, chunk: new Blob([Uint8Array.of(1, 2, 3)]) }).success).toBe(true);
   });
 });
