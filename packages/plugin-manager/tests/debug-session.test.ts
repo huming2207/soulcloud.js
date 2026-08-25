@@ -119,6 +119,7 @@ describe("debug session bootstrap cleanup", () => {
   test("uses execution-scoped cleanup when the bootstrap response is lost", async () => {
     const sessionId = randomUUID();
     let abortInput: { sessionId?: string | null; executionId?: string } | undefined;
+    const logs: string[] = [];
     const connection = {
       id: "debug-bootstrap-timeout-connection",
       isOpen: true,
@@ -142,6 +143,7 @@ describe("debug session bootstrap cleanup", () => {
       heartbeatTimeoutMs: 1_000,
       reconnectMs: 1_000,
       prisma,
+      log: (message) => logs.push(message),
     });
     const internals = manager as unknown as {
       connections: Map<string, typeof connection>;
@@ -167,6 +169,7 @@ describe("debug session bootstrap cleanup", () => {
     })).rejects.toThrow("response was lost");
 
     expect(abortInput).toMatchObject({ sessionId: null, executionId: expect.any(String) });
+    expect(logs).not.toContain("debug session cleanup failed");
     const executions = await prisma.debugExecution.findMany({ where: { installationId }, orderBy: { createdAt: "desc" } });
     expect(executions[0]?.state).toBe("failed");
   });

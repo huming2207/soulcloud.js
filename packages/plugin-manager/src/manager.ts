@@ -6,6 +6,7 @@ import {
   canonicalJson,
   configureTargetOutput,
   debugSessionStartOutput,
+  debugSessionAbortOutput,
   listTargetConfigsOutput,
   listArtifactsOutput,
   sha256BytesHex,
@@ -576,12 +577,10 @@ export class PluginManager {
         sessionId: input.sessionId ?? null,
         reason: input.reason,
       }, input.timeoutMs);
+      const parsed = debugSessionAbortOutput.parse(output);
       if (
-        !output ||
-        typeof output !== "object" ||
-        (output as { sessionId?: unknown }).sessionId !== input.sessionId ||
-        (output as { executionId?: unknown }).executionId !== input.executionId ||
-        (output as { state?: unknown }).state !== "failed"
+        parsed.executionId !== input.executionId ||
+        (input.sessionId !== undefined && input.sessionId !== null && parsed.sessionId !== input.sessionId)
       ) {
         throw new Error("plugin returned an invalid debug session cleanup output");
       }
