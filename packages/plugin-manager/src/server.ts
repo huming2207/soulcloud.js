@@ -210,7 +210,7 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
             });
             const uploadId = z.string().uuid().safeParse(request.headers.get("idempotency-key") ?? "");
             if (!uploadId.success) throw invalidRequest("Idempotency-Key must be a UUID");
-            const totalSize = Number(request.headers.get("content-length") ?? "0");
+            const totalSize = Number(request.headers.get("content-length") ?? request.headers.get("x-soulcloud-content-length") ?? "0");
             if (!request.body || !Number.isSafeInteger(totalSize) || totalSize < 1) throw Object.assign(new Error("content-length is required for artifact upload"), { status: 411 });
             if (totalSize > (options.maxArtifactBytes ?? 64 * 1024 * 1024)) throw Object.assign(new Error("artifact is too large"), { status: 413 });
             return json(201, await options.manager.uploadArtifact({
