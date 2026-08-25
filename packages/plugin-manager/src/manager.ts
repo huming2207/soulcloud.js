@@ -666,8 +666,11 @@ export class PluginManager {
     const uploadId = crypto.randomUUID();
     const timeoutMs = input.timeoutMs ?? 30_000;
     let offset = 0;
+    let bodyBytes = 0;
     let previous: Uint8Array | null = null;
     for await (const chunk of splitArtifactBody(input.body)) {
+      bodyBytes += chunk.byteLength;
+      if (bodyBytes > input.totalSize) throw publicError("artifact body exceeds the declared content length", 400, "invalid_request");
       if (previous) {
         const progress = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: false, chunk: previous }, timeoutMs);
         if (typeof progress !== "number") throw publicError("plugin completed an artifact before the final chunk", 502, "invalid_plugin_output");
@@ -676,6 +679,7 @@ export class PluginManager {
       previous = chunk;
     }
     if (!previous) throw Object.assign(new Error("artifact body is empty"), { status: 400 });
+    if (bodyBytes !== input.totalSize) throw publicError("artifact body is shorter than the declared content length", 400, "invalid_request");
     const result = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: true, chunk: previous }, timeoutMs, true);
     if (typeof result === "number") throw publicError("plugin did not complete artifact upload", 502, "invalid_plugin_output");
     return { uploadId, artifactId: result.artifactId, sha256: result.sha256, size: input.totalSize, kind: input.kind, filename: input.filename };
