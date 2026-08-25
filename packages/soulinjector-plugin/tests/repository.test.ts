@@ -145,3 +145,61 @@ describe("SoulInjector debug session idempotency", () => {
     expect(fake.queries).toContain("ROLLBACK");
   });
 });
+
+describe("SoulInjector device session state", () => {
+  const base = {
+    id: "00000000-0000-4000-8000-000000000016",
+    case_id: "00000000-0000-4000-8000-000000000017",
+    soulcloud_device_ref: "00000000-0000-4000-8000-000000000018",
+    execution_ref: "00000000-0000-4000-8000-000000000019",
+    state: "active",
+    plugin_version: "0.1.0",
+    manifest_hash: "b".repeat(64),
+    device_firmware_version: null,
+    started_by: "00000000-0000-4000-8000-000000000020",
+    controller: null,
+    started_at: new Date(0),
+    ended_at: null,
+  };
+
+  function repositoryForState(current: Record<string, unknown>, updated: Record<string, unknown> = current) {
+    const queries: string[] = [];
+    const client = {
+      query: async (query: string) => {
+        queries.push(query);
+        if (query === "BEGIN" || query === "COMMIT" || query === "ROLLBACK") return { rows: [], rowCount: 0 };
+        if (query.includes("SELECT s.* FROM soul_injector_plugin.debug_sessions")) return { rows: [current], rowCount: 1 };
+        if (query.includes("UPDATE soul_injector_plugin.debug_sessions")) return { rows: [updated], rowCount: 1 };
+        throw new Error(`unexpected query: ${query}`);
+      },
+      release: () => {},
+    } as unknown as PoolClient;
+    return { repository: new SoulInjectorRepository({ connect: async () => client } as unknown as Pool), queries };
+  }
+
+  test("updates a session only when the event belongs to its device", async () => {
+    const updated = { ...base, state: "completed", ended_at: new Date(1) };
+    const fake = repositoryForState(base, updated);
+    const result = await fake.repository.updateDebugSessionState({
+      projectId: "00000000-0000-4000-8000-000000000021",
+      sessionId: base.id,
+      soulcloudDeviceRef: base.soulcloud_device_ref,
+      state: "completed",
+    });
+    expect(result.state).toBe("completed");
+    expect(fake.queries.some((query) => query.startsWith("UPDATE soul_injector_plugin.debug_sessions"))).toBe(true);
+  });
+
+  test("does not move a terminal session backwards", async () => {
+    const terminal = { ...base, state: "failed", ended_at: new Date(1) };
+    const fake = repositoryForState(terminal);
+    const result = await fake.repository.updateDebugSessionState({
+      projectId: "00000000-0000-4000-8000-000000000021",
+      sessionId: base.id,
+      soulcloudDeviceRef: base.soulcloud_device_ref,
+      state: "active",
+    });
+    expect(result.state).toBe("failed");
+    expect(fake.queries.some((query) => query.startsWith("UPDATE soul_injector_plugin.debug_sessions"))).toBe(false);
+  });
+});

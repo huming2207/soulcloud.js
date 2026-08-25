@@ -68,6 +68,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - plugin 私有 `debug_sessions.execution_ref` 已建立非空唯一约束；同一个 execution 的重试会
   返回原 session，若 case、设备、plugin manifest 或发起人等快照不一致则明确拒绝，避免重试
   在私有库中产生两条互相竞争的 debugger session。
+- 带有效 `sessionId` 的设备 `debug.status` 事件会在验证 project/device 后更新私有 session；
+  completed/failed/cancelled 等终态不会被乱序的后续设备事件回退，原始事件仍按 event id 幂等
+  写入 observation。
 - `DeviceCommand` 已保存平台侧 provenance：`origin_type`、发起用户、plugin installation、
   plugin version/manifest hash、execution/correlation/idempotency 字段和取消请求时间；这些
   字段不进入设备下发的 MessagePack payload。插件/LLM 来源在入队前必须带 installation、版本

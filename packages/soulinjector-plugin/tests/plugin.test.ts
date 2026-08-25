@@ -127,8 +127,10 @@ describe("SoulInjector plugin", () => {
 
   test("persists device observations idempotently by broker event id", async () => {
     const observations: unknown[] = [];
+    const sessionStates: unknown[] = [];
     const plugin = createSoulInjectorPlugin({
       ...store(),
+      updateDebugSessionState: async (input) => { sessionStates.push(input); return {} as never; },
       appendDebugObservation: async (input) => { observations.push(input); },
     });
     const sessionId = "00000000-0000-4000-8000-000000000005";
@@ -153,6 +155,7 @@ describe("SoulInjector plugin", () => {
       device: { id: saved.installationId, uid: "soulinjector-1", profileId: "debug", profileVersion: 1 },
     });
     expect(result.updates).toEqual([{ entityKey: "debug.state", value: "running" }, { entityKey: "debug.session_id", value: sessionId }]);
+    expect(sessionStates).toEqual([{ projectId: saved.projectId, sessionId, soulcloudDeviceRef: saved.installationId, state: "active" }]);
     expect(observations).toEqual([{ projectId: saved.projectId, sessionId, soulcloudDeviceRef: saved.installationId, eventRef: "broker-event-1", source: "device", kind: "debug.status", structuredData: { state: "running", sessionId } }]);
   });
 
