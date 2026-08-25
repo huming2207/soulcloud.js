@@ -1001,7 +1001,11 @@ export class PluginManager {
       if (bodyBytes > input.totalSize) throw publicError("artifact body exceeds the declared content length", 400, "invalid_request");
       if (previous) {
         const progress = await this.sendArtifactChunk(connection, { installation, uploadId, userId: input.userId, caseId: input.caseId, kind: input.kind, filename: input.filename, contentType: input.contentType, totalSize: input.totalSize, offset, final: false, chunk: previous }, artifactChunkTimeout(chunkTimeoutMs, uploadDeadline));
-        if (typeof progress !== "number") throw publicError("plugin completed an artifact before the final chunk", 502, "invalid_plugin_output");
+        // A retry may reach an upload that already completed before the
+        // previous HTTP response was delivered. The private store returns
+        // the original artifact for that idempotency key; return it without
+        // creating a second artifact or replaying the remaining chunks.
+        if (typeof progress !== "number") return { uploadId, artifactId: progress.artifactId, sha256: progress.sha256, size: input.totalSize, kind: input.kind, filename: input.filename };
         offset = progress;
       }
       previous = chunk;
@@ -1066,7 +1070,11 @@ export class PluginManager {
         if (!output.complete || !output.artifactId || !output.sha256) throw publicError("plugin did not complete artifact upload", 502, "invalid_plugin_output");
         return { artifactId: output.artifactId, sha256: output.sha256 };
       }
-      if (expectFinal || output.complete || output.receivedBytes !== input.offset + input.chunk.byteLength) throw publicError("plugin returned an invalid artifact upload progress", 502, "invalid_plugin_output");
+      if (output.complete) {
+        if (expectFinal || !output.artifactId || !output.sha256) throw publicError("plugin returned an invalid completed artifact", 502, "invalid_plugin_output");
+        return { artifactId: output.artifactId, sha256: output.sha256 };
+      }
+      if (output.receivedBytes !== input.offset + input.chunk.byteLength) throw publicError("plugin returned an invalid artifact upload progress", 502, "invalid_plugin_output");
       return output.receivedBytes;
     } finally {
       this.finishOperation(operationId);
