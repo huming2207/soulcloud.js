@@ -254,11 +254,14 @@ function latestSessionError(observations: DebugObservationRecord[]): string | nu
 function debuggerActionControls(input: { selectedSession: DebugSessionRecord | null }): string {
   const session = input.selectedSession;
   if (!session) return "<section><h2>Manual debugger actions</h2><p>Select a session before issuing a device command.</p></section>";
+  const commandTimeline = session.executionRef
+    ? `<section id="debug-command-timeline" data-execution-id="${escapeHtml(session.executionRef)}"><h2>Command timeline</h2><p>Loading command status…</p></section>`
+    : "";
   if (session.state !== "active" && session.state !== "paused") {
-    return `<section><h2>Manual debugger actions</h2><p>Session is ${escapeHtml(session.state)}; device actions are disabled.</p></section>`;
+    return `${commandTimeline}<section><h2>Manual debugger actions</h2><p>Session is ${escapeHtml(session.state)}; device actions are disabled.</p></section>`;
   }
   if (session.targetConfigRevision === null || session.targetId === null) {
-    return "<section><h2>Manual debugger actions</h2><p>This session has no target configuration snapshot; start a new session with one before issuing a device command.</p></section>";
+    return `${commandTimeline}<section><h2>Manual debugger actions</h2><p>This session has no target configuration snapshot; start a new session with one before issuing a device command.</p></section>`;
   }
   const actions = [
     ["debug.identify", "Identify target", false],
@@ -268,7 +271,7 @@ function debuggerActionControls(input: { selectedSession: DebugSessionRecord | n
     ["debug.reset", "Reset target (approval)", true],
   ] as const;
   const buttons = actions.map(([id, label, approval]) => `<button type="submit" data-debug-action="${id}">${label}${approval ? "" : ""}</button>`).join(" ");
-  return `<section id="debug-command-timeline" data-execution-id="${session.executionRef ? escapeHtml(session.executionRef) : ""}"><h2>Command timeline</h2><p>Loading command status…</p></section><section><h2>Manual debugger actions</h2><p>Every button sends one bounded action through the authenticated plugin UI session. Actions marked approval require this human click; the LLM cannot use this route.</p><form id="debug-actions" data-device-id="${escapeHtml(session.soulcloudDeviceRef)}" data-target-config-revision="${session.targetConfigRevision}" data-target-id="${escapeHtml(session.targetId)}">${buttons}<label for="debug-memory-address">Memory address</label><input id="debug-memory-address" inputmode="text" maxlength="18" placeholder="0x20000000"><label for="debug-memory-length">Memory length (bytes)</label><input id="debug-memory-length" type="number" min="1" max="1048576" value="16"><button type="submit" data-debug-action="debug.read_memory">Read memory</button><label for="debug-start-mode">Start mode</label><select id="debug-start-mode"><option value="automatic">Automatic</option><option value="assisted">Assisted</option></select><button type="submit" data-debug-action="debug.start">Start target (approval)</button><p id="debug-action-status" role="status" aria-live="polite"></p></form></section>`;
+  return `${commandTimeline}<section><h2>Manual debugger actions</h2><p>Every button sends one bounded action through the authenticated plugin UI session. Actions marked approval require this human click; the LLM cannot use this route.</p><form id="debug-actions" data-device-id="${escapeHtml(session.soulcloudDeviceRef)}" data-target-config-revision="${session.targetConfigRevision}" data-target-id="${escapeHtml(session.targetId)}">${buttons}<label for="debug-memory-address">Memory address</label><input id="debug-memory-address" inputmode="text" maxlength="18" placeholder="0x20000000"><label for="debug-memory-length">Memory length (bytes)</label><input id="debug-memory-length" type="number" min="1" max="1048576" value="16"><button type="submit" data-debug-action="debug.read_memory">Read memory</button><label for="debug-start-mode">Start mode</label><select id="debug-start-mode"><option value="automatic">Automatic</option><option value="assisted">Assisted</option></select><button type="submit" data-debug-action="debug.start">Start target (approval)</button><p id="debug-action-status" role="status" aria-live="polite"></p></form></section>`;
 }
 
 function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[]; selectedSession: DebugSessionRecord | null; observations: DebugObservationRecord[]; targetConfigs: TargetConfigSummary[]; artifacts: DebugArtifactRecord[]; reports: DebugReportRecord[]; error?: string }): string {

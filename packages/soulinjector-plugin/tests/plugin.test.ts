@@ -402,6 +402,7 @@ describe("SoulInjector plugin", () => {
     });
     expect(result.html).toContain('role="alert"');
     expect(result.html).toContain("Debugger error");
+    expect(result.html).toContain('id="debug-command-timeline"');
     expect(result.html).toContain("target &lt;halted&gt;\nprobe disconnected");
     expect(result.html).not.toContain("target <halted>");
   });
