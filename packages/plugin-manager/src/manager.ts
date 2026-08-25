@@ -488,8 +488,12 @@ export class PluginManager {
         ...(input.deviceFirmwareVersion !== undefined ? { deviceFirmwareVersion: input.deviceFirmwareVersion } : {}),
       }, timeoutMs);
       const parsed = debugSessionStartOutput.parse(output);
-      if (parsed.executionId !== execution.id) throw new Error("plugin returned a different debug execution id");
       bootstrapSessionId = parsed.sessionId;
+      // Record the private session before validating the echoed execution ID.
+      // A buggy plugin can create a session successfully and then return a
+      // malformed envelope; cleanup must still be able to mark that session
+      // failed using the platform execution scope.
+      if (parsed.executionId !== execution.id) throw new Error("plugin returned a different debug execution id");
       await this.sealOperation(operationId);
       let currentExecution: DebugExecutionRecord;
       try {
