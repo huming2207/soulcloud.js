@@ -145,7 +145,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   execution 发起人调用的 `POST .../debugger/executions/:executionId/pause`；后者只释放云端
   device lease 并把 execution 置为 `paused`，不发送额外 MQTT topic，也不声称已经停止设备上
   已被 broker 接受的 command。两条入口都会先执行项目权限检查，再由 Manager 重新校验
-  installation/project scope 和当前 user membership，只返回 execution 摘要，不返回 token。
+  installation/project scope 和当前 user membership；pause 与 plugin-origin UI 的 release/renew
+  还会在 installation → device → execution 的同一事务中再次锁定并复核 membership，避免撤权与
+  lease mutation 之间出现授权竞态。它们只返回 execution 摘要，不返回 token。
   整个 execution 的 cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成；这里的
   单条 command cancellation 与 pause 都不是整个 execution 的硬件取消。
 - oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`，以及
