@@ -21,6 +21,7 @@ import {
   rpcBinaryFromBlob,
   sha256Hex,
   uiActionOutput as uiActionOutputSchema,
+  uiAssetOutput as uiAssetOutputSchema,
   uiRenderOutput as uiRenderOutputSchema,
   type RpcValueBudget,
 } from "@soulcloud/plugin-rpc-contract";
@@ -320,6 +321,24 @@ function createRuntimeConnection(
           const result = await actionHandler(input.action, pluginUiInput(input)) as { redirect?: string; errors?: { field: string; message: string }[] };
           assertRpcValueBudget(result, budget);
           const parsed = uiActionOutputSchema.safeParse(result);
+          if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
+          return parsed.data;
+        } finally {
+          operations.running -= 1;
+        }
+      }),
+      asset: implemented.ui.asset.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        const asset = definition.assets?.[input.assetPath];
+        const descriptor = definition.manifest.ui?.assets?.find((item) => item.path === input.assetPath);
+        if (!asset || !descriptor) rpcError("NOT_FOUND", "unknown UI asset");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
+        try {
+          const result = await asset({ requestId: input.requestId, installationId: input.installationId, projectId: input.projectId, user: input.user, routeId: input.routeId, assetPath: input.assetPath });
+          if (result.contentType !== descriptor.contentType) rpcError("INVALID_PLUGIN_OUTPUT", "UI asset content type differs from its manifest");
+          assertRpcValueBudget(result, budget);
+          const parsed = uiAssetOutputSchema.safeParse({ ...result, body: new Blob([result.body]) });
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
           return parsed.data;
         } finally {

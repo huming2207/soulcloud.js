@@ -69,6 +69,8 @@ export const uiRenderInput = operation.extend({ requestId: z.string().min(1).max
 export const uiRenderOutput = z.object({ html: z.string().max(2 * 1024 * 1024), title: z.string().max(256).optional(), status: z.number().int().min(200).max(599).refine((status) => status < 300 || status >= 400, "redirect status is not allowed").refine((status) => status !== 204 && status !== 205, "bodyless status is not allowed").optional(), cache: z.literal("no-store").or(z.object({ maxAgeSeconds: z.number().int().nonnegative().max(86_400) })).optional() }).strict();
 export const uiActionInput = uiRenderInput.extend({ action: z.unknown() }).strict();
 export const uiActionOutput = z.object({ redirect: z.string().max(2048).optional(), errors: z.array(z.object({ field: z.string().max(128), message: z.string().max(2048) }).strict()).max(64).optional() }).strict();
+export const uiAssetInput = operation.extend({ requestId: z.string().min(1).max(128), assetPath: z.string().regex(/^\/(?:[A-Za-z0-9._~-]+\/)*[A-Za-z0-9._~-]+$/).max(256), routeId: z.string().min(1).max(128), installationId: z.string().uuid(), projectId: z.string().uuid(), user: uiUser }).strict();
+export const uiAssetOutput = z.object({ body: z.instanceof(Blob).refine((value) => value.size > 0 && value.size <= 256 * 1024, "UI asset is empty or too large"), contentType: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value), "invalid content type"), cache: z.literal("no-store").or(z.object({ maxAgeSeconds: z.number().int().nonnegative().max(86_400) })).optional() }).strict();
 export const configureTargetInput = operation.extend({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), yaml: z.string().min(1).max(262_144) }).strict();
 export const configureTargetOutput = z.object({ configId: z.string().uuid(), revision: z.number().int().positive(), sha256: z.string().regex(/^[0-9a-f]{64}$/), targetCount: z.number().int().positive().max(64) }).strict();
 export const artifactChunkInput = operation.extend({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), uploadId: z.string().uuid(), kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), contentType: z.string().min(1).max(128), totalSize: z.number().int().positive().max(64 * 1024 * 1024), offset: z.number().int().nonnegative().max(64 * 1024 * 1024), final: z.boolean(), chunk: z.instanceof(Blob).refine((value) => value.size > 0 && value.size <= 64 * 1024, "artifact chunk must be 1..65536 bytes") }).strict();
@@ -97,6 +99,7 @@ export const managerToPluginContract = {
   ui: {
     render: procedure(uiRenderInput, uiRenderOutput, ["ui", "render"]),
     handleAction: procedure(uiActionInput, uiActionOutput, ["ui", "handleAction"]),
+    asset: procedure(uiAssetInput, uiAssetOutput, ["ui", "asset"]),
   },
   debugger: {
     configureTarget: procedure(configureTargetInput, configureTargetOutput, ["debugger", "configureTarget"]),
@@ -124,6 +127,8 @@ export type ActionOutput = z.infer<typeof actionOutput>;
 export type UiRenderInput = z.infer<typeof uiRenderInput>;
 export type UiRenderOutput = z.infer<typeof uiRenderOutput>;
 export type UiActionOutput = z.infer<typeof uiActionOutput>;
+export type UiAssetInput = z.infer<typeof uiAssetInput>;
+export type UiAssetOutput = z.infer<typeof uiAssetOutput>;
 export type ConfigureTargetInput = z.infer<typeof configureTargetInput>;
 export type ConfigureTargetOutput = z.infer<typeof configureTargetOutput>;
 export type ArtifactChunkInput = z.infer<typeof artifactChunkInput>;

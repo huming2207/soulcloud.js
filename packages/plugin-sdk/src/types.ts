@@ -60,6 +60,11 @@ export interface PluginUiRoute {
   actionSchema?: ActionInputSchema;
 }
 
+export interface PluginUiAsset {
+  path: string;
+  contentType: string;
+}
+
 export interface PluginManifest {
   id: string;
   version: string;
@@ -68,7 +73,7 @@ export interface PluginManifest {
   profiles: DeviceProfileDescriptor[];
   actions: ActionDescriptor[];
   events: EventDescriptor[];
-  ui?: { routes: PluginUiRoute[] };
+  ui?: { routes: PluginUiRoute[]; assets?: PluginUiAsset[] };
 }
 
 export type CommandArgValue = string | number | bigint | boolean | null | Uint8Array;
@@ -141,6 +146,20 @@ export interface UiRenderOutput {
 }
 export type UiRenderer = (input: UiRenderInput) => Promise<UiRenderOutput>;
 export type UiActionHandler = (input: unknown, context: UiRenderInput) => Promise<unknown>;
+export interface UiAssetInput {
+  requestId: string;
+  installationId: string;
+  projectId: string;
+  user: UiRenderInput["user"];
+  routeId: string;
+  assetPath: string;
+}
+export interface UiAssetOutput {
+  body: Uint8Array;
+  contentType: string;
+  cache?: "no-store" | { maxAgeSeconds: number };
+}
+export type UiAssetRenderer = (input: UiAssetInput) => Promise<UiAssetOutput>;
 export interface TargetConfigInput {
   operationId: string;
   installationId: string;
@@ -184,6 +203,7 @@ export interface PluginDefinition {
   encodeAction?: Record<string, ActionEncoder>;
   render?: Record<string, UiRenderer>;
   handleAction?: Record<string, UiActionHandler>;
+  assets?: Record<string, UiAssetRenderer>;
   /** Optional product-specific configuration hook used by the SoulInjector plugin. */
   configureTarget?: TargetConfigHandler;
   storeArtifactChunk?: ArtifactChunkHandler;

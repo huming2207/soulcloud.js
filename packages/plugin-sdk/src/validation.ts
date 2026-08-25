@@ -55,7 +55,11 @@ export const manifestSchema = z.object({
     actionSchema: actionInputSchema.optional(),
   }).strict().refine((route) => !(route.methods ?? ["GET"]).includes("POST") || route.actionSchema !== undefined, {
     message: "POST routes require actionSchema",
-  })).max(128) }).strict().optional(),
+  })).max(128), assets: z.array(z.object({
+    path: z.string().regex(/^\/(?:[A-Za-z0-9._~-]+\/)*[A-Za-z0-9._~-]+$/).max(256)
+      .refine((path) => !path.split("/").some((segment) => segment === "." || segment === ".."), "path traversal is not allowed"),
+    contentType: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value), "invalid content type"),
+  }).strict()).max(64).optional() }).strict().optional(),
 }).strict();
 
 export function validateManifest(value: unknown): PluginManifest {
@@ -70,6 +74,7 @@ export function validateManifest(value: unknown): PluginManifest {
   unique(manifest.events.map((item) => `${item.kind}@${item.schemaVersion}`), "event");
   unique(manifest.ui?.routes.map((item) => item.id) ?? [], "UI route ID");
   unique(manifest.ui?.routes.map((item) => item.path) ?? [], "UI route path");
+  unique(manifest.ui?.assets?.map((item) => item.path) ?? [], "UI asset path");
   for (const route of manifest.ui?.routes ?? []) unique(route.methods ?? ["GET"], `method in UI route ${route.id}`);
   for (const profile of manifest.profiles) {
     unique(profile.capabilities, `capability in ${profile.id}`);

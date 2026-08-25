@@ -110,7 +110,7 @@ function parseInstallationId(value: string): string {
 
 function renderDocument(html: string, title?: string, status = 200): Response {
   const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title ?? "Soulcloud")}</title></head><body>${html}</body></html>`;
-  return new Response(page, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store", "content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" } });
+  return new Response(page, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store", "content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" } });
 }
 
 function escapeHtml(value: string): string {
@@ -139,6 +139,19 @@ export function startPluginManagerServer(options: PluginManagerServerOptions): {
         } catch { return json(401, { error: "invalid_plugin_ui_session" }); }
         if (!url.pathname.startsWith(`/plugins/${session.installationId}/`)) return json(403, { error: "plugin_ui_scope_mismatch" });
         const manifest = options.manager.getManifest(session.pluginId, session.pluginVersion);
+        const assetPrefix = `/plugins/${session.installationId}/assets/`;
+        if (url.pathname.startsWith(assetPrefix)) {
+          const relative = url.pathname.slice(assetPrefix.length);
+          const assetPath = `/${relative}`;
+          if (!relative || relative.includes("..")) return json(404, { error: "plugin_ui_asset_not_found" });
+          try {
+            const output = await options.manager.getPluginUiAsset(session, crypto.randomUUID(), assetPath) as { body?: unknown; contentType?: unknown; cache?: unknown };
+            if (!(output.body instanceof Blob) || typeof output.contentType !== "string") return json(502, { error: "plugin_ui_invalid_output" });
+            const maxAge = output.cache && typeof output.cache === "object" ? Number((output.cache as { maxAgeSeconds?: unknown }).maxAgeSeconds) : 0;
+            const cache = output.cache === "no-store" || !Number.isSafeInteger(maxAge) ? "private, no-store" : `private, max-age=${maxAge}`;
+            return new Response(output.body, { status: 200, headers: { "content-type": output.contentType, "cache-control": cache, "content-security-policy": "default-src 'none'; script-src 'none'; object-src 'none'" } });
+          } catch (error) { return failure(error); }
+        }
         const route = manifest?.ui?.routes.find((item) => item.id === session.routeId);
         const routePath = route?.path.startsWith("/") ? route.path : `/${route?.path ?? ""}`;
         if (!route || url.pathname !== `/plugins/${session.installationId}${routePath}`) return json(404, { error: "plugin_ui_route_not_found" });

@@ -570,6 +570,50 @@ export class PluginManager {
     return this.callUi(session, "ui.handleAction", { requestId, params, action });
   }
 
+  async getPluginUiAsset(session: PluginUiSession, requestId: string, assetPath: string): Promise<unknown> {
+    if (!this.options.prisma) throw new Error("plugin manager database is not configured");
+    await this.assertUiSessionCurrent(session);
+    const manifest = this.getManifest(session.pluginId, session.pluginVersion);
+    if (!manifest?.ui?.assets?.some((asset) => asset.path === assetPath)) throw Object.assign(new Error("plugin UI asset is not declared"), { status: 404 });
+    const { connection } = this.requireConnectedManifest(session.pluginId, session.pluginVersion, session.manifestHash);
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    this.registerOperation(operationId, {
+      kind: "ui",
+      operationTokenHash: hashOperationToken(operationToken),
+      connectionId: connection.id,
+      installationId: session.installationId,
+      projectId: session.projectId,
+      pluginId: session.pluginId,
+      pluginVersion: session.pluginVersion,
+      deadline: performance.now() + 30_000,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set(),
+    });
+    try {
+      const result = await connection.request("ui.asset", {
+        operationId,
+        operationToken,
+        requestId,
+        assetPath,
+        routeId: session.routeId,
+        installationId: session.installationId,
+        projectId: session.projectId,
+        user: { id: session.sub, locale: session.locale, permissions: session.permissions },
+      }, 30_000);
+      assertRpcValueBudget(result, this.valueBudget);
+      await this.sealOperation(operationId);
+      await this.assertUiSessionCurrent(session);
+      return result;
+    } finally {
+      this.finishOperation(operationId);
+    }
+  }
+
   private async callUi(session: PluginUiSession, method: "ui.render" | "ui.handleAction", input: { requestId: string; params: Record<string, string | number | boolean>; action?: unknown }): Promise<unknown> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     try {

@@ -32,7 +32,7 @@ beforeAll(async () => {
       }],
       actions: [{ id: "reboot", inputSchema: {}, wire: { command: "reboot", schemaVersion: 1 } }],
       events: [{ kind: "reading", schemaVersion: 1 }],
-      ui: { routes: [{ id: "main", path: "/main" }] },
+      ui: { routes: [{ id: "main", path: "/main" }], assets: [{ path: "/main/app.js", contentType: "text/javascript; charset=utf-8" }] },
     },
     encodeAction: { reboot: () => [{ delay: 3n }] },
     onEvent: async (context, event) => {
@@ -51,6 +51,9 @@ beforeAll(async () => {
         uiInputHasOperationProof = "operationToken" in input || "deadlineMs" in input;
         return { html: "<p>Plugin</p>" };
       },
+    },
+    assets: {
+      "/main/app.js": async () => ({ body: Uint8Array.of(99, 111, 110, 115, 116), contentType: "text/javascript; charset=utf-8", cache: "no-store" }),
     },
     configureTarget: async () => ({ configId: randomUUID(), revision: 1, sha256: "a".repeat(64), targetCount: 1 }),
     storeArtifactChunk: async (input) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? randomUUID() : null, sha256: input.final ? "b".repeat(64) : null }),
@@ -245,6 +248,21 @@ describe("plugin oRPC WebSocket transport", () => {
     }, 1_000) as { html: string };
     expect(output.html).toBe("<p>Plugin</p>");
     expect(uiInputHasOperationProof).toBe(false);
+  });
+
+  test("serves a declared UI asset over the same typed RPC connection", async () => {
+    const output = await connection.request("ui.asset", {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      requestId: randomUUID(),
+      routeId: "main",
+      assetPath: "/main/app.js",
+      installationId: randomUUID(),
+      projectId: randomUUID(),
+      user: { id: randomUUID(), locale: "en", permissions: [] },
+    }, 1_000) as { body: Blob; contentType: string };
+    expect(output.contentType).toBe("text/javascript; charset=utf-8");
+    expect(new Uint8Array(await output.body.arrayBuffer())).toEqual(Uint8Array.of(99, 111, 110, 115, 116));
   });
 
   test("shares the operation limit across WebSocket connections", async () => {

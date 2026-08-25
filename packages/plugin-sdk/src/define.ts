@@ -31,6 +31,13 @@ export function definePlugin(definition: PluginDefinition): PluginDefinition {
   for (const routeId of Object.keys(definition.handleAction ?? {})) {
     if (!routeIds.has(routeId)) throw new Error(`plugin UI action ${routeId} is not declared in the manifest`);
   }
+  const assetPaths = new Set(manifest.ui?.assets?.map((asset) => asset.path) ?? []);
+  for (const assetPath of Object.keys(definition.assets ?? {})) {
+    if (!assetPaths.has(assetPath)) throw new Error(`plugin asset ${assetPath} is not declared in the manifest`);
+  }
+  for (const asset of manifest.ui?.assets ?? []) {
+    if (typeof definition.assets?.[asset.path] !== "function") throw new Error(`plugin UI asset ${asset.path} has no renderer`);
+  }
   return { ...definition, manifest };
 }
 
