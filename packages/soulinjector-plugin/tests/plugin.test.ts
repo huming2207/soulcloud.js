@@ -362,6 +362,7 @@ describe("SoulInjector plugin", () => {
     });
     const body = new Uint8Array(result.body.byteLength);
     body.set(result.body);
+    expect(new TextDecoder().decode(body)).toContain("Retrying…");
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", body));
     const hash = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
     expect(hash).toBe(asset!.sha256);

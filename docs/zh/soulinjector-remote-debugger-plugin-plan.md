@@ -47,7 +47,7 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   Plugin Manager 的 plugin-origin session 路由；Manager 使用短期 HttpOnly UI session、UUID
   幂等键和受限 metadata 将流分块转发到 plugin 私有 PostgreSQL，不让浏览器接触长期 service
   token，也不把 artifact 正文放进 SSR/RPC JSON；上传时可选择 installation 下的 debugger case
-  作为归属，上传完成后页面只重新读取 metadata 摘要。
+  作为归属；网络异常时浏览器最多用同一幂等键重试一次，上传完成后页面只重新读取 metadata 摘要。
 - target architecture/chip、transport 和 required debugger primitives 的受限 YAML schema，
   可通过 Human API/Plugin Manager 配置并在 plugin 私有 PostgreSQL 保存 revision；首批目标不
   在代码中写死；
