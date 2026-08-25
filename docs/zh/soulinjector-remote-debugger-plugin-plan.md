@@ -1,0 +1,610 @@
+# SoulInjector 远程 Debugger Plugin 实施计划
+
+**状态**：目标产品与实施计划；尚未开始实现
+**日期**：2026-08-25
+**依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`、`plugin-implementation-plan.md`
+
+## 1. 产品目标
+
+将 SoulInjector 做成一台可联网、可远程控制、可由人类工程师或 LLM 调试 agent 使用的
+Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
+
+1. 研发调试：用户上传 ELF、固件和可选源码，远程诊断通过 SWD/UART 连接的目标 MCU，
+   收集证据并生成修改建议；
+2. 跨境维修：海外非技术人员只负责按说明接线，设备自动开始初检；国内支持/研发人员和
+   LLM 在同一维修案例中继续分析、接管设备并生成报告。
+
+本文只规划远程 debugger。听力检测产品不属于当前范围。
+
+## 2. 术语和不可违反的边界
+
+- **SoulInjector 是 Soulcloud Device**。通过 SWD/UART 接在它上面的待测 MCU/产品只是本地
+  target，不因被调试而成为 Soulcloud Device。
+- **Soulcloud Client** 只表示运行在 Soulcloud Device 上的 Soulcloud 通信软件/固件组件；
+  描述硬件执行主体时必须写“设备”或“SoulInjector 设备”，不能用 Client 代指设备。
+- SWD/UART 的低层协议、时序、target 状态、重试、轮询和批量读写由 SoulInjector 设备本地
+  执行。云端只下发高层、有界、可取消的 debugger command。
+- plugin 只在云端自己的容器中运行；它不能连接 Device Broker、SoulInjector 设备、
+  Soulcloud PostgreSQL 或任何 SWD/UART/JTAG/USB 硬件。
+- plugin 通过 Plugin Manager 获取所有 Soulcloud 范围内的 device、command、artifact、用户
+  和权限能力；设备仍只通过现有 Device Broker MQTT/WSS 和 Soulcloud HTTPS 入口通信。
+- Docker Compose、systemd 或 Kubernetes 管理 Plugin Manager、plugin 和 plugin 私有数据库
+  的生命周期。应用代码不 spawn、kill 或 restart 容器。
+- 本计划不引入 Station、Agent 服务、设备侧 plugin runtime、第二套设备 RPC 或通用
+  workflow/orchestration。本文中的 agent 只表示 plugin 内的 **LLM 调试 agent**。
+
+## 3. 已确认的架构决定
+
+### 3.1 Plugin 私有持久化
+
+维修案例、调试会话、LLM 状态和报告属于 SoulInjector plugin 的产品业务数据，写入该
+plugin 自己的私有数据库，不写入 Soulcloud PostgreSQL。
+
+私有数据库要求：
+
+- 使用独立数据库/cluster、credential、schema 和 network policy；
+- credential 只注入 SoulInjector plugin，不注入 Plugin Manager、Human API 或其他 plugin；
+- schema migration、backup、retention、restore 和容量由 plugin/部署系统负责；
+- 可以保存 Manager 提供的 project、installation、device 和 user ID 作为外键式引用，但不能
+  保存或伪造 Soulcloud credential；
+- plugin 私有数据库中的记录不能授予 Soulcloud 权限。每次设备操作和用户入口仍由 Human API
+  与 Plugin Manager 权威复核当前 scope；
+- 私有数据库不可用只影响该 plugin，不应使 Human API、Device Broker 或其他 plugin 失败。
+
+Soulcloud PostgreSQL 继续保存平台通用状态，例如 device identity/auth、project membership、
+plugin installation/binding、DeviceCommand、短期执行授权及必要审计索引。已有 OTA/日志 ELF
+表仍服务于原有平台功能，不把维修案例模型塞入其中。
+
+### 3.2 Client-side Plugin UI
+
+远程 terminal、寄存器视图、LLM 输出和多人观察需要 client-side JavaScript，因此目标 UI
+同时支持：
+
+- plugin 内 React SSR，负责首屏和无 JavaScript fallback；
+- plugin 提供 immutable、content-hashed JavaScript/CSS bundle；
+- Plugin Manager 校验并代理 asset；Human Web frontend 不 import plugin bundle；
+- Browser 的实时 channel 终止在 Plugin Manager，Browser 不直连 plugin endpoint；
+- Plugin Manager 不 import、hydrate 或执行 plugin React/client code。
+
+plugin bundle 必须运行在与 Human Web/API 不同的 origin。当前 Web 将 refresh token 保存在
+主站 `localStorage`；如果把 plugin JavaScript 放在同一 origin，路径隔离无法阻止它读取该
+token。目标入口仍使用 `/plugins/{installation}/...`，但位于独立 plugin UI origin。
+
+Human API 权威校验用户后签发一次性、短期、绑定 user/project/installation/route/version/hash
+的 bootstrap grant；Browser 以 POST 或等价的不泄露 URL 方式交给 Plugin Manager，换取只在
+plugin UI origin 有效、path-scoped、HttpOnly 的 session cookie。精确 host、POST bootstrap
+格式和 CSRF 机制在 UI 阶段开始前冻结。
+
+## 4. 职责划分
+
+### 4.1 SoulInjector 设备负责
+
+- target cable/power/voltage/连接检测和本地屏幕提示；
+- SWD、UART bootloader、reset/boot pin 和可选功耗测量；
+- target identify、halt/resume/reset、register/memory/flash 操作；
+- breakpoint/watchpoint 等实际硬件资源管理；
+- 有界批量 debugger transaction；
+- 本地 timeout、取消、安全清理和 transport release；
+- 弱网期间保存当前 command 的必要进度，并对 QoS 1 重投递保持幂等；
+- 小型结构化进度通过 `/event` 上报，大型 dump/trace 通过 HTTPS 上传；
+- 不执行云端 plugin code、LLM、JavaScript 或动态下载的任意宿主程序。
+
+### 4.2 SoulInjector plugin 负责
+
+- repair/debug case、target unit 和业务状态；
+- ELF/source/symbol 解析与 target-specific 知识；
+- 人工 debugger UI、LLM harness 和诊断策略；
+- 将高层意图转换成设备已实现的 debugger command；
+- 关联 observation、artifact、hypothesis、tool call 和报告；
+- 海外支持人员与国内工程师的 case assignment、comment 和 handoff；
+- 自己的外部 LLM/provider credential、私有数据库和产品数据 retention；
+- agent 预算、停止条件、模型/提示/tool 版本与失败恢复。
+
+### 4.3 Plugin Manager 负责
+
+- plugin 身份、version/hash、installation/device/user scope；
+- 为长时间调试签发和验证有界 execution capability；
+- 设备控制权 lease、command 权威校验、入队、取消和 provenance；
+- scoped artifact transfer capability；
+- `/plugins/*` session、asset 代理、实时 channel、限制和路由；
+- 操作级 deadline、concurrency、bytes、rate、backpressure 和审计；
+- plugin 不可用时返回明确错误，但不管理或重启其容器。
+
+### 4.4 Human API 负责
+
+- 人类用户登录、project membership、角色和权限权威；
+- 签发 plugin UI bootstrap grant；
+- 需要 Human API 权威确认的危险操作审批；
+- 面向普通 API client 的稳定入口；
+- 不解析 ELF、不运行 LLM、不加载 plugin UI code。
+
+### 4.5 Device Broker 负责
+
+- 继续处理现有 MQTT ACL、连接、command 和 `/event` 持久化；
+- 不理解 debugger payload、case、ELF、LLM 或维修状态；
+- 不同步调用 Plugin Manager/plugin；
+- 不增加 debugger-specific MQTT topic。
+
+## 5. 产品数据模型
+
+以下是 SoulInjector plugin 私有数据库的建议最小概念，不是 Soulcloud Prisma schema：
+
+```text
+debug_cases
+  id, project_ref, target_unit_ref, state, title, created_by_ref, assigned_to_ref
+
+debug_sessions
+  id, case_id, soulcloud_device_ref, execution_ref, state
+  plugin_version, manifest_hash, device_firmware_version
+  started_by_ref, controller_ref, started_at, ended_at
+
+debug_artifacts
+  id, case_id, kind, sha256, size, storage_ref, metadata
+
+debug_observations
+  id, session_id, source, kind, structured_data, artifact_ref, created_at
+
+agent_runs
+  id, session_id, model_provider, model_id, harness_version
+  prompt_version, tool_schema_version, budget, state
+
+agent_tool_calls
+  id, run_id, tool, input_digest, command_ref, output_digest
+  requested_at, approved_by_ref, completed_at
+
+case_comments / case_assignments / case_reports / report_revisions
+```
+
+要求：
+
+- artifact、observation 和已签署报告使用 hash/version，不静默覆盖；
+- product state 可以更新，但关键操作采用 append-only audit event；
+- 不保存 Human API JWT、plugin UI cookie、device password 或 Manager service token；
+- 删除/retention 必须同时处理 DB metadata、blob 和备份策略；
+- plugin upgrade 必须迁移自己的 schema，但历史 session 保留创建时 plugin/harness/model snapshot。
+
+## 6. Device command 与 event 设计
+
+### 6.1 不增加 MQTT topic
+
+继续使用：
+
+```text
+平台 → 设备  soulcloud/v1/devices/{uid}/cmd/exec
+设备 → 平台  soulcloud/v1/devices/{uid}/cmd/result
+设备 → 平台  soulcloud/v1/devices/{uid}/event
+设备 → 平台  soulcloud/v1/devices/{uid}/log
+文件传输     HTTPS
+```
+
+`/event` 的 `data` 内可以带 `debugSessionId`、`commandId` 或 plugin case reference，但设备不在
+envelope 顶层发送 plugin/installation/project ID。
+
+### 6.2 第一轮高层 command 候选
+
+精确名称、schema 和目标 MCU 支持矩阵必须在设备实现前冻结。候选能力：
+
+```text
+debug.open
+debug.identify
+debug.halt
+debug.resume
+debug.reset
+debug.read_registers
+debug.read_memory
+debug.write_memory
+debug.set_breakpoint
+debug.clear_breakpoint
+debug.capture_uart
+debug.collect_snapshot
+debug.close
+```
+
+烧写功能继续复用或演进现有 erase/program/verify 能力，不因为 debugger plugin 建第二套下行
+协议。所有 command 都必须：
+
+- 带 schema version、幂等 command ID 和 execution/session correlation；
+- 指定本地 timeout 和有界输入/输出；
+- 支持取消点；无法立即取消的硬件阶段明确报告 `cancelling`；
+- 失败后释放/恢复 SWDIO、reset、UART 和 target 运行状态到已定义状态；
+- 不接收任意脚本、动态库、native code 或无限循环 procedure；
+- 对 address、length、breakpoint count、poll count 和累计执行时间设硬上限。
+
+### 6.3 本地批量操作
+
+云端不能逐 SWD transaction 往返。`collect_snapshot` 等 command 允许一个有界、版本化的
+debug request 描述需要收集的 register/memory region；设备本地完成实际低层操作并一次返回
+summary 或 artifact reference。
+
+这只是产品固件中的 debugger primitive，不是通用 workflow engine：
+
+- 没有任意步骤图；
+- 没有动态执行代码；
+- 只有设备固件预先实现并校验的操作；
+- 总操作数、地址范围、字节、轮询和 deadline 均有上限。
+
+### 6.4 Event 与大量数据
+
+候选 event kind：
+
+```text
+soulinjector.target_connected
+soulinjector.target_disconnected
+soulinjector.debug_progress
+soulinjector.snapshot_ready
+soulinjector.uart_batch
+soulinjector.command_warning
+soulinjector.session_finished
+```
+
+- progress/state/小型 register summary 使用 `/event`；
+- 高频 UART 先在设备聚合为有界 batch；已有 `/log` 适合的日志继续走 `/log`；
+- memory dump、core dump、长 trace 和大段 UART capture 走 HTTPS；
+- MQTT event 只携带 artifact reference、sha256、size 和摘要；
+- Manager/plugin unavailable 不影响 Broker ACK，event 仍通过 durable queue 异步消费。
+
+## 7. 长时间 Execution Capability
+
+当前短期 event/action/UI operation 继续保留，不延长成数小时。新增独立、持久但收窄的
+debug execution record：
+
+```text
+id
+installation_id
+device_id
+plugin_id / plugin_version / manifest_hash
+initiating_user_id
+state: active | paused | cancelling | completed | failed | expired
+allowed_capabilities
+device_lease_expires_at
+expires_at
+created_at / finished_at
+```
+
+它不是诊断步骤数据库，也不保存 LLM conversation。作用只有：
+
+1. 证明某 plugin 当前可为某 device 执行哪些平台动作；
+2. 维持单设备控制权；
+3. 关联 DeviceCommand、用户、plugin snapshot 和审计；
+4. 支持 pause/cancel/expiry 和 plugin crash 后的安全恢复。
+
+建议 RPC 能力按阶段冻结为类似：
+
+```text
+context.executions.get
+context.executions.renewLease
+context.executions.release
+context.executions.complete
+
+context.devices.enqueueCommand
+context.devices.cancelCommand
+context.devices.getCommand
+
+context.artifacts.getMetadata
+context.artifacts.issueTransfer
+```
+
+plugin 可在父 event/UI RPC 返回后凭 execution capability 继续调用，但 Manager 必须保存 token
+hash，并检查 connection/plugin/version/installation/device/expiry/allowed command/rate。不能退化为
+一个 plugin 级永久万能 token。
+
+## 8. Artifact 与 HTTPS 传输
+
+### 8.1 数据归属
+
+- ELF、source archive、map、symbol、observation、LLM trace 和报告 metadata 默认属于 plugin
+  私有存储；
+- Soulcloud 原有 FirmwareArtifact/FirmwareRelease 只继续服务日志解码和 OTA，不自动成为
+  plugin 业务数据库；
+- 设备确实需要下载或上传的内容通过 Soulcloud scoped transfer gateway 暂存/代理；Soulcloud
+  只保存传输所需的最小 metadata、hash、scope、expiry 和审计，不保存维修 case 语义。
+
+### 8.2 传输要求
+
+- 文件正文不经 MQTT，也不塞进普通 oRPC value；
+- Human 上传先经过 Human API 权限检查，再交给 plugin 私有存储；
+- plugin 请求 device transfer 时，Manager 验证 execution/device/artifact scope；
+- Device 使用短期 HTTPS capability，绑定 device、execution、artifact、direction、size/hash；
+- 支持流式处理、Content-Length 上限、SHA-256 和失败清理；
+- 弱网需要时支持 Range/resume，但在有真实大文件纵切后再实现；
+- MVP 可以使用 PostgreSQL/local spool，当前不强制对象存储，但接口不能要求一次把大文件读入
+  Bun 或 ESP32 heap。
+
+plugin 私有 blob 到 Soulcloud transfer gateway 是“push staging”还是“受控 pull proxy”，以及
+MVP 采用 DB bytea 还是本地 spool，会影响部署和失败语义，必须在 Artifact 阶段开始前确认，
+不能在本文替产品/运维决定。
+
+## 9. Command provenance、控制权和审批
+
+平台 DeviceCommand 需要补充或关联以下通用 provenance：
+
+```text
+origin_type: human | plugin | llm_agent
+origin_user_id?
+plugin_installation_id?
+plugin_version / manifest_hash?
+execution_id?
+correlation_id
+idempotency_key
+cancel_requested_at?
+```
+
+每台设备同一时刻最多一个 debug execution 持有控制 lease。其他用户可以观察，但不能同时
+改变 target 状态。人工接管必须原子转移 controller，并通知 plugin UI 与 LLM harness。
+
+危险操作至少包括 erase、flash、write memory/register、改变保护位和 target configuration。
+哪些动作允许全自动、哪些需要人工批准是产品策略，不能由 Plugin Manager 擅自决定。Manager
+只提供：
+
+- manifest 声明风险等级；
+- Human API 权限与 approval proof；
+- execution policy snapshot；
+- command 前最终复核和不可变审计。
+
+## 10. Plugin UI 与实时协作
+
+### 10.1 页面
+
+最小页面：
+
+- case 列表、状态、assignment 和搜索；
+- case detail：target/firmware/artifact、timeline、comment、报告；
+- live debugger：连接状态、register/memory、breakpoint、UART、command history；
+- LLM panel：当前 hypothesis、tool call、证据、预算、暂停/继续；
+- overseas guided view：只显示接线、target detected、进行中、等待工程师和完成；
+- approval dialog：危险操作、影响、发起者和目标 device。
+
+### 10.2 实时 channel
+
+```text
+Browser
+  ↕ plugin UI origin /plugins/{installation}/live
+Plugin Manager
+  ↕ scoped oRPC stream/call
+SoulInjector plugin
+```
+
+要求：
+
+- channel 绑定 UI session、user、project、installation、route、plugin version/hash；
+- permission/session/install state 变化时关闭；
+- 每连接和每 installation 有连接、消息、字节、速率和 queued-byte 上限；
+- 慢 Browser 不拖住 plugin oRPC connection；允许丢弃可重建的 progress，但不能静默丢失
+  approval、controller transfer 或 terminal state；
+- 重连使用 cursor/event ID 补齐 plugin 私有数据库中的 durable timeline；
+- bundle 不能读取主站 token，不能直接访问 Human API、Broker 或 device；
+- plugin crash 只关闭该 plugin 的页面/channel，不影响其他 plugin 或 Human API。
+
+## 11. LLM 调试 Agent
+
+LLM harness 完全位于 SoulInjector plugin。Plugin Manager 不提供 prompt engine、memory、planner
+或 workflow。
+
+第一轮 tool 建议：
+
+```text
+get_case_context
+inspect_elf_metadata
+search_symbols
+read_registers
+read_memory
+collect_snapshot
+capture_uart
+halt / resume / reset
+request_human_approval
+add_observation
+propose_fix
+```
+
+要求：
+
+- tool 只能调用 execution capability 允许的 Manager RPC；
+- 模型不能自报 device/project/user scope；
+- 每个 tool call 记录 model、harness、prompt、tool schema、输入/输出 digest、command 和审批；
+- token、tool call、wall-clock、command、artifact bytes 和失败重试均有 budget；
+- cancel/人工接管立即停止发起新 tool，正在执行的 device command进入定义的取消流程；
+- LLM 输出是 hypothesis/suggestion，不能伪装成已观察事实；
+- 自动修改源码和自动烧写不是初始范围。生成 patch 与实际 apply/flash 分开授权；
+- 外部 LLM credential 只属于 plugin，不能进入 Manager 或 Soulcloud DB。
+
+应先完成稳定的人工远程 debugger，再接入 LLM。否则无法区分模型错误、设备 primitive 错误和
+网络/队列错误。
+
+## 12. 权限和审计
+
+Human API 不能继续给 plugin UI 固定空 permission snapshot。建议由产品确认并声明类似：
+
+```text
+debug.case.view
+debug.case.edit
+debug.observe
+debug.control
+debug.approve_destructive
+debug.artifact.download
+debug.report.review
+debug.report.signoff
+```
+
+平台需要 project role/permission 的权威来源；plugin 私有 case assignment 可以进一步收窄，
+不能放宽 Human API 权限。
+
+必须审计：
+
+- case/session 创建、assignment、人工接管和关闭；
+- UI session/bootstrap、实时 controller 变化；
+- artifact 上传/下载/hash；
+- command 发起者、plugin/model snapshot、审批、投递和结果；
+- LLM tool call 与人类 override；
+- 报告生成、review、sign-off 和 revision。
+
+常规 payload、源码和 memory dump 不应完整复制到平台审计日志；使用 ID/hash/size 和受控
+artifact reference。
+
+## 13. 分阶段实施
+
+### 阶段 D0：产品契约冻结
+
+**目标**：在改平台 schema 前固定第一个可用调试纵切。
+
+工作：
+
+1. 选择首批 target architecture/chip；
+2. 列出设备现有 primitive 与缺失 primitive；
+3. 冻结 command/event schema、最大内存范围、timeout 和取消语义；
+4. 确认第一版是否只上传 ELF/firmware，还是也接受 source archive；
+5. 定义人工/LLM/危险操作权限矩阵；
+6. 确认 plugin 私有 DB 和 blob 存储部署方式；
+7. 选定 plugin UI 独立 origin 与 bootstrap 流程。
+
+退出条件：协议测试向量、错误码和设备安全终态有文档；不存在“任意脚本”或通用 workflow。
+
+### 阶段 D1：SoulInjector Plugin 骨架与私有数据库
+
+工作：
+
+1. 创建独立 SoulInjector plugin package/image；
+2. 建立 manifest、profile、Action、Event 和 UI route；
+3. 建立私有 DB migration、case/session/artifact/observation/report 基础表；
+4. 接入 Plugin Manager handshake 和 health；
+5. Compose 开发部署加入 plugin 私有 DB，但不把 credential 给 Manager；
+6. 测试 plugin DB failure/crash 不影响 Manager/Broker/Human API。
+
+退出条件：可以创建纯云端 case，plugin 重启后状态恢复，Soulcloud DB 无产品 case 表。
+
+### 阶段 D2：设备联网与确定性 Debug Primitive
+
+工作：
+
+1. 将 SoulInjector 作为普通 Soulcloud Device 完成注册、认证、MQTT/WSS 和 HTTPS；
+2. 实现冻结的高层 debugger commands；
+3. 实现 target connected/progress/snapshot/finished events；
+4. 实现 command 幂等、取消、本地 timeout 和安全 transport release；
+5. 使用有界静态/初始化期 buffer，避免业务热路径不必要 heap allocation；
+6. 验证断网、重投递、target 拔线和设备重启后的状态。
+
+退出条件：不经过 plugin UI/LLM，也能用测试工具完成一次远程人工调试 primitive 纵切。
+
+### 阶段 D3：Execution Capability 与 Command Provenance
+
+工作：
+
+1. 增加最小 debug execution 平台记录；
+2. 实现 device control lease、renew/release/expiry；
+3. 增加 command origin/execution/plugin/user correlation；
+4. 实现 plugin 在短父 RPC 结束后的受限 command/get/cancel RPC；
+5. Human API 实现 start/pause/cancel/take-over 权限入口；
+6. 补并发 start、lease expiry、plugin reconnect、跨 device/project 和 cancel race 测试。
+
+退出条件：插件可以安全运行数小时 case，但 Manager 没有 step/DAG/agent state。
+
+### 阶段 D4：Artifact 与设备文件传输
+
+工作：
+
+1. 实现 ELF/firmware/source metadata 与 plugin 私有存储；
+2. 实现 Manager scoped artifact metadata/transfer capability；
+3. 实现 Soulcloud HTTPS device transfer gateway；
+4. 实现大小、hash、streaming、临时文件清理和失败恢复；
+5. 大 snapshot/dump 上传后用 `/event` 通知；
+6. 根据真实文件大小决定是否需要 Range，不引入对象存储作为前置条件。
+
+退出条件：ELF 可供 plugin 分析，设备可安全下载所需固件/target config并上传 dump，正文不走
+MQTT/oRPC 热路径。
+
+### 阶段 D5：人工远程 Debugger MVP
+
+工作：
+
+1. case 创建、device/target/artifact 关联；
+2. SSR case/debugger 页面；
+3. 人工执行 identify/halt/read/reset/capture/close；
+4. command timeline、observation、错误与报告草稿；
+5. overseas guided view 和国内工程师 take-over；
+6. 验证两个用户同时操作时只有 controller 能改变 target。
+
+退出条件：不依赖 LLM，可以完成一次海外接线、国内工程师远程诊断、报告生成的端到端案例。
+
+### 阶段 D6：Client Bundle 与实时 UI
+
+工作：
+
+1. 扩展 manifest UI asset 声明和 handshake capability；
+2. Manager 实现 asset fetch/hash/MIME/cache/独立 origin；
+3. 实现 Human API 一次性 bootstrap 和 plugin-origin session；
+4. 实现 Browser ↔ Manager live channel 与 plugin oRPC stream/call；
+5. 实现 terminal、progress、register/memory 和多人观察 UI；
+6. 测试主站 token 不可见、session 撤销、慢消费者、backpressure、bundle 漂移和 plugin crash。
+
+退出条件：Human Web 不 import plugin code；Browser 不直连 plugin；主站 refresh/access token
+不暴露；实时 debugger 可重连恢复。
+
+### 阶段 D7：LLM Agent MVP
+
+工作：
+
+1. 在 plugin 内实现 harness、tool registry、budget 和 cancellation；
+2. 先开放只读工具，再逐项加入有明确审批的 destructive tool；
+3. 保存 model/harness/prompt/tool snapshot 和完整证据关联；
+4. 支持 agent pause、人类 take-over、继续和终止；
+5. 生成包含事实、hypothesis、证据和修改建议的版本化报告；
+6. 用已知故障固件建立可重复 evaluation corpus。
+
+退出条件：agent 在固定测试集上能复现诊断过程；失败不会越 scope、无限重试或留下 target
+处于未知调试状态。
+
+### 阶段 D8：跨境维修产品化
+
+工作：
+
+1. case queue、assignment、comment、handoff 和通知；
+2. 海外人员极简接线/状态 UI 与本地设备提示；
+3. 国内工程师 observe/control/approval 流程；
+4. 时区、locale、弱网和长时间离线恢复；
+5. 报告 review/sign-off/export 和客户可见版本；
+6. 数据 retention、访问审计和支持 SOP。
+
+退出条件：非技术人员只需接线；case 可以跨时区交接；每次设备改变均可追溯。
+
+### 阶段 D9：生产硬化
+
+工作：
+
+1. 长时间 soak：设备断线、Manager/plugin/DB 重启、MQTT 重投递；
+2. chaos：plugin hang/OOM、私有 DB unavailable、LLM/API timeout；
+3. 大 ELF/source/dump、UART flood 和多人 UI 压测；
+4. command/event/artifact retention 和索引压测；
+5. container CPU/RSS/PID/log、网络隔离、backup/restore 演练；
+6. metric/alert：active execution、lease、command latency、event backlog、artifact bytes、agent cost；
+7. 验证 plugin 无法访问 Broker、Soulcloud PostgreSQL、Device subnet 和 Human API internal
+   endpoint。
+
+退出条件：单个 plugin/LLM/私有 DB 故障不会拖垮核心 Soulcloud 服务或其他 plugin。
+
+## 14. 明确不做
+
+- 不建立 Station、Agent daemon 或工位身份；
+- 不在 SoulInjector 设备上运行 plugin、容器、oRPC 或 LLM；
+- 不建立 plugin ↔ device 直连；
+- 不增加 debugger-specific MQTT topic；
+- 不让云端逐 SWD bit/register polling round-trip；
+- 不实现通用 workflow/DAG/step marketplace；
+- 不让 Plugin Manager 保存 LLM conversation、case 或产品报告；
+- 不要求现在引入对象存储、多 broker 或高频 telemetry 平台；
+- 不在第一版自动修改源码并自动烧写；
+- 不把 target MCU 注册成 Soulcloud Device，除非它本身独立联网并运行 Soulcloud 软件。
+
+## 15. 实现前仍需产品负责人确认
+
+以下选择会改变 wire、权限或部署，实施者不能自行决定：
+
+1. 首批支持的 target architecture/chip 与必需 debugger primitive；
+2. 第一版输入只含 ELF/firmware，还是允许 source archive/VCS integration；
+3. 哪些 destructive operation 可由 LLM 自动执行，哪些必须人工逐次批准；
+4. plugin 私有 blob 使用数据库、本地 volume 还是现有外部存储；
+5. Soulcloud transfer gateway 采用 push staging 还是受控 pull proxy；
+6. plugin UI 独立 origin 的具体域名、bootstrap 和 CSRF 方案；
+7. case/artifact/LLM trace/report 的 retention 与客户删除语义；
+8. 是否需要同时在线多个 plugin version 处理长时间未结束的历史 case。
+
+当前每台 Soulcloud Device 只能绑定一个 plugin installation。SoulInjector 第一版只使用一个
+SoulInjector plugin，因此不要求先修改为多 plugin fan-out；出现第二个真实消费方时再确认语义。

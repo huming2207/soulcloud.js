@@ -1,7 +1,7 @@
 # Soulcloud 插件架构与需求
 
 **状态**：目标架构；服务端基础纵切已实现，未完成项以实施计划为准
-**日期**：2026-08-23
+**日期**：2026-08-25
 
 本文定义 Soulcloud 的设备侧扩展、云端插件、Plugin Manager、设备 MQTT 事件和插件 SSR UI。
 此前文档中的 Station、Station Agent、Station Plugin、Fixture Plugin、workflow 和工位专用
@@ -45,15 +45,18 @@ flowchart LR
     Manager <-->|oRPC over WebSocket| PluginA[plugin instance A]
     Manager <-->|oRPC over WebSocket| PluginB[plugin instance B]
 
+    PluginA -->|private connection| PluginDB[(plugin A private database)]
     PluginA -->|HTTPS/public protocols| PublicAPI[Public APIs]
     PluginA <-->|direct stateless/private plugin API| PluginB
 ```
 
 硬边界：
 
-- Soulcloud Client 不运行 plugin、容器、RPC runtime 或 workflow engine。
+- Soulcloud Device 不运行 plugin、容器、RPC runtime 或 workflow engine。
 - plugin 只运行在云端自己的容器中，不运行在 Soulcloud Device 上。
-- plugin 不能连接 Device Broker、Soulcloud Device、数据库或 USB/JTAG/串口硬件。
+- plugin 不能连接 Device Broker、Soulcloud Device、Soulcloud PostgreSQL 或 USB/JTAG/串口硬件。
+- plugin 可以连接由自身部署独占、凭据和 schema 均与 Soulcloud 分离的私有数据库；Plugin
+  Manager 不读取或管理其中的产品业务数据。
 - Device Broker 不调用 Plugin Manager 或 plugin；它先持久化设备事件，再返回 MQTT ACK。
 - Human API、Device Broker、Plugin Manager 和每个 plugin instance 是独立部署与故障域。
 - Docker Compose、systemd 或 Kubernetes 管理进程和容器生命周期。Soulcloud 代码不 spawn、
@@ -65,7 +68,7 @@ flowchart LR
 协议。例如运行烧录治具的 PC 是 Soulcloud Device；它通过本地 USB/JTAG 操作的目标板只是
 本地外设，除非目标板自己联网并运行 Soulcloud Client。
 
-设备能力直接编译进 Soulcloud Client。例如治具版 Client 可以实现：
+设备能力直接实现并编译进设备软件/固件。例如治具设备可以实现：
 
 ```text
 erase_flash
@@ -75,8 +78,9 @@ read_mac
 run_functional_test
 ```
 
-云端 plugin 只能调用 Client 已实现的 DeviceCommand。部署 plugin 不能向设备动态注入代码；
-增加硬件能力需要发布新的 Soulcloud Client/固件。
+云端 plugin 只能调用设备已实现的 DeviceCommand。部署 plugin 不能向设备动态注入代码；
+增加硬件能力需要发布新的设备软件/固件。`Soulcloud Client` 是设备上的 Soulcloud 通信软件
+名称，不用来代指执行硬件操作的设备本身。
 
 设备侧要求：
 
@@ -131,7 +135,7 @@ interface DeviceEventEnvelope {
 }
 ```
 
-Soulcloud Client 是否必须将 `seq` 跨掉电持久化仍需结合 flash 磨损和设备幂等存储方案确认；
+设备端是否必须将 `seq` 跨掉电持久化仍需结合 flash 磨损和设备幂等存储方案确认；
 这不改变 wire format，也不能用随机重置序号替代 `id` 幂等。
 
 协议规则：
@@ -163,7 +167,7 @@ interface FileReference {
 ```
 
 正文通过 HTTPS 上传/下载。URL 或 token 必须绑定 device/file/operation、短期有效且不可作为
-长期凭据；Client 校验长度和 SHA-256。达到真实需求时支持 HTTP Range，不使用 MQTT 分块传
+长期凭据；设备校验长度和 SHA-256。达到真实需求时支持 HTTP Range，不使用 MQTT 分块传
 大文件。
 
 ## 5. Plugin Manager
@@ -181,6 +185,8 @@ Plugin Manager 是独立 Bun 服务，不嵌入 Human API，也不是面向设�
 - 从 PostgreSQL lease `plugin_events`，公平、异步地分发给 plugin；
 - 为 Human API 提供内部 plugin control/action 接口；
 - 为 plugin 提供带 project/installation/device/operation scope 的反向 RPC；
+- 为确有长时间业务需要的 plugin 提供可持久、可撤销且严格限定 installation/device/能力的
+  execution capability；它只负责授权、控制 lease 和审计，不保存 plugin 的业务步骤或 agent 状态；
 - 权威校验 plugin 输出，并与 event completion 原子提交；
 - 实施 deadline、并发、大小、退避、dead-letter 和 circuit breaker；
 - 承载 `/plugins/*` SSR 路由、短期 UI session 校验和有界 HTML fragment；streaming 是后续能力；
@@ -193,7 +199,7 @@ Plugin Manager 是独立 Bun 服务，不嵌入 Human API，也不是面向设�
 - 加载或执行 plugin JavaScript/React 代码；
 - 连接 Soulcloud Device 或代理 Device MQTT；
 - 解释 plugin-specific event payload；
-- 为 plugin 提供数据库连接、长期用户 JWT 或全局 secret。
+- 为 plugin 提供 Soulcloud PostgreSQL 连接、长期用户 JWT 或全局 secret。
 
 ### 5.3 资源隔离
 
@@ -224,8 +230,10 @@ plugin 是可信但可能有 bug 的云端代码。每个 plugin 独立构建和
 容器运行边界：
 
 - 非 root、只读根文件系统、独立 CPU/RSS/PID/日志限制；
-- 不注入 DB、Broker、Human API 或用户凭据；
-- 与 Device Broker、数据库和设备网络隔离；
+- 不注入 Soulcloud PostgreSQL、Broker、Human API 或用户凭据；
+- 与 Device Broker、Soulcloud PostgreSQL 和设备网络隔离；
+- 可以注入只属于该 plugin 的私有数据库凭据；私有数据库的 schema、migration、备份、
+  retention 和故障恢复由 plugin 及部署系统负责；
 - 允许访问公网 API；
 - 允许访问部署配置明确可见的其他 plugin instance；
 - 每个外部请求仍应有 timeout、响应大小和连接并发上限；
@@ -245,8 +253,8 @@ Plugin Manager 为这类调用创建短生命周期、不可猜测、绑定当�
 plugin-to-plugin 直连不得接受 project/device ID 来绕过 Manager。公网 weather、map、
 geocoding 等 API 不属于跨 plugin 权限调用，plugin 可以直接访问。
 
-部署网络必须明确阻断 plugin 对 Broker、数据库和设备网段的访问；允许公网 egress 不等于允许
-访问 Soulcloud internal service。
+部署网络必须明确阻断 plugin 对 Broker、Soulcloud PostgreSQL 和设备网段的访问；允许私有
+数据库、公网 egress 不等于允许访问 Soulcloud internal service。
 
 ## 7. Manifest 的唯一真相
 
@@ -310,7 +318,7 @@ operation scope 之外的 device。
 ## 9. 异步事件路径
 
 ```text
-Soulcloud Client
+Soulcloud Device
   → MQTT/WSS /event QoS 1
   → Device Broker：ACL + envelope/size/rate validation
   → plugin_events durable row + binding/version snapshot
@@ -362,6 +370,11 @@ context.ui.getData
 只发送剩余时间预算。反向调用沿同一 WebSocket 返回，
 且不能自报 project/device scope。详细边界见 `plugin-rpc-protocol.md`。
 
+远程 debugger 等长时间产品不能把一次 operation 延长数小时，也不能在 operation 结束后继续
+使用它的 token。此类产品使用单独持久化的 execution capability：Manager 保存最小
+installation/device/plugin/version/user/allowed-capability/expiry/lease 状态，plugin 私有数据库
+保存 case、agent 和产品状态。execution capability 不是 workflow、DAG 或后台进程管理器。
+
 ## 11. Plugin SSR UI
 
 ### 11.1 执行位置
@@ -379,21 +392,30 @@ Browser /plugins/{installation}/...
   → Browser
 ```
 
-第一版只支持 server-rendered UI，不提供 plugin client JavaScript、hydration 或 React Server
-Components。交互使用普通 form/link，并由 Plugin Manager 调用 `ui.handleAction` 后重新渲染。
-未来可以通过 RPC capability negotiation 增加 SSR stream 的更透明 pass-through，但始终不得
-让 Manager 执行 plugin code，也不得暴露 plugin instance endpoint 给浏览器。
+基础纵切只支持 server-rendered UI；目标架构同时允许 plugin 提供 immutable、content-hashed
+client-side JavaScript/CSS bundle，以实现 debugger、terminal 和实时状态等交互。资源必须由
+Plugin Manager 根据 manifest 声明从 plugin 获取、校验大小/hash、缓存并从 plugin UI origin
+的 `/plugins/*` 路径返回；Browser 不直连 plugin endpoint，Human Web frontend 也不 import
+plugin bundle。
+
+SSR 仍在 plugin 内执行；client bundle 只在 Browser 中执行，Plugin Manager 不执行其中代码。
+bundle 必须运行在与 Human Web/API 不同的 origin，防止读取主站 `localStorage` 中的 refresh
+token 或借主站 origin 直接访问 `/api/*`。它只能通过受 UI session、route、installation 和
+permission 约束的 Manager UI API 或实时 channel 访问 Soulcloud 能力，不能读取 HttpOnly
+session cookie、长期 JWT 或 plugin endpoint。React Server Components 和任意 server-side
+bundle loading 仍不在范围内。
 
 ### 11.2 `/plugins/*` 与用户上下文
 
 部署入口将 `/plugins/*` 路由到 Plugin Manager。Human API 仍是权限判定权威：
 
-1. Browser 向 Human API 请求某 installation/route 的短期 plugin UI session；
+1. Browser 向 Human API 请求某 installation/route 的短期 plugin UI bootstrap grant；
 2. Human API 校验用户、project membership 和 permission；
-3. session 绑定 user、project、installation、plugin/version、route/audience、nonce 和 expiry；
-4. Human API 将 session 写入 HttpOnly、Secure、SameSite=Strict、限定 installation 路径的短期
-   cookie，并返回稳定的 `/plugins/*` URL；
-5. Browser 导航到该 URL，后续普通 link/form 由浏览器自动携带 session cookie；
+3. grant 绑定 user、project、installation、plugin/version、route/audience、nonce 和 expiry，
+   且只能使用一次；
+4. Browser 通过 POST 或等价的不泄露 URL 方式把 grant 交给独立 plugin UI origin 的 Manager；
+5. Manager 校验 grant 后设置 HttpOnly、Secure、SameSite、限定 installation 路径的短期 cookie，
+   再进入稳定 `/plugins/*` URL；后续普通 link/form 自动携带该 cookie；
 6. Manager 验签并创建最小 `PluginUiContext`；
 7. plugin 只收到完成渲染所需的 user ID、locale、permission snapshot 和 scoped data capability。
 
@@ -405,6 +427,10 @@ plugin；确实需要时由 route 权限和 schema 显式声明。
 - render deadline、最大 status/header/html bytes 和并发上限；
 - 只允许明确的响应 header，禁止 plugin 设置 cookie、CSP、CORS 或 hop-by-hop header；
 - Manager 生成安全 shell、CSP、request ID 和错误页；
+- client asset 必须使用 manifest 中的 content hash、正确 MIME、`nosniff` 和 immutable cache；
+- client 实时连接仍终止在 Manager，并受 UI session、消息大小、并发、速率和 backpressure 限制；
+- plugin UI origin 不允许携带或读取 Human Web/API 的 access/refresh token；Human API 到该
+  origin 的 session bootstrap 使用一次性、短期且绑定 installation/route 的授权；
 - plugin stream 中断只终止该响应；
 - SSR 不得直接生成 Soulcloud 权限或 DeviceCommand 副作用；表单 action 回到 Manager 校验；
 - plugin 可以在 SSR 时访问公网 API，但必须自行设置 timeout，Manager 仍有总 render deadline；
@@ -429,7 +455,8 @@ human-api
 device-broker
 plugin-manager
 plugin-{id}-{version}    一个或多个 instance
-postgres
+plugin-{id}-database     可选、只属于该 plugin
+soulcloud-postgres
 web/reverse-proxy
 ```
 
@@ -437,7 +464,8 @@ web/reverse-proxy
 
 ```text
 /api/*       → Human API
-/plugins/*   → Plugin Manager（只接受 Human API 签发的短期 UI session）
+plugin UI origin /plugins/* → Plugin Manager（只接受 Human API 签发的一次性 bootstrap grant
+                              换得的短期 plugin-origin UI session）
 MQTT/WSS     → Device Broker
 ```
 
@@ -463,15 +491,16 @@ Plugin Manager internal API 使用独立 service credential、请求 deadline �
 6. 保留 event lease、按 installation 隔离的有界消费、retry、dead-letter、retention 和 Entity
    transaction；数据库 lease 选择层的跨 installation fairness 仍待压测后决定。
 7. Human API 改用 Plugin Manager internal API 获取 catalog、执行 Action 和管理 installation。
-8. 增加 `/plugins/*`、短期 UI session、`ui.render` 和纯 SSR 表单纵切。
-9. 更新 Compose 网络：plugin 可访问 Manager、其他 plugin 和公网，但不能访问 Broker/DB/
-   Device network；生命周期完全由部署系统负责。
+8. 增加 `/plugins/*`、短期 UI session、`ui.render` 和 SSR 表单基础纵切；后续按 manifest
+   增加 content-hashed client asset 与 Manager 代理的实时 UI channel。
+9. 更新 Compose 网络：plugin 可访问 Manager、自己的私有数据库、其他 plugin 和公网，但
+   不能访问 Broker、Soulcloud PostgreSQL 或 Device network；生命周期完全由部署系统负责。
 10. 删除旧环境变量、路由、package 名和兼容代码，并更新测试与 CI。
 
 ## 15. 明确推迟
 
 - 用户运行时安装或上传 plugin；
-- plugin client-side JavaScript、hydration、RSC 或 iframe UI；
+- React Server Components、Plugin Manager 进程内 hydration 或 server-side plugin bundle；
 - 对象存储和多 broker；
 - 高频 telemetry 专用 topic；
 - 通用 workflow/orchestration；

@@ -1,10 +1,10 @@
 # Plugin Manager ↔ plugin 双向 RPC 与 SSR 协议
 
 **状态**：目标协议及当前实现边界；旧插件 RPC 代码和入口已删除
-**日期**：2026-08-23
+**日期**：2026-08-25
 
-本文只规定独立 Plugin Manager 与云端 plugin instance 之间的通信。Soulcloud Client 不使用
-该 RPC；设备继续通过 Device Broker 的 MQTT/WSS 和少量 HTTPS 通信。
+本文只规定独立 Plugin Manager 与云端 plugin instance 之间的通信。Soulcloud Device 不使用
+该 plugin RPC；设备继续通过 Device Broker 的 MQTT/WSS 和少量 HTTPS 通信。
 
 ## 1. 目标与非目标
 
@@ -20,10 +20,11 @@
 非目标：
 
 - 不管理 plugin 容器生命周期；
-- 不让 plugin 连接 Device Broker、Device、DB 或本地硬件；
+- 不让 plugin 连接 Device Broker、Device、Soulcloud PostgreSQL 或本地硬件；plugin 自己的
+  私有数据库不属于 Soulcloud RPC，也不由 Manager 管理；
 - 不把设备 MessagePack 改成 JSON/oRPC；
 - 不实现用户运行时安装；
-- 不实现 React hydration、RSC framework 或 plugin client bundle；
+- 不在 Plugin Manager 内执行 React hydration、RSC 或 plugin client bundle；
 - 不保留旧 HTTP MessagePack RPC、Dispatcher/Host endpoint 或兼容 alias。
 
 ## 2. 拓扑与连接方向
@@ -199,9 +200,18 @@ interface PluginSsrMeta {
 shell、CSP 和错误页。plugin 不能设置 cookie、CORS、CSP、redirect target 或任意响应 header；
 允许的 title/status/cache metadata 仍由 Manager 校验。
 
-第一版不传 client bundle，不 hydration。表单提交进入 Manager 的 `/plugins/*` action route，
-再调用 `ui.handleAction`。该 procedure 返回 redirect intent、validation errors 或重新渲染所需
-状态，不能直接绕过 Human API 权限创建 Soulcloud 副作用。
+当前基础纵切不传 client bundle、不 hydration。表单提交进入 Manager 的 `/plugins/*` action
+route，再调用 `ui.handleAction`。该 procedure 返回 redirect intent、validation errors 或重新
+渲染所需状态，不能直接绕过 Human API 权限创建 Soulcloud 副作用。
+
+目标协议允许 manifest 声明 immutable、content-hashed JavaScript/CSS asset。Manager 按需从
+plugin 获取有界 Blob，校验路径、MIME、大小和 hash 后缓存，并只从 plugin UI origin 的
+`/plugins/{installation}/assets/{hash}/...` 返回。该 origin 必须与 Human Web/API origin
+分离，不能读取主站浏览器存储或携带主站 refresh/access token。Browser 不直连 plugin；
+Manager 不执行 bundle。动态 UI 使用由 Manager 终止并鉴权的
+`/plugins/{installation}/live` channel，再通过同一 plugin connection 上的有界 oRPC
+stream/call 转发。具体 procedure 和 Human API → plugin UI origin 的一次性 session bootstrap
+在实现该阶段时冻结，不复用普通 SSR `ui.render` 的小响应预算来传大型 asset 或无限 stream。
 
 ## 6. Plugin → Manager reverse procedure
 
@@ -219,7 +229,7 @@ context.plugins.callScoped
 context.ui.getData
 ```
 
-所有 reverse input 必须携带：
+当前与短期父调用绑定的 reverse input 必须携带：
 
 ```ts
 interface OperationProof {
@@ -270,24 +280,50 @@ constant-time token compare → connection/plugin/version → deadline/state →
 父调用返回前 seal operation，拒绝未完成的 reverse call；等待有界 cleanup grace 后再 commit。
 这样 plugin 不能启动未 await 的 reverse call，在父响应后偷偷产生副作用。
 
+### 7.1 长时间 execution capability
+
+远程 debugger 等产品需要在父 event/UI RPC 返回后继续数小时，但不能延长或复用上述短期
+operation。为此可以增加独立的 durable execution capability：
+
+```ts
+interface ExecutionProof {
+  executionId: string;
+  executionToken: string;
+}
+```
+
+Manager 只持久化 token hash、installation/device、plugin/version/hash、发起用户、允许能力、
+状态、控制 lease 和 expiry。case、LLM conversation、诊断步骤和报告仍只在 plugin 私有数据库。
+
+execution reverse call 必须重新检查 connection、plugin snapshot、installation/device 绑定、
+当前用户授权快照/撤销状态、allowed capability、lease、expiry、rate、concurrency 和 bytes。每次
+command/artifact 操作独立事务提交，不具有 event staged-effect 的原子语义。pause、cancel、
+expiry 或 plugin disable 后立即拒绝新调用。
+
+这不是通用 workflow 或永久 plugin service token。具体 procedure 与 schema 在第一个远程
+debugger 纵切中冻结，详见 `soulinjector-remote-debugger-plugin-plan.md`。
+
 ## 8. 用户上下文与 `/plugins/*`
 
 Human API 是用户权限权威：
 
 ```text
-Browser → Human API: request plugin UI session
-Human API → Browser: path-scoped HttpOnly cookie + /plugins/* URL
-Browser → Plugin Manager /plugins/* (cookie is sent automatically)
+Browser → Human API: request one-time plugin UI bootstrap grant
+Browser → plugin UI origin/Plugin Manager: POST bootstrap grant
+Plugin Manager → Browser: plugin-origin path-scoped HttpOnly cookie + /plugins/* URL
+Browser → plugin UI origin/Plugin Manager /plugins/* (cookie is sent automatically)
 Manager → plugin ui.render
 ```
 
-session 至少绑定 audience、user、project、installation、plugin/version/manifest hash、route、
-permission snapshot、locale、issued/expiry 和 nonce。Manager 不接收长期用户 JWT；session 不可
-跨 route/installation 重放，权限变化、plugin 升级或 installation disable 后必须失效。
+bootstrap grant 和换得的 session 至少绑定 audience、user、project、installation、
+plugin/version/manifest hash、route、permission snapshot、locale、issued/expiry 和 nonce。grant
+只能使用一次且不得放在 URL。Manager 不接收长期用户 JWT；session 不可跨 route/installation
+重放，权限变化、plugin 升级或 installation disable 后必须失效。
 
 session 不放在 URL query、fragment、plugin HTML 或长期浏览器存储中。cookie 只覆盖对应
-`/plugins/{installation}/` 路径，因此普通导航与无 JavaScript form 可以工作，而 plugin 仍看不到
-token。
+plugin UI origin 的 `/plugins/{installation}/` 路径，因此普通导航与无 JavaScript form 可以
+工作，而 plugin 仍看不到 token。该 origin 不携带 Human Web/API cookie，CORS 也不能允许
+bundle 借浏览器身份访问 Human API。
 
 传给 plugin 的用户上下文遵循最小化原则，不默认包含 email、全局角色或其他个人信息。
 
@@ -299,8 +335,10 @@ credential。要求：
 - credential 按 plugin instance 注入，Manager 不接收或转发；
 - 外部调用有 connect/request timeout、response limit 和连接池上限；
 - 外部服务失败归类为 plugin/remote dependency error，不拖垮 Manager；
-- plugin 网络禁止访问 Broker、DB、Device subnet、Human API internal endpoint 和 cloud
+- plugin 网络禁止访问 Broker、Soulcloud PostgreSQL、Device subnet、Human API internal endpoint 和 cloud
   metadata endpoint；
+- plugin 可以访问部署为其单独提供的私有数据库；该数据库不得与 Soulcloud PostgreSQL 共用
+  credential、schema 或网络权限；
 - direct plugin-to-plugin endpoint 由部署配置明确暴露，不能通过任意 URL 代理制造 SSRF。
 
 ## 10. Deadline、取消与 liveness
@@ -324,6 +362,8 @@ restart 由 Docker/systemd/Kubernetes 执行。
 - reverse global/per-plugin/per-installation/per-operation concurrency；
 - reverse call、staged command 和 log 数量；
 - SSR chunk、total HTML、render concurrency 和 queued bytes；
+- client asset count、单文件/总字节、MIME、hash 和 cache；
+- Browser live channel 的连接数、消息数、单消息/累计字节和 send-side queued bytes；
 - socket send-side queued bytes 和 reconnect rate。
 
 Bun `ServerWebSocket.send()` 返回值和 `drain` 必须接入 transport bridge。超过 backpressure
@@ -411,10 +451,12 @@ PLUGIN_SSR_MAX_CONCURRENCY=...
 - Entity/Action：正常、坏 schema、坏 encoder、transaction rollback；
 - event：QoS 1 duplicate、lease recovery、retry/dead、fairness；
 - plugin-to-plugin：纯计算直连与 scoped Manager call 的边界；
-- SSR：权限不足、过期 session、HTML 上限、stream 中断、timeout、坏 status/header；
+- SSR/client UI：权限不足、过期 session、HTML/asset 上限、asset hash/MIME mismatch、live
+  channel 断开、stream 中断、timeout、坏 status/header；
 - chaos：plugin crash/hang/OOM 不影响 Manager 其他 plugin、Human API 或 Broker；
 - multi-replica：两个 Manager 连接同 plugin、event 只完成一次、reverse 返回正确连接；
-- deployment：plugin 能访问公网 API，但不能访问 Broker/DB/Device/internal Human API。
+- deployment：plugin 能访问自己的私有数据库和公网 API，但不能访问 Broker、Soulcloud
+  PostgreSQL、Device 或 internal Human API。
 
 ## 16. 当前落地与后续原则
 

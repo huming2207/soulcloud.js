@@ -1,7 +1,7 @@
 # Soulcloud 插件架构分阶段实施计划
 
-**状态**：阶段 0–3 与服务端阶段 4–5 基础纵切已实现；设备 Client、完整 SSR、阶段 7–8 待实施
-**日期**：2026-08-23
+**状态**：阶段 0–3 与服务端阶段 4–5 基础纵切已实现；设备侧、完整 Plugin UI、阶段 7–8 待实施
+**日期**：2026-08-25
 **依据**：`plugin-architecture.md`、`plugin-rpc-protocol.md`
 
 ## 1. 目标状态
@@ -189,11 +189,11 @@ value/Blob、active operation、reverse call 和 staged command 数量/累计字
 
 ## 阶段 4：Device `/event` 端到端路径
 
-**状态：服务端基础纵切已完成，Soulcloud Client 未在本仓库验证。** Broker 只校验通用
+**状态：服务端基础纵切已完成，Soulcloud Device 侧未在本仓库验证。** Broker 只校验通用
 envelope、持久化完整 uint64 sequence，且不解释 plugin payload；相同
 `(device_id, event_id)` 的相同内容幂等成功，不同内容会被 ACK 后记录为冲突，避免设备永久重投。
 Manager 异步 lease；QoS 1 幂等、固定入队时间、retry/dead-letter、retention、lease 续期和
-Entity completion 已落地。真实 Client publish/掉电 sequence 仍是退出条件。
+Entity completion 已落地。真实设备 publish/掉电 sequence 仍是退出条件。
 
 ### Shared protocol
 
@@ -220,16 +220,16 @@ Entity completion 已落地。真实 Client publish/掉电 sequence 仍是退出
 - transient transport/plugin error retry；
 - event completion 与 Entity/command effects 原子提交。
 
-### Soulcloud Client
+### Soulcloud Device
 
-- 增加 `/event` publish API；
+- 在设备软件中增加 `/event` publish API；
 - 有界编码，QoS 1，持久 seq/idempotency；
 - 失败重试不重新执行业务副作用；
 - 不发送 plugin/project/installation routing 字段。
 
 ### 退出条件
 
-- 真实 Client event → Broker → DB → Manager → plugin → Entity 的纵切通过；
+- 真实 Device event → Broker → DB → Manager → plugin → Entity 的纵切通过；
 - duplicate/reconnect/Manager outage 不重复提交副作用；
 - plugin hang 不影响 MQTT `/stat`、`/log`、command result。
 
@@ -265,18 +265,21 @@ scoped plugin-to-plugin 和更完整的 UI catalog 仍待后续阶段补齐。
 - plugin 不能越过当前 operation 对其他 Device 入队 command；
 - 所有旧进程内 encoder 路径删除。
 
-## 阶段 6：Plugin SSR MVP
+## 阶段 6：Plugin UI MVP
 
-**状态：传输纵切已完成，产品 MVP 未完成。** Human API 能签发短期 path-scoped HttpOnly
+**状态：SSR 传输纵切已完成，产品 MVP 未完成。** Human API 能签发短期 path-scoped HttpOnly
 session cookie，Manager 能验签并转发有界 HTML fragment；当前只有真实 WebSocket 集成测试，
-尚无部署示例 React plugin 页面，`context.ui.getData` 也没有生产 handler。不提供
-hydration/RSC/streaming pass-through。
+尚无部署示例 React plugin 页面，`context.ui.getData` 也没有生产 handler。目标产品已确认需要
+content-hashed client bundle 和 Manager 代理的实时 UI channel；RSC 与 Manager 进程内执行
+plugin code 仍不在范围内。
 
 ### Session 与路由
 
-- Human API 签发短期 `/plugins/*` UI session；
-- session 绑定 user/project/installation/plugin/version/hash/route/permission/locale/expiry；
-- reverse proxy 把 `/plugins/*` 路由到 Manager；
+- Human API 签发一次性、短期、绑定
+  user/project/installation/plugin/version/hash/route/permission/locale/expiry 的 bootstrap grant；
+- Browser 通过非 URL 泄露方式将 grant 交给独立 plugin UI origin 的 Manager，换取该 origin
+  path-scoped HttpOnly session；
+- plugin UI origin 的 reverse proxy 把 `/plugins/*` 路由到 Manager；
 - Manager 验签并创建最小 `PluginUiContext`，不接收长期 JWT。
 
 ### Plugin SSR
@@ -285,21 +288,31 @@ hydration/RSC/streaming pass-through。
 - plugin 内执行 React SSR，Manager 不 import component/module；
 - 实现 `ui.render` HTML fragment 和 `ui.handleAction`；
 - Manager 添加统一 document shell、CSP、header allowlist、deadline、byte/backpressure limit；
-- 普通 form/link 提供交互；第一版不 hydration/RSC/client bundle；
-- 为未来 SSR stream pass-through 保留 capability negotiation，但不暴露 plugin endpoint。
+- 普通 form/link 继续作为无 JavaScript fallback；
+- manifest 声明 immutable client JS/CSS asset 的路径、MIME、大小和 content hash；
+- Manager 从 plugin 获取、复核并缓存 asset，从 `/plugins/{installation}/assets/{hash}/...`
+  同源返回，不暴露 plugin endpoint；
+- plugin UI 使用独立于 Human Web/API 的 origin；Human API 签发一次性、短期、绑定
+  installation/route 的 bootstrap grant，由 Plugin Manager 换成 plugin-origin HttpOnly cookie，
+  不能让 bundle 读取主站 `localStorage` refresh token 或借主站 origin 调用 `/api/*`；
+- Browser live channel 终止在 Manager；每条连接重新校验 UI session、installation/version/hash、
+  route 和 permission，再通过有界 oRPC stream/call 连接对应 plugin；
+- Manager 不 import、hydrate 或执行 plugin bundle，不实现 RSC。
 
 ### 测试
 
 - project/installation/route 越权和 session 重放/过期；
 - plugin upgrade/disable 后 session 失效；
 - render timeout、crash、stream 中断、超大 HTML、坏 status/header；
+- asset traversal、错误 MIME/hash、超大 bundle、cache key/version 隔离；
+- live channel 越权、重连、慢消费者、backpressure、消息上限和 permission/session 失效；
 - SSR plugin 使用 scoped data，无法获得长期 JWT/其他项目数据；
 - 一个 SSR 页面挂死不影响 Manager internal API、event consumer 或其他 plugin UI。
 
 ### 退出条件
 
-- 至少一个真实 plugin 页面完全由 plugin 内 SSR；
-- Web frontend 只依赖稳定 `/plugins/*`，不依赖 plugin endpoint/bundle；
+- 至少一个真实 plugin 页面由 plugin 内 SSR，并通过 content-hashed client bundle 完成交互；
+- Web frontend 只依赖稳定 `/plugins/*`，不依赖 plugin endpoint，也不 import plugin bundle；
 - Plugin Manager 进程未加载任何 plugin React code。
 
 ## 阶段 7：公网 egress 与跨 plugin 调用
@@ -311,7 +324,9 @@ plugin-to-plugin/data capability 实现。
 
 - plugin 可以使用自己的 credential 访问 weather/map/geocoding/vendor API；
 - 为外部请求设置 timeout、response bytes、connection pool 和 DNS policy；
-- 屏蔽 Broker、DB、Device subnet、internal Human API 和 cloud metadata；
+- 屏蔽 Broker、Soulcloud PostgreSQL、Device subnet、internal Human API 和 cloud metadata；
+- 允许 plugin 使用部署系统为它单独提供的私有数据库；私有数据库 schema、migration、backup、
+  retention 和 recovery 由 plugin/部署系统负责，Manager 不读取其业务表；
 - 外部依赖错误只影响 caller plugin/operation。
 
 ### Plugin-to-plugin
@@ -336,7 +351,8 @@ plugin-to-plugin/data capability 实现。
 - retention、索引、DB pool、event batch、SSR stream 和外部 API 做压测；
 - plugin crash/hang/OOM、Manager restart、DB failover、网络中断做混沌测试；
 - 检查 Compose/systemd/Kubernetes 的资源和 restart policy；
-- 验证 plugin 能访问允许的公网/peer，却不能访问 Broker/DB/Device/internal API；
+- 验证 plugin 能访问自己的私有数据库和允许的公网/peer，却不能访问 Broker、Soulcloud
+  PostgreSQL、Device/internal API；
 - 多 Manager、多 plugin instance 做 soak test；
 - 更新运维手册、环境变量、监控告警和故障处理；
 - 根据实测再决定是否需要对象存储、telemetry topic、RSC/hydration 或更多基础设施。
@@ -349,8 +365,16 @@ plugin-to-plugin/data capability 实现。
 - 用户运行时安装 plugin；
 - Plugin Manager 自动管理容器；
 - plugin 直连 Broker、Device 或硬件；
-- 第一版 client-side plugin JavaScript/RSC；
+- React Server Components、Manager 进程内 hydration 或执行 plugin client bundle；
 - 尚无实测需求的对象存储、多 broker 和高频 telemetry 独立管线。
+
+## 产品扩展计划
+
+通用插件阶段完成后，远程 debugger 所需的 durable execution capability、设备控制 lease、
+artifact transfer、client bundle 和实时 UI 按
+`soulinjector-remote-debugger-plugin-plan.md` 的 D0–D9 实施。它们不改变本计划对 Station、
+设备侧 plugin runtime 和通用 workflow/orchestration 的禁止，也不把 SoulInjector 产品 case、
+LLM state 或报告写入 Soulcloud PostgreSQL。
 
 ## 进入下一阶段前必须确认的语义
 

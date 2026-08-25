@@ -1,6 +1,7 @@
 # SoulcloudJS — 当前状态
 
-> 本文档是 [docs/en/index.md](../en/index.md) 的中文翻译，与英文版结构一一对应；如内容冲突，以英文版为准。
+> 通用平台文档是 [docs/en/index.md](../en/index.md) 的中文翻译，如内容冲突以英文版为准。
+> `plugin-*.md` 与 SoulInjector plugin 计划目前为中文优先文档，以中文版本为准。
 
 **日期**: 2026-08-21 · **基线**: 642 个后端测试 + 226 个 web 单元测试全绿，
 `tsc --noEmit` 干净，后端 + 浏览器 E2E 套件通过，CI 运行三个并行 job
@@ -24,6 +25,10 @@ SoulcloudJS 是用 Bun + TypeScript 重写的 Rust Soulcloud IoT 设备管理平
 | [security.md](security.md) | 威胁模型、DDoS 防护、审计历史（3 轮评审） |
 | [testing.md](testing.md) | 测试策略、fixtures、CI |
 | [web.md](web.md) | Web 控制台：技术栈、认证流程、页面、i18n、测试 |
+| [plugin-architecture.md](plugin-architecture.md) | 当前插件目标架构、边界与术语（中文为权威版本） |
+| [plugin-rpc-protocol.md](plugin-rpc-protocol.md) | Plugin Manager 与 plugin 的 oRPC、SSR/client UI 协议 |
+| [plugin-implementation-plan.md](plugin-implementation-plan.md) | 通用插件平台分阶段实施计划 |
+| [soulinjector-remote-debugger-plugin-plan.md](soulinjector-remote-debugger-plugin-plan.md) | SoulInjector 远程 debugger plugin 产品实施计划 |
 
 ## 快速事实
 
