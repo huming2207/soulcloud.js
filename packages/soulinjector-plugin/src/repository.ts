@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { parseTargetConfigYaml, targetConfigHash, type TargetConfig } from "./target-config";
-import { validateArtifact, type DebugArtifactKind, type ValidatedArtifact } from "./artifact";
+import { validateArtifact, validateArtifactMetadata, type DebugArtifactKind, type ValidatedArtifact } from "./artifact";
 
 const schema = "soul_injector_plugin";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -693,6 +693,7 @@ export class SoulInjectorRepository {
   }
 
   async storeArtifactChunk(input: StoreArtifactChunkInput): Promise<StoreArtifactChunkOutput> {
+    if (!UUID.test(input.uploadId)) throw new Error("artifact upload ID must be a UUID");
     if (input.chunk.byteLength === 0 || input.chunk.byteLength > 64 * 1024) throw new Error("artifact chunk must be 1..65536 bytes");
     if (!Number.isSafeInteger(input.totalSize) || input.totalSize <= 0 || input.totalSize > 64 * 1024 * 1024) throw new Error("invalid artifact total size");
     if (!Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset + input.chunk.byteLength > input.totalSize) throw new Error("invalid artifact chunk offset");
@@ -764,25 +765,60 @@ export class SoulInjectorRepository {
         return { uploadId: input.uploadId, receivedBytes: nextReceivedBytes, complete: false, artifactId: null, sha256: null };
       }
       if (nextReceivedBytes !== input.totalSize) throw new Error("final artifact chunk does not complete the declared size");
-      const chunks = await client.query<QueryResultRow>(
-        `SELECT offset_bytes, size, content FROM ${schema}.artifact_upload_chunks WHERE upload_id = $1 ORDER BY offset_bytes ASC`,
-        [input.uploadId],
+      // Keep the final validation bounded in the plugin process. A PostgreSQL
+      // cursor fetches only a small batch of chunk bodies, while the final
+      // bytea is assembled inside PostgreSQL below. This avoids retaining a
+      // second 64 MiB copy in Bun for the largest supported artifact.
+      const cursorName = `soulinjector_artifact_${randomUUID().replaceAll("-", "")}`;
+      await client.query(
+        `DECLARE ${cursorName} NO SCROLL CURSOR FOR
+         SELECT offset_bytes, size, sha256, content
+         FROM ${schema}.artifact_upload_chunks
+         WHERE upload_id = '${input.uploadId}'::uuid
+         ORDER BY offset_bytes ASC`,
       );
-      const parts: Buffer[] = [];
+      const hash = createHash("sha256");
       let expectedOffset = 0;
-      for (const row of chunks.rows) {
-        if (Number(row.offset_bytes) !== expectedOffset || !Buffer.isBuffer(row.content) || Number(row.size) !== row.content.byteLength) throw new Error("artifact upload chunks are not contiguous");
-        parts.push(row.content);
-        expectedOffset += row.content.byteLength;
+      let header: Uint8Array | undefined;
+      try {
+        while (true) {
+          const batch = await client.query<QueryResultRow>(`FETCH FORWARD 8 FROM ${cursorName}`);
+          if (batch.rows.length === 0) break;
+          for (const row of batch.rows) {
+            const content = row.content;
+            if (!Buffer.isBuffer(content) || Number(row.offset_bytes) !== expectedOffset || Number(row.size) !== content.byteLength) {
+              throw new Error("artifact upload chunks are not contiguous");
+            }
+            const chunkHash = createHash("sha256").update(content).digest("hex");
+            if (asString(row.sha256, "artifact chunk hash").trim().toLowerCase() !== chunkHash) {
+              throw new Error("artifact upload chunk hash mismatch");
+            }
+            if (!header) header = content;
+            hash.update(content);
+            expectedOffset += content.byteLength;
+          }
+        }
+      } finally {
+        await client.query(`CLOSE ${cursorName}`).catch(() => undefined);
       }
-      const bytes = Buffer.concat(parts, input.totalSize);
-      const artifact = validateArtifact({ kind: input.kind, filename: input.filename, contentType: input.contentType, bytes });
+      if (expectedOffset !== input.totalSize || !header) throw new Error("final artifact chunks do not match the declared size");
+      const artifact = validateArtifactMetadata({
+        kind: input.kind,
+        filename: input.filename,
+        contentType: input.contentType,
+        header,
+        size: input.totalSize,
+        sha256: hash.digest("hex"),
+      });
       const artifactId = randomUUID();
       await client.query(
         `INSERT INTO ${schema}.debug_artifacts
           (id, installation_id, project_id, case_id, kind, filename, content_type, size, sha256, metadata, content, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [artifactId, input.installationId, input.projectId, input.caseId ?? null, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, artifact.metadata, bytes, input.userId],
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                string_agg(content, ''::bytea ORDER BY offset_bytes), $11
+         FROM ${schema}.artifact_upload_chunks
+         WHERE upload_id = $12`,
+        [artifactId, input.installationId, input.projectId, input.caseId ?? null, artifact.kind, artifact.filename, artifact.contentType, artifact.size, artifact.sha256, artifact.metadata, input.userId, input.uploadId],
       );
       await client.query(
         `UPDATE ${schema}.artifact_uploads

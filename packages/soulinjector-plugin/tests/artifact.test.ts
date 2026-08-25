@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ArtifactValidationError, validateArtifact } from "../src/artifact";
+import { ArtifactValidationError, validateArtifact, validateArtifactMetadata } from "../src/artifact";
 
 describe("SoulInjector artifact envelope", () => {
   test("accepts ELF without copying the input view", () => {
@@ -49,5 +49,24 @@ describe("SoulInjector artifact envelope", () => {
     bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
     new DataView(bytes.buffer).setUint32(20, 2, true);
     expect(() => validateArtifact({ kind: "elf", filename: "firmware.elf", bytes })).toThrow("header version is unsupported");
+  });
+
+  test("validates an ELF header against the full blob size without loading the blob", () => {
+    const header = new Uint8Array(64);
+    header.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
+    const view = new DataView(header.buffer);
+    view.setUint16(18, 243, true);
+    view.setUint32(20, 1, true);
+    view.setBigUint64(24, 0x1000n, true);
+    view.setUint16(52, 64, true);
+    const result = validateArtifactMetadata({
+      kind: "elf",
+      filename: "firmware.elf",
+      header,
+      size: 2 * 1024 * 1024,
+      sha256: "a".repeat(64),
+    });
+    expect(result.size).toBe(2 * 1024 * 1024);
+    expect(result.metadata).toMatchObject({ format: "elf", machineName: "riscv" });
   });
 });

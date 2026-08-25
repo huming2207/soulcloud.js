@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { DebugSessionConflictError, SoulInjectorRepository } from "../src/repository";
 
@@ -35,6 +36,61 @@ describe("SoulInjector private repository migration", () => {
     await expect(new SoulInjectorRepository(fake.pool).migrate()).rejects.toThrow("migration failed");
     expect(fake.queries).toEqual(["BEGIN", expect.stringContaining("CREATE SCHEMA"), "ROLLBACK"]);
     expect(fake.released).toBe(true);
+  });
+});
+
+describe("SoulInjector artifact chunk assembly", () => {
+  test("validates chunks in bounded fetches and assembles the bytea in PostgreSQL", async () => {
+    const queries: string[] = [];
+    let fetchCount = 0;
+    const content = Buffer.from([1, 2, 3]);
+    const digest = createHash("sha256").update(content).digest("hex");
+    const uploadRow = {
+      installation_id: "installation-1",
+      project_id: "project-1",
+      case_id: null,
+      created_by: "user-1",
+      kind: "firmware",
+      filename: "image.bin",
+      content_type: "application/octet-stream",
+      expected_size: 3,
+      received_size: 0,
+      completed_artifact_id: null,
+    };
+    const client = {
+      query: async (query: string) => {
+        queries.push(query);
+        if (query.includes("SELECT * FROM soul_injector_plugin.artifact_uploads")) {
+          return { rows: [uploadRow], rowCount: 1 };
+        }
+        if (query.startsWith("FETCH FORWARD")) {
+          fetchCount += 1;
+          return fetchCount === 1
+            ? { rows: [{ offset_bytes: 0, size: 3, sha256: digest, content }], rowCount: 1 }
+            : { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    } as unknown as PoolClient;
+    const repository = new SoulInjectorRepository({ connect: async () => client } as unknown as Pool);
+
+    await expect(repository.storeArtifactChunk({
+      installationId: "installation-1",
+      projectId: "project-1",
+      userId: "user-1",
+      uploadId: "00000000-0000-4000-8000-000000000001",
+      kind: "firmware",
+      filename: "image.bin",
+      contentType: "application/octet-stream",
+      totalSize: 3,
+      offset: 0,
+      final: true,
+      chunk: new Uint8Array(content),
+    })).resolves.toMatchObject({ complete: true, receivedBytes: 3 });
+    expect(queries.some((query) => query.includes("DECLARE soulinjector_artifact_"))).toBe(true);
+    expect(queries.some((query) => query.includes("string_agg(content, ''::bytea ORDER BY offset_bytes)"))).toBe(true);
+    expect(queries.some((query) => query.includes("Buffer.concat"))).toBe(false);
   });
 });
 

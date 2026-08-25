@@ -13,6 +13,15 @@ export interface ValidatedArtifact {
   metadata: Record<string, string | number>;
 }
 
+export interface ValidatedArtifactMetadata {
+  kind: DebugArtifactKind;
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  metadata: Record<string, string | number>;
+}
+
 export class ArtifactValidationError extends Error {
   /** Stable boundary code consumed by the generic plugin runtime. */
   readonly code = "INVALID_ARTIFACT_INPUT" as const;
@@ -68,7 +77,7 @@ function hex(value: bigint): string {
   return `0x${value.toString(16)}`;
 }
 
-function parseElfHeader(bytes: Uint8Array): ElfHeader {
+function parseElfHeader(bytes: Uint8Array, artifactSize = bytes.byteLength): ElfHeader {
   if (!isElfMagic(bytes)) throw new ArtifactValidationError("ELF artifacts must start with the ELF magic");
   if (bytes.byteLength < 16) throw new ArtifactValidationError("ELF identification header is truncated");
   const elfClass = bytes[4];
@@ -94,10 +103,10 @@ function parseElfHeader(bytes: Uint8Array): ElfHeader {
   const sectionEntrySize = elfClass === ELF_CLASS_32 ? u16(46) : u16(58);
   const sectionHeaderCount = elfClass === ELF_CLASS_32 ? u16(48) : u16(60);
   if (u16(40 + (elfClass === ELF_CLASS_32 ? 0 : 12)) < headerBytes) throw new ArtifactValidationError("ELF header size is invalid");
-  if (programHeaderCount > 0 && (entrySize === 0 || !elfTableFits(programHeaderOffset, entrySize, programHeaderCount, bytes.byteLength))) {
+  if (programHeaderCount > 0 && (entrySize === 0 || !elfTableFits(programHeaderOffset, entrySize, programHeaderCount, artifactSize))) {
     throw new ArtifactValidationError("ELF program header table is outside the artifact");
   }
-  if (sectionHeaderCount > 0 && (sectionEntrySize === 0 || !elfTableFits(sectionHeaderOffset, sectionEntrySize, sectionHeaderCount, bytes.byteLength))) {
+  if (sectionHeaderCount > 0 && (sectionEntrySize === 0 || !elfTableFits(sectionHeaderOffset, sectionEntrySize, sectionHeaderCount, artifactSize))) {
     throw new ArtifactValidationError("ELF section header table is outside the artifact");
   }
   return {
@@ -113,23 +122,24 @@ function parseElfHeader(bytes: Uint8Array): ElfHeader {
   };
 }
 
-function elfTableFits(offset: bigint, entrySize: number, count: number, length: number): boolean {
-  if (offset < 0n) return false;
-  return offset + BigInt(entrySize) * BigInt(count) <= BigInt(length);
-}
-
-/** Validate the first-release artifact envelope without copying its bytes. */
-export function validateArtifact(input: {
+/**
+ * Validate metadata when the complete blob stays in PostgreSQL. `header` only
+ * needs to contain the ELF header; table bounds are checked against `size`.
+ */
+export function validateArtifactMetadata(input: {
   kind: DebugArtifactKind;
   filename: string;
   contentType?: string;
-  bytes: Uint8Array;
-}): ValidatedArtifact {
-  if (input.bytes.byteLength === 0) throw new ArtifactValidationError("artifact must not be empty");
-  if (input.bytes.byteLength > MAX_ARTIFACT_BYTES) throw new ArtifactValidationError(`artifact exceeds ${MAX_ARTIFACT_BYTES} bytes`);
+  header: Uint8Array;
+  size: number;
+  sha256: string;
+}): ValidatedArtifactMetadata {
+  if (!Number.isSafeInteger(input.size) || input.size <= 0) throw new ArtifactValidationError("artifact must not be empty");
+  if (input.size > MAX_ARTIFACT_BYTES) throw new ArtifactValidationError(`artifact exceeds ${MAX_ARTIFACT_BYTES} bytes`);
+  if (!/^[0-9a-f]{64}$/i.test(input.sha256)) throw new ArtifactValidationError("artifact SHA-256 is invalid");
   const metadata = input.kind === "elf"
     ? (() => {
-        const header = parseElfHeader(input.bytes);
+        const header = parseElfHeader(input.header, input.size);
         return {
           format: "elf",
           elfClass: header.className,
@@ -148,6 +158,31 @@ export function validateArtifact(input: {
   const filename = validateFilename(input.filename);
   const contentType = input.contentType?.trim() || (input.kind === "elf" ? "application/x-elf" : "application/octet-stream");
   if (contentType.length > 128 || /[\r\n]/.test(contentType)) throw new ArtifactValidationError("invalid artifact content type");
+  return { kind: input.kind, filename, contentType, size: input.size, sha256: input.sha256.toLowerCase(), metadata };
+}
+
+function elfTableFits(offset: bigint, entrySize: number, count: number, length: number): boolean {
+  if (offset < 0n) return false;
+  return offset + BigInt(entrySize) * BigInt(count) <= BigInt(length);
+}
+
+/** Validate the first-release artifact envelope without copying its bytes. */
+export function validateArtifact(input: {
+  kind: DebugArtifactKind;
+  filename: string;
+  contentType?: string;
+  bytes: Uint8Array;
+}): ValidatedArtifact {
   const sha256 = createHash("sha256").update(input.bytes).digest("hex");
-  return { kind: input.kind, filename, contentType, bytes: input.bytes, size: input.bytes.byteLength, sha256, metadata };
+  return {
+    ...validateArtifactMetadata({
+      kind: input.kind,
+      filename: input.filename,
+      contentType: input.contentType,
+      header: input.bytes,
+      size: input.bytes.byteLength,
+      sha256,
+    }),
+    bytes: input.bytes,
+  };
 }
