@@ -258,6 +258,13 @@ interface ActiveOperation {
   pluginCallDepth?: number;
 }
 
+interface CachedExecutionCapability {
+  installationId: string;
+  deviceId: string;
+  token: string;
+  expiresAt: number;
+}
+
 interface PluginCircuit {
   failures: number;
   openedAt: number;
@@ -274,6 +281,15 @@ export class PluginManager {
   private reverseInFlight = 0;
   private readonly reverseInFlightByPlugin = new Map<string, number>();
   private readonly reverseInFlightByInstallation = new Map<string, number>();
+  /**
+   * Raw execution tokens are intentionally process-local.  The database only
+   * stores their hashes; this cache lets a device event continue an execution
+   * that was started by this Manager without widening the persisted secret
+   * surface.  A Manager restart safely drops the cache and therefore drops
+   * event-side device capabilities until explicit recovery is implemented.
+   */
+  private readonly executionTokens = new Map<string, CachedExecutionCapability>();
+  private readonly executionByDevice = new Map<string, string>();
   private readonly circuits = new Map<string, PluginCircuit>();
   private eventTimer: ReturnType<typeof setInterval> | null = null;
   private eventPollRunning: Promise<void> | null = null;
@@ -336,6 +352,7 @@ export class PluginManager {
     let leases = 0;
     let uiGrants = 0;
     try {
+      this.pruneExecutionCapabilities();
       if (this.options.prisma) {
         const result = await expireDebugExecutions(this.options.prisma, Math.min(batchSize, 10_000));
         executions = result.executions;
@@ -404,6 +421,7 @@ export class PluginManager {
       leaseMs: input.leaseMs,
       ttlMs: input.ttlMs,
     });
+    this.cacheExecutionCapability(execution, executionToken);
     return { execution, executionToken };
   }
 
@@ -531,7 +549,10 @@ export class PluginManager {
           timeoutMs: Math.min(input.timeoutMs ?? 30_000, 5_000),
         });
       }
-      if (started) await completeDebugExecution(this.options.prisma, started.execution.id, hashCapabilityToken(started.executionToken), "failed").catch(() => undefined);
+      if (started) {
+        await completeDebugExecution(this.options.prisma, started.execution.id, hashCapabilityToken(started.executionToken), "failed").catch(() => undefined);
+        this.forgetExecutionCapability(started.execution.id);
+      }
       throw error;
     } finally {
       if (operationId) this.finishOperation(operationId);
@@ -607,12 +628,16 @@ export class PluginManager {
 
   async releaseDebugExecution(executionId: string, executionToken: string): Promise<DebugExecutionRecord> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
-    return releaseDebugExecution(this.options.prisma, executionId, hashCapabilityToken(executionToken));
+    const result = await releaseDebugExecution(this.options.prisma, executionId, hashCapabilityToken(executionToken));
+    this.forgetExecutionDeviceScope(executionId);
+    return result;
   }
 
   async completeDebugExecution(executionId: string, executionToken: string, state: "completed" | "failed"): Promise<DebugExecutionRecord> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
-    return completeDebugExecution(this.options.prisma, executionId, hashCapabilityToken(executionToken), state);
+    const result = await completeDebugExecution(this.options.prisma, executionId, hashCapabilityToken(executionToken), state);
+    this.forgetExecutionCapability(executionId);
+    return result;
   }
 
   async setInstallationState(installationId: string, state: "enabled" | "disabled"): Promise<void> {
@@ -1427,6 +1452,7 @@ export class PluginManager {
         reverseSettledWaiters: new Set(),
       });
       activeOperationId = operationId;
+      const execution = await this.executionForEvent(event);
       const result = await connection.request("plugin.handleEvent", {
         operationId,
         operationToken,
@@ -1451,6 +1477,7 @@ export class PluginManager {
           profileId: event.profile_id,
           profileVersion: event.profile_version,
         },
+        ...(execution ? { execution } : {}),
       }, this.options.eventTimeoutMs ?? 30_000);
       try {
         assertRpcValueBudget(result, this.valueBudget);
@@ -1550,6 +1577,73 @@ export class PluginManager {
     this.reverseInFlightByPlugin.set(operation.pluginId, pluginInFlight + 1);
     this.reverseInFlightByInstallation.set(operation.installationId, installationInFlight + 1);
     return operation;
+  }
+
+  private cacheExecutionCapability(execution: DebugExecutionRecord, token: string): void {
+    const expiresAt = Date.parse(execution.expiresAt);
+    if (!Number.isFinite(expiresAt)) return;
+    const previous = this.executionByDevice.get(executionScopeKey(execution.installationId, execution.deviceId));
+    if (previous && previous !== execution.id) this.executionTokens.delete(previous);
+    this.executionTokens.set(execution.id, {
+      installationId: execution.installationId,
+      deviceId: execution.deviceId,
+      token,
+      expiresAt,
+    });
+    this.executionByDevice.set(executionScopeKey(execution.installationId, execution.deviceId), execution.id);
+  }
+
+  private forgetExecutionDeviceScope(executionId: string): void {
+    const cached = this.executionTokens.get(executionId);
+    if (!cached) return;
+    const key = executionScopeKey(cached.installationId, cached.deviceId);
+    if (this.executionByDevice.get(key) === executionId) this.executionByDevice.delete(key);
+  }
+
+  private forgetExecutionCapability(executionId: string): void {
+    this.forgetExecutionDeviceScope(executionId);
+    this.executionTokens.delete(executionId);
+  }
+
+  private pruneExecutionCapabilities(): void {
+    const now = Date.now();
+    for (const [executionId, cached] of this.executionTokens) {
+      if (cached.expiresAt <= now) this.forgetExecutionCapability(executionId);
+    }
+  }
+
+  /**
+   * Attach a capability only when the event belongs to the currently leased
+   * execution for the same installation/device.  The in-memory token is
+   * checked against the database hash and lifecycle state on every event, so
+   * disabling, rebinding, expiry, or lease release immediately removes the
+   * device-command capability even if a queued event is still being drained.
+   */
+  private async executionForEvent(event: LeasedPluginEvent): Promise<{ executionId: string; executionToken: string } | null> {
+    if (!this.options.prisma) return null;
+    const executionId = this.executionByDevice.get(executionScopeKey(event.installation_id, event.device_id));
+    if (!executionId) return null;
+    const cached = this.executionTokens.get(executionId);
+    if (!cached || cached.expiresAt <= Date.now()) {
+      this.forgetExecutionCapability(executionId);
+      return null;
+    }
+    const execution = await getDebugExecutionCapability(this.options.prisma, executionId, hashCapabilityToken(cached.token));
+    if (
+      !execution ||
+      execution.state !== "active" ||
+      !execution.deviceLeaseExpiresAt ||
+      Date.parse(execution.deviceLeaseExpiresAt) <= Date.now() ||
+      execution.installationId !== event.installation_id ||
+      execution.deviceId !== event.device_id ||
+      execution.pluginId !== event.plugin_id ||
+      execution.pluginVersion !== event.plugin_version ||
+      execution.manifestHash !== event.manifest_hash.trim()
+    ) {
+      this.forgetExecutionCapability(executionId);
+      return null;
+    }
+    return { executionId, executionToken: cached.token };
   }
 
   private registerOperation(operationId: string, operation: ActiveOperation): void {
@@ -1746,7 +1840,9 @@ export class PluginManager {
     const operation = this.acquireOperation(input, connectionId);
     try {
       const { execution, tokenHash } = await this.executionForOperation(input, operation, "execution.release");
-      return releaseDebugExecution(this.options.prisma!, execution.id, tokenHash);
+      const result = await releaseDebugExecution(this.options.prisma!, execution.id, tokenHash);
+      this.forgetExecutionDeviceScope(execution.id);
+      return result;
     } finally {
       this.releaseOperation(operation);
     }
@@ -1757,7 +1853,9 @@ export class PluginManager {
     const operation = this.acquireOperation(input, connectionId);
     try {
       const { execution, tokenHash } = await this.executionForOperation(input, operation, "execution.complete");
-      return completeDebugExecution(this.options.prisma!, execution.id, tokenHash, input.state);
+      const result = await completeDebugExecution(this.options.prisma!, execution.id, tokenHash, input.state);
+      this.forgetExecutionCapability(execution.id);
+      return result;
     } finally {
       this.releaseOperation(operation);
     }
@@ -1952,6 +2050,8 @@ export class PluginManager {
     this.timers.clear();
     if (this.eventPollRunning) await this.eventPollRunning;
     if (this.maintenanceRunning) await this.maintenanceRunning;
+    this.executionTokens.clear();
+    this.executionByDevice.clear();
     for (const connection of this.connections.values()) connection.close();
     this.connections.clear();
   }
@@ -2011,6 +2111,10 @@ function hashOperationToken(token: string): Buffer {
 
 function hashCapabilityToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+function executionScopeKey(installationId: string, deviceId: string): string {
+  return `${installationId}\u0000${deviceId}`;
 }
 
 function decrementCounter(counters: Map<string, number>, key: string): void {

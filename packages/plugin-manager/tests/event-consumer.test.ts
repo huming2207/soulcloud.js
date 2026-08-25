@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { encodeDeviceEvent, type LeasedPluginEvent } from "@soulcloud/core";
 import type { PluginManifest } from "@soulcloud/plugin-sdk";
 import type { PluginConnection } from "../src/connection";
@@ -99,6 +100,103 @@ describe("plugin event consumer", () => {
 
     expect(consumedAttempt).toBe(true);
     expect(internals.circuits.has(`${event.plugin_id}\u0000${event.installation_id}`)).toBe(false);
+  });
+
+  test("passes the current execution capability to events for the leased device", async () => {
+    const event = leasedEvent("execution-event");
+    event.payload = Buffer.from(encodeDeviceEvent({
+      id: Uint8Array.from({ length: 16 }, (_, index) => index),
+      seq: 1n,
+      kind: event.kind,
+      schema: event.schema,
+      data: { value: 1 },
+    }));
+    const executionId = randomUUID();
+    const executionToken = `${randomUUID()}${randomUUID()}`;
+    const captured: { execution?: unknown } = {};
+    const store: PluginEventStore = {
+      lease: async () => [],
+      complete: async () => true,
+      completeWithUpdates: async () => true,
+      release: async () => true,
+    };
+    const profile = {
+      id: event.profile_id,
+      version: event.profile_version,
+      manufacturer: "Soulcloud",
+      model: "fixture",
+      capabilities: [],
+      entities: [],
+    };
+    const manifest: PluginManifest = {
+      id: event.plugin_id,
+      version: event.plugin_version,
+      apiVersion: 1,
+      profiles: [profile],
+      actions: [],
+      events: [{ kind: event.kind, schemaVersion: event.schema }],
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "x".repeat(32),
+      maxFrameBytes: 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024,
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+      eventStore: store,
+      prisma: { $queryRaw: async () => [{
+        id: executionId,
+        installation_id: event.installation_id,
+        device_id: event.device_id,
+        initiating_user_id: randomUUID(),
+        plugin_id: event.plugin_id,
+        plugin_version: event.plugin_version,
+        manifest_hash: event.manifest_hash,
+        allowed_capabilities: ["device.enqueue_command"],
+        state: "active",
+        device_lease_expires_at: new Date(Date.now() + 60_000),
+        expires_at: new Date(Date.now() + 300_000),
+        created_at: new Date(),
+        updated_at: new Date(),
+        finished_at: null,
+      }] } as never,
+    });
+    const internals = manager as unknown as {
+      catalog: Map<string, { pluginId: string; pluginVersion: string; manifestHash: string; manifest: PluginManifest; connected: boolean }>;
+      connections: Map<string, PluginConnection>;
+      executionTokens: Map<string, { installationId: string; deviceId: string; token: string; expiresAt: number }>;
+      executionByDevice: Map<string, string>;
+      dispatchEvent(value: LeasedPluginEvent): Promise<void>;
+    };
+    internals.catalog.set(`${event.plugin_id}@${event.plugin_version}`, {
+      pluginId: event.plugin_id,
+      pluginVersion: event.plugin_version,
+      manifestHash: event.manifest_hash,
+      manifest,
+      connected: true,
+    });
+    internals.executionTokens.set(executionId, {
+      installationId: event.installation_id,
+      deviceId: event.device_id,
+      token: executionToken,
+      expiresAt: Date.now() + 300_000,
+    });
+    internals.executionByDevice.set(`${event.installation_id}\u0000${event.device_id}`, executionId);
+    internals.connections.set(event.plugin_id, {
+      id: "connection",
+      isOpen: true,
+      manifest: { pluginVersion: event.plugin_version, manifestHash: event.manifest_hash },
+      request: async (_method: string, input: { execution?: unknown }) => {
+        captured.execution = input.execution;
+        return { updates: [], logs: [] };
+      },
+    } as unknown as PluginConnection);
+
+    await internals.dispatchEvent(event);
+
+    expect(captured.execution).toEqual({ executionId, executionToken });
   });
 
   test("renews the current and pending events while draining a leased batch", async () => {
