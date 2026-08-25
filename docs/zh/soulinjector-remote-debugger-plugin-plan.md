@@ -98,6 +98,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - SSR debugger 页面已暴露 plugin 私有 report 草稿：可按 project-scoped case 创建报告、追加有界
   revision，并将 draft 定稿；报告正文和 revision 只写入 plugin 私有 PostgreSQL，Manager 只负责
   当前 UI session 的鉴权与转发。
+- 选中带 execution 的 debugger session 时，页面会通过受 UI session 和 installation/plugin 快照
+  保护的 command-status endpoint 低频轮询 command timeline；只返回 batch、状态、结果码和时间等
+  元数据，不返回设备 command payload，也不把这条临时轮询当作最终 live WebSocket 协议。
 - `DebugExecution` 已保存平台侧长时 capability：不可变 plugin/version/manifest snapshot、
   initiating user、allowed capability names、token hash、active/paused/cancelling/terminal 状态、
   device lease 和 expiry；同一设备只有一个 active/cancelling execution，lease/expiry 使用数据库
@@ -689,8 +692,8 @@ MQTT/oRPC 热路径。
    摘要、installation-scoped observation timeline、target 配置页面和基于 plugin-origin session
    的人工 action 控件；session 控制闭环和实时状态 UI 仍待实现**；
 3. 人工执行 identify/halt/read/reset/capture/close；
-4. command timeline、observation、错误与报告草稿；**报告草稿/修订/定稿基础已完成，command
-   timeline 与错误视图仍待补齐**；
+4. command timeline、observation、错误与报告草稿；**报告草稿/修订/定稿基础和受限 command
+   timeline 已完成，错误视图仍待补齐**；
 5. overseas guided view 和国内工程师 take-over；
 6. 验证两个用户同时操作时只有 controller 能改变 target。
 
