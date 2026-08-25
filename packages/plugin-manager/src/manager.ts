@@ -739,6 +739,9 @@ export class PluginManager {
     if (input.executionId !== undefined && !UUID.test(input.executionId)) {
       throw publicError("debug execution ID must be a UUID", 400, "invalid_request");
     }
+    if (input.executionId !== undefined && !UUID.test(input.userId)) {
+      throw publicError("debug execution user ID must be a UUID", 400, "invalid_request");
+    }
     const installation = await this.options.prisma.pluginInstallation.findUnique({
       where: { id: input.installationId },
       select: { id: true, projectId: true, pluginId: true, pluginVersion: true, manifestHash: true, state: true },
@@ -852,6 +855,7 @@ export class PluginManager {
             WHERE id = ${input.executionId}::uuid
               AND installation_id = ${installation.id}::uuid
               AND device_id = ${input.deviceId}::uuid
+              AND initiating_user_id = ${input.userId}::uuid
               AND state = 'active'
               AND device_lease_expires_at > CURRENT_TIMESTAMP
               AND expires_at > CURRENT_TIMESTAMP
