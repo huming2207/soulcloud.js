@@ -493,22 +493,25 @@ describe("GET /v1/ws/ota", () => {
     const frameCount = () => client.messages.filter(isOtaFrame).length;
     const before = frameCount();
 
-    // a) two notifies inside the debounce window (25ms) -> one merged frame
+    // a) two notifies committed together inside the debounce window (25ms)
+    // -> one merged frame. Committing them together avoids making the test
+    // depend on a 10ms PostgreSQL LISTEN delivery race.
     // (delta pushes fire on fingerprint changes: the target is terminal by
-    // now, so flip the device's reported firmware hash twice)
+    // now, so change the device's reported firmware hash before the burst.)
     await prisma.deviceFirmwareState.upsert({
       where: { deviceId },
       update: { fwHash: HASH_A, reportedAt: new Date() },
       create: { deviceId, fwHash: HASH_A },
     });
-    await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
-    await Bun.sleep(10);
     await prisma.deviceFirmwareState.upsert({
       where: { deviceId },
       update: { fwHash: HASH_B, reportedAt: new Date() },
       create: { deviceId, fwHash: HASH_B },
     });
-    await prisma.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+      await tx.$executeRaw`SELECT pg_notify(${OTA_NOTIFY_CHANNEL}, ${jobId})`;
+    });
     await waitForFrameCount(client, before + 1);
     // ...and no second frame for the burst
     await Bun.sleep(150);
