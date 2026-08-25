@@ -316,7 +316,10 @@ debug.start
 闭环的 action 伪装成可用能力。烧写功能继续复用或演进现有 erase/program/verify 能力，不因为
 debugger plugin 建第二套下行协议。所有 command 都必须：
 
-- 带 schema version、幂等 command ID 和 execution/session correlation；
+- 带幂等 command ID 和 execution/session correlation；manifest action 的 `wire.schemaVersion`
+  目前由 Manager 在 encoder/reverse command 边界校验，但现有通用 `DeviceCommand` MessagePack
+  envelope 没有独立的 schema-version 字段。设备 handler 开始前必须在 D0 冻结“沿用版本化 command
+  名称”还是扩展通用 wire 字段，不能把当前 manifest 字段误认为已经传到了设备；
 - 指定本地 timeout 和有界输入/输出；
 - 支持取消点；无法立即取消的硬件阶段明确报告 `cancelling`；
 - 失败后释放/恢复 SWDIO、reset、UART 和 target 运行状态到已定义状态；
