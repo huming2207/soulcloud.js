@@ -306,11 +306,13 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
     storeArtifactChunk: async (input) => repository.storeArtifactChunk({ ...input, caseId: input.caseId }),
     render: {
       debugger: async (input) => {
-        const saved = await repository.getLatestTargetConfig(input.installationId);
-        const cases = repository.listDebugCases ? await repository.listDebugCases(input.projectId, 64) : [];
-        const sessions = repository.listDebugSessions ? await repository.listDebugSessions(input.installationId, input.projectId, 64) : [];
-        const targetConfigs = repository.listTargetConfigs ? await repository.listTargetConfigs(input.installationId, input.projectId) : [];
-        const artifacts = repository.listArtifacts ? await repository.listArtifacts(input.installationId, input.projectId) : [];
+        const [saved, cases, sessions, targetConfigs, artifacts] = await Promise.all([
+          repository.getLatestTargetConfig(input.installationId),
+          repository.listDebugCases ? repository.listDebugCases(input.projectId, 64) : Promise.resolve([] as DebugCaseRecord[]),
+          repository.listDebugSessions ? repository.listDebugSessions(input.installationId, input.projectId, 64) : Promise.resolve([] as DebugSessionRecord[]),
+          repository.listTargetConfigs ? repository.listTargetConfigs(input.installationId, input.projectId) : Promise.resolve([] as TargetConfigSummary[]),
+          repository.listArtifacts ? repository.listArtifacts(input.installationId, input.projectId) : Promise.resolve([] as DebugArtifactRecord[]),
+        ]);
         const selectedId = typeof input.params.session_id === "string" && isUuid(input.params.session_id) ? input.params.session_id : null;
         const selectedSession = selectedId && repository.getDebugSession
           ? await repository.getDebugSession(selectedId, input.installationId, input.projectId)
