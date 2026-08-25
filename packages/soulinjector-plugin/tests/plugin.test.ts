@@ -35,6 +35,14 @@ describe("SoulInjector plugin", () => {
     expect(validated.manifest.actions.find((action) => action.id === "debug.read_memory")?.requiresHumanApproval).not.toBe(true);
   });
 
+  test("keeps every destructive debugger action behind per-action human approval", () => {
+    const plugin = definePlugin(createSoulInjectorPlugin(store()));
+    const readOnly = new Set(["debug.identify", "debug.read_registers", "debug.read_memory"]);
+    for (const action of plugin.manifest.actions) {
+      expect(action.requiresHumanApproval ?? false).toBe(!readOnly.has(action.id));
+    }
+  });
+
   test("encodes bounded high-level device commands", async () => {
     const plugin = createSoulInjectorPlugin(store());
     const args = await plugin.encodeAction!["debug.read_memory"]!({ targetConfigRevision: 3, targetId: "fixture", address: 4096, length: 32 }, { operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, deviceId: saved.installationId, userId: saved.createdBy });
