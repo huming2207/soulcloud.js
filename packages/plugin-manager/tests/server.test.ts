@@ -31,6 +31,7 @@ let renderedParams: unknown;
 let submittedAction: unknown;
 let actionTimeout: number | undefined;
 let uiDeviceActionInput: unknown;
+let uiActionError: unknown;
 let sessionStartInput: unknown;
 let uiSessionStartInput: unknown;
 let uploadedArtifactInput: { input: unknown; bytes: Uint8Array } | undefined;
@@ -51,6 +52,7 @@ const manager = {
     return { batchId: randomUUID(), deviceCount: 1 };
   },
   encodeActionFromUiSession: async (session: unknown, input: unknown) => {
+    if (uiActionError) throw uiActionError;
     uiDeviceActionInput = { session, input };
     return { batchId: randomUUID(), deviceCount: 1 };
   },
@@ -207,6 +209,21 @@ describe("plugin SSR route", () => {
       session: { installationId, projectId },
       input: { deviceId, executionId, actionId: "debug.identify", actionInput: { targetConfigRevision: 3, targetId: "fixture" } },
     });
+  });
+
+  test("preserves an explicit public error code from a UI action", async () => {
+    uiActionError = Object.assign(new Error("project membership is no longer valid"), { status: 403, publicCode: "forbidden" });
+    try {
+      const response = await fetch(`${server.url}plugins/${installationId}/actions/debug.identify`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ deviceId: randomUUID(), input: { targetConfigRevision: 3, targetId: "fixture" } }),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: "forbidden" });
+    } finally {
+      uiActionError = undefined;
+    }
   });
 
   test("serves a bounded artifact chunk only to an authorized internal caller", async () => {
