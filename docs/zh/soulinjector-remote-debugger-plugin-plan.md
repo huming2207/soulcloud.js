@@ -83,6 +83,8 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   已提交后丢失，Manager 会通过有界、仅 Manager 可调用的 `debugger.abortSession` 按 session ID
   或唯一 execution scope 将该私有 session 标为 failed；该清理不发送设备 command，也不替代人工
   批准。相同设备已有 active execution 时，Human API 得到明确的 409 conflict，而不是内部错误。
+  Human API 也提供只读的 `GET .../debugger/executions/:executionId` 状态查询；它先执行项目权限
+  检查，再由 Manager 重新校验 installation/project scope，只返回 execution 摘要，不返回 token。
   pause、
   cancel、take-over 和 plugin 重启后的 capability 恢复仍未完成。
 - oRPC reverse contract 已提供 `context.executions.get`、`renewLease`、`release`、`complete`，以及
