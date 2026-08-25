@@ -210,6 +210,9 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
 - Compose 将 core network、plugin-rpc network 和 SoulInjector plugin-private database network
   分开；plugin 不加入 core network，不能按服务名直连 Soulcloud PostgreSQL、Human API 或
   Device Broker。公网/peer-plugin egress 仍需生产 NetworkPolicy 复核。
+- Plugin Manager 的跨插件调用仍统一经过 scoped reverse RPC；目标 peer plugin 暂时不可用或其
+  manifest snapshot 不可用时，事件消费会作为 Manager dependency deferral 重试，不把源 plugin
+  installation 错误地计入 circuit breaker 或消耗 delivery attempt。
 - 未完成的分块上传由 plugin 私有 runtime 按批次、带索引地清理；这只清理临时 upload/chunk
   行，不替产品决定完整 artifact 的 retention/deletion 策略。
 
