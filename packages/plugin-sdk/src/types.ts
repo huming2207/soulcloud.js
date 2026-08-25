@@ -194,6 +194,20 @@ export interface TargetConfigOutput {
   targetCount: number;
 }
 export type TargetConfigHandler = (input: TargetConfigInput, context: { signal: AbortSignal }) => Promise<TargetConfigOutput>;
+export interface TargetConfigSummary {
+  configId: string;
+  revision: number;
+  sha256: string;
+  targetCount: number;
+  createdAt: string;
+}
+export interface TargetConfigListInput {
+  operationId: string;
+  installationId: string;
+  projectId: string;
+  userId: string;
+}
+export type TargetConfigListHandler = (input: TargetConfigListInput, context: { signal: AbortSignal }) => Promise<TargetConfigSummary[]>;
 export interface ArtifactChunkInput {
   operationId: string;
   installationId: string;
@@ -241,6 +255,7 @@ export interface PluginDefinition {
   assets?: Record<string, UiAssetRenderer>;
   /** Optional product-specific configuration hook used by the SoulInjector plugin. */
   configureTarget?: TargetConfigHandler;
+  listTargetConfigs?: TargetConfigListHandler;
   storeArtifactChunk?: ArtifactChunkHandler;
   /** Explicitly named procedures callable through Plugin Manager scope checks. */
   handleCall?: Record<string, PluginCallHandler>;

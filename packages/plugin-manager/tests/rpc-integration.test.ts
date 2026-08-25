@@ -59,6 +59,7 @@ beforeAll(async () => {
       "/main/app.f75c6596507878933aa2bc17dfd9a8689ad0da4f85427ba457666ae5917fa631.js": async () => ({ body: Uint8Array.of(99, 111, 110, 115, 116), contentType: "text/javascript; charset=utf-8", cache: "no-store" }),
     },
     configureTarget: async () => ({ configId: randomUUID(), revision: 1, sha256: "a".repeat(64), targetCount: 1 }),
+    listTargetConfigs: async () => [{ configId: randomUUID(), revision: 1, sha256: "a".repeat(64), targetCount: 1, createdAt: new Date(0).toISOString() }],
     storeArtifactChunk: async (input) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? randomUUID() : null, sha256: input.final ? "b".repeat(64) : null }),
   }), { hostname: "127.0.0.1", port: 0, authToken });
 
@@ -171,6 +172,18 @@ describe("plugin oRPC WebSocket transport", () => {
       yaml: "version: 1\ntargets:\n  - id: fixture\n    displayName: Fixture\n    architecture: cortex-m\n    chip: fixture\n    transport: swd\n    requiredPrimitives: [identify]",
     }, 1_000);
     expect(output).toMatchObject({ revision: 1, targetCount: 1 });
+  });
+
+  test("routes target configuration revision metadata through the typed plugin procedure", async () => {
+    const output = await connection.request("debugger.listTargetConfigs", {
+      operationId: randomUUID(),
+      operationToken: `${randomUUID()}${randomUUID()}`,
+      installationId: randomUUID(),
+      projectId: randomUUID(),
+      userId: randomUUID(),
+    }, 1_000) as Array<{ revision: number; targetCount: number }>;
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({ revision: 1, targetCount: 1 });
   });
 
   test("keeps artifact chunks binary and bounded", async () => {

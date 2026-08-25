@@ -157,6 +157,24 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
         return result.value;
       } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
     })
+    .get("/v1/plugin-installations/:id/debugger/target-configs", async ({ request, params, set }) => {
+      const user = await authenticateRequest(prisma, jwt, request);
+      if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }
+      const installation = await prisma.pluginInstallation.findUnique({ where: { id: params.id }, select: { projectId: true } });
+      if (!installation) { set.status = 404; return { error: "not_found", message: "installation not found" }; }
+      if (!(await userCanAccessProject(prisma, user.user.id, installation.projectId))) { set.status = 403; return { error: "forbidden", message: "project access required" }; }
+      if (!options) { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is not configured" }; }
+      try {
+        const result = await callManager(options, "/internal/plugins/debugger/target-configs", {
+          installationId: params.id,
+          projectId: installation.projectId,
+          userId: user.user.id,
+          timeoutMs: pluginManagerOperationTimeoutMs(options.requestTimeoutMs),
+        });
+        set.status = result.status;
+        return result.value;
+      } catch { set.status = 503; return { error: "plugin_manager_unavailable", message: "plugin manager is unavailable" }; }
+    })
     .post("/v1/plugin-installations/:id/debugger/artifacts", async ({ request, params, set }) => {
       const user = await authenticateRequest(prisma, jwt, request);
       if (!user) { set.status = 401; return { error: "unauthorized", message: "authentication required" }; }

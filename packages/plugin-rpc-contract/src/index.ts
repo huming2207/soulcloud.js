@@ -73,6 +73,8 @@ export const uiAssetInput = operation.extend({ requestId: z.string().min(1).max(
 export const uiAssetOutput = z.object({ body: z.instanceof(Blob).refine((value) => value.size > 0 && value.size <= 256 * 1024, "UI asset is empty or too large"), contentType: z.string().min(1).max(128).refine((value) => !/[\r\n]/.test(value), "invalid content type"), cache: z.literal("no-store").or(z.object({ maxAgeSeconds: z.number().int().nonnegative().max(86_400) })).optional() }).strict();
 export const configureTargetInput = operation.extend({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), yaml: z.string().min(1).max(65_536) }).strict();
 export const configureTargetOutput = z.object({ configId: z.string().uuid(), revision: z.number().int().positive(), sha256: z.string().regex(/^[0-9a-f]{64}$/), targetCount: z.number().int().positive().max(64) }).strict();
+export const listTargetConfigsInput = operation.extend({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid() }).strict();
+export const listTargetConfigsOutput = z.array(z.object({ configId: z.string().uuid(), revision: z.number().int().positive(), sha256: z.string().regex(/^[0-9a-f]{64}$/), targetCount: z.number().int().positive().max(64), createdAt: z.string().datetime({ offset: true }) }).strict()).max(64);
 export const artifactChunkInput = operation.extend({ installationId: z.string().uuid(), projectId: z.string().uuid(), userId: z.string().uuid(), uploadId: z.string().uuid(), kind: z.enum(["elf", "firmware"]), filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), contentType: z.string().min(1).max(128), totalSize: z.number().int().positive().max(64 * 1024 * 1024), offset: z.number().int().nonnegative().max(64 * 1024 * 1024), final: z.boolean(), chunk: z.instanceof(Blob).refine((value) => value.size > 0 && value.size <= 64 * 1024, "artifact chunk must be 1..65536 bytes") }).strict().refine((value) => value.final || value.offset + value.chunk.size < value.totalSize, "a non-final artifact chunk must leave bytes for a final chunk");
 export const artifactChunkOutput = z.object({ uploadId: z.string().uuid(), receivedBytes: z.number().int().positive().max(64 * 1024 * 1024), complete: z.boolean(), artifactId: z.string().uuid().nullable(), sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable() }).strict();
 
@@ -118,6 +120,7 @@ export const managerToPluginContract = {
   },
   debugger: {
     configureTarget: procedure(configureTargetInput, configureTargetOutput, ["debugger", "configureTarget"]),
+    listTargetConfigs: procedure(listTargetConfigsInput, listTargetConfigsOutput, ["debugger", "listTargetConfigs"]),
     storeArtifactChunk: procedure(artifactChunkInput, artifactChunkOutput, ["debugger", "storeArtifactChunk"]),
   },
 };
@@ -146,6 +149,8 @@ export type UiAssetInput = z.infer<typeof uiAssetInput>;
 export type UiAssetOutput = z.infer<typeof uiAssetOutput>;
 export type ConfigureTargetInput = z.infer<typeof configureTargetInput>;
 export type ConfigureTargetOutput = z.infer<typeof configureTargetOutput>;
+export type ListTargetConfigsInput = z.infer<typeof listTargetConfigsInput>;
+export type ListTargetConfigsOutput = z.infer<typeof listTargetConfigsOutput>;
 export type ArtifactChunkInput = z.infer<typeof artifactChunkInput>;
 export type ArtifactChunkOutput = z.infer<typeof artifactChunkOutput>;
 export type UiDataInput = z.infer<typeof uiDataInput>;

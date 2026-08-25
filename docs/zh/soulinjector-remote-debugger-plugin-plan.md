@@ -44,7 +44,7 @@ Soulcloud Device，并用一个独立云端 plugin 提供两类产品能力：
   在代码中写死；
 - ELF/firmware 的大小、文件名、ELF magic、SHA-256 校验，以及 64 KiB 分块上传、私有
   PostgreSQL `bytea` 最终存储；不使用 S3/object storage；
-- `debugger.configureTarget`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
+- `debugger.configureTarget`、`debugger.listTargetConfigs`、分块 artifact RPC、UI asset RPC；Plugin Manager 只做鉴权、
   路由和转发，不读取 plugin 私有业务表；UI asset 已绑定 manifest SHA-256 并使用内容哈希路径；
 - 高层 SoulInjector command/event schema 和 `requiresHumanApproval` action 元数据；动作编码
   会读取指定 installation/project 下的不可变 target-config revision，并把目标快照传给设备。

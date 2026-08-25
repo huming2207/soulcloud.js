@@ -19,6 +19,7 @@ function store() {
     saveTargetConfig: async () => saved,
     getLatestTargetConfig: async () => saved,
     getTargetConfig: async () => saved,
+    listTargetConfigs: async () => [{ configId: saved.id, revision: saved.revision, sha256: saved.sha256, targetCount: saved.config.targets.length, createdAt: saved.createdAt }],
     storeArtifactChunk: async (input: { uploadId: string; offset: number; chunk: Uint8Array; final: boolean }) => ({ uploadId: input.uploadId, receivedBytes: input.offset + input.chunk.byteLength, complete: input.final, artifactId: input.final ? saved.id : null, sha256: input.final ? saved.sha256 : null }),
   };
 }
@@ -65,6 +66,13 @@ describe("SoulInjector plugin", () => {
     const result = await plugin.handleAction!["debugger"]!({ yaml: saved.yaml }, { requestId: "request", installationId: saved.installationId, projectId: saved.projectId, user: { id: saved.createdBy, locale: "en", permissions: [] }, routeId: "debugger", params: {} });
     expect(result).toEqual({ redirect: `/plugins/${saved.installationId}/debugger` });
     expect(calls).toEqual([saved.createdBy, saved.createdBy]);
+  });
+
+  test("lists target configuration revision metadata without exposing YAML", async () => {
+    const plugin = createSoulInjectorPlugin(store());
+    const result = await plugin.listTargetConfigs!({ operationId: "operation", installationId: saved.installationId, projectId: saved.projectId, userId: saved.createdBy }, { signal: AbortSignal.timeout(1000) });
+    expect(result).toEqual([{ configId: saved.id, revision: 1, sha256: saved.sha256, targetCount: 1, createdAt: saved.createdAt }]);
+    expect(result[0]).not.toHaveProperty("yaml");
   });
 
   test("passes artifact chunks to the private store", async () => {

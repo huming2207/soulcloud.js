@@ -13,6 +13,7 @@ import {
   assertRpcValueBudget,
   canonicalJson,
   configureTargetOutput as configureTargetOutputSchema,
+  listTargetConfigsOutput as listTargetConfigsOutputSchema,
   artifactChunkOutput as artifactChunkOutputSchema,
   eventOutput as eventOutputSchema,
   hasRpcPrefix,
@@ -454,6 +455,19 @@ function createRuntimeConnection(
             rpcError("INVALID_TARGET_CONFIG", error instanceof Error ? error.message : String(error));
           }
           throw error;
+        } finally {
+          operations.running -= 1;
+        }
+      }),
+      listTargetConfigs: implemented.debugger.listTargetConfigs.handler(async ({ input, context }) => {
+        if (!context.isHandshaken()) rpcError("UNAUTHORIZED", "handshake required");
+        if (!definition.listTargetConfigs) rpcError("NOT_FOUND", "target configuration listing is not supported by this plugin");
+        if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
+        operations.running += 1;
+        try {
+          const result = await runWithDeadline(input.deadlineMs, (signal) => definition.listTargetConfigs!({ operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, userId: input.userId }, { signal }));
+          assertRpcValueBudget(result, budget);
+          return listTargetConfigsOutputSchema.parse(result);
         } finally {
           operations.running -= 1;
         }

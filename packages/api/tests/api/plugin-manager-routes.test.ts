@@ -13,6 +13,7 @@ const SERVICE_TOKEN = "test-service-token-0123456789";
 
 let manager: { url: URL; stop(): Promise<void> };
 let receivedBindingRequests: unknown[] = [];
+let receivedTargetConfigListRequests: unknown[] = [];
 let projectId: string;
 let installationId: string;
 let deviceId: string;
@@ -31,6 +32,10 @@ beforeAll(async () => {
       if (request.method === "POST" && url.pathname.endsWith("/bindings")) {
         receivedBindingRequests.push(await request.json());
         return new Response(null, { status: 204 });
+      }
+      if (request.method === "POST" && url.pathname.endsWith("/target-configs")) {
+        receivedTargetConfigListRequests.push(await request.json());
+        return new Response(JSON.stringify([{ configId: randomUUID(), revision: 2, sha256: "b".repeat(64), targetCount: 1, createdAt: new Date(0).toISOString() }]), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ error: "not_found" }), {
         status: 404,
@@ -144,5 +149,18 @@ describe("POST /v1/plugin-installations/:id/bindings", () => {
 
     expect(res.status).toBe(400);
     expect(receivedBindingRequests).toHaveLength(forwarded);
+  });
+});
+
+describe("GET /v1/plugin-installations/:id/debugger/target-configs", () => {
+  test("forwards the authenticated project scope and returns revision metadata", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost/v1/plugin-installations/${installationId}/debugger/target-configs`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toHaveLength(1);
+    expect(receivedTargetConfigListRequests).toEqual([{ installationId, projectId, userId: expect.any(String), timeoutMs: 4_000 }]);
   });
 });

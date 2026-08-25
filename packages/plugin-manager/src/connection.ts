@@ -187,7 +187,7 @@ export class PluginConnection {
     this.heartbeatTimer.unref?.();
   }
 
-  async request(method: "plugin.handleEvent" | "plugin.call" | "action.encode" | "ui.render" | "ui.handleAction" | "ui.asset" | "debugger.configureTarget" | "debugger.storeArtifactChunk", input: unknown, timeoutMs: number): Promise<unknown> {
+  async request(method: "plugin.handleEvent" | "plugin.call" | "action.encode" | "ui.render" | "ui.handleAction" | "ui.asset" | "debugger.configureTarget" | "debugger.listTargetConfigs" | "debugger.storeArtifactChunk", input: unknown, timeoutMs: number): Promise<unknown> {
     await this.connect();
     if (!this.forward || !this.socket) throw new PluginConnectionError("plugin is unavailable");
     if (this.socket.bufferedAmount > this.options.backpressureBytes) throw new PluginConnectionError("plugin send queue is full");
@@ -211,6 +211,7 @@ export class PluginConnection {
       if (method === "ui.handleAction") return await this.forward.ui.handleAction({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
       if (method === "ui.asset") return await this.forward.ui.asset({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
       if (method === "debugger.configureTarget") return await this.forward.debugger.configureTarget({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
+      if (method === "debugger.listTargetConfigs") return await this.forward.debugger.listTargetConfigs({ ...operation, deadlineMs: timeoutMs }, { signal: controller.signal });
       return await this.forward.debugger.storeArtifactChunk({ ...operation, deadlineMs: timeoutMs, chunk: rpcBinaryToBlob(operation.chunk) }, { signal: controller.signal });
     } catch (error) {
       if (controller.signal.aborted) throw new PluginConnectionTimeout(`${method} timed out`);

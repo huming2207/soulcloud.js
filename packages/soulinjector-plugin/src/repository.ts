@@ -17,6 +17,14 @@ export interface TargetConfigRecord {
   createdAt: string;
 }
 
+export interface TargetConfigSummary {
+  configId: string;
+  revision: number;
+  sha256: string;
+  targetCount: number;
+  createdAt: string;
+}
+
 export interface DebugArtifactRecord {
   id: string;
   installationId: string;
@@ -263,6 +271,24 @@ export class SoulInjectorRepository {
       [installationId, revision],
     );
     return result.rows[0] ? asRecord(result.rows[0]) : null;
+  }
+
+  async listTargetConfigs(installationId: string, projectId: string): Promise<TargetConfigSummary[]> {
+    const result = await this.pool.query<QueryResultRow>(
+      `SELECT id, revision, sha256, jsonb_array_length(config_json->'targets') AS target_count, created_at
+       FROM ${schema}.target_config_revisions
+       WHERE installation_id = $1 AND project_id = $2
+       ORDER BY revision DESC
+       LIMIT 64`,
+      [installationId, projectId],
+    );
+    return result.rows.map((row) => ({
+      configId: asString(row.id, "target config id"),
+      revision: Number(row.revision),
+      sha256: asString(row.sha256, "target config hash").trim(),
+      targetCount: Number(row.target_count),
+      createdAt: new Date(row.created_at as string | Date).toISOString(),
+    }));
   }
 
   async storeArtifact(input: SaveArtifactInput): Promise<DebugArtifactRecord> {
