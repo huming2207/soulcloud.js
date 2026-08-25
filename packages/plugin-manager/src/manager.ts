@@ -1290,6 +1290,35 @@ export class PluginManager {
     });
   }
 
+  /**
+   * Start a debugger session from the authenticated plugin-origin UI. The
+   * short-lived UI session supplies the current user/project scope; callers
+   * cannot provide a different identity or installation.
+   */
+  async startDebugSessionFromUiSession(
+    session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,
+    input: {
+      deviceId: string;
+      caseId: string;
+      targetConfigId?: string | null;
+      targetConfigRevision?: number | null;
+      targetId?: string | null;
+      artifactId?: string | null;
+      deviceFirmwareVersion?: string | null;
+      leaseMs: number;
+      ttlMs: number;
+      timeoutMs?: number;
+    },
+  ): Promise<{ execution: DebugExecutionRecord; sessionId: string }> {
+    await this.assertUiSessionCurrent(session as PluginUiSession);
+    return this.startDebugSession({
+      installationId: session.installationId,
+      projectId: session.projectId,
+      userId: session.sub,
+      ...input,
+    });
+  }
+
   async getPluginUiAsset(session: PluginUiSession, requestId: string, assetPath: string): Promise<unknown> {
     if (!this.options.prisma) throw new Error("plugin manager database is not configured");
     await this.assertUiSessionCurrent(session);

@@ -32,6 +32,7 @@ let submittedAction: unknown;
 let actionTimeout: number | undefined;
 let uiDeviceActionInput: unknown;
 let sessionStartInput: unknown;
+let uiSessionStartInput: unknown;
 let uploadedArtifactInput: { input: unknown; bytes: Uint8Array } | undefined;
 const consumedGrants = new Set<string>();
 const manager = {
@@ -55,6 +56,10 @@ const manager = {
   },
   startDebugSession: async (input: unknown) => {
     sessionStartInput = input;
+    return { execution: { id: randomUUID() }, sessionId: randomUUID() };
+  },
+  startDebugSessionFromUiSession: async (session: unknown, input: unknown) => {
+    uiSessionStartInput = { session, input };
     return { execution: { id: randomUUID() }, sessionId: randomUUID() };
   },
   uploadArtifact: async (input: { body: ReadableStream<Uint8Array> }) => {
@@ -97,6 +102,11 @@ const token = signPluginUiSession({ secret, ttlSeconds: 300 }, {
   manifestHash: "a".repeat(64), routeId: "overview", permissions: [], locale: "en",
 });
 const cookie = `${pluginUiSessionCookieName(installationId)}=${token}`;
+const debuggerToken = signPluginUiSession({ secret, ttlSeconds: 300 }, {
+  sub: randomUUID(), projectId, installationId, pluginId: manifest.id, pluginVersion: manifest.version,
+  manifestHash: "a".repeat(64), routeId: "debugger", permissions: [], locale: "en",
+});
+const debuggerCookie = `${pluginUiSessionCookieName(installationId)}=${debuggerToken}`;
 
 afterAll(async () => { await server.stop(); });
 
@@ -302,6 +312,22 @@ describe("plugin SSR route", () => {
     expect(response.status).toBe(201);
     expect(await response.json()).not.toHaveProperty("executionToken");
     expect(sessionStartInput).toMatchObject({ installationId, projectId, caseId: expect.any(String), leaseMs: 60_000, ttlMs: 86_400_000 });
+  });
+
+  test("starts a debugger session from the plugin-origin UI session", async () => {
+    const deviceId = randomUUID();
+    const caseId = randomUUID();
+    const targetConfigId = randomUUID();
+    const response = await fetch(`${server.url}plugins/${installationId}/debugger/sessions`, {
+      method: "POST",
+      headers: { cookie: debuggerCookie, "content-type": "application/json" },
+      body: JSON.stringify({ deviceId, caseId, targetConfigId, targetConfigRevision: 2, targetId: "fixture" }),
+    });
+    expect(response.status).toBe(201);
+    expect(await response.json()).toHaveProperty("sessionId");
+    expect(uiSessionStartInput).toMatchObject({
+      input: { deviceId, caseId, targetConfigId, targetConfigRevision: 2, targetId: "fixture", leaseMs: 60_000, ttlMs: 86_400_000 },
+    });
   });
 
   test("maps an active debug execution conflict to HTTP 409", async () => {
