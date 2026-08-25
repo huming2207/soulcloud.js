@@ -536,9 +536,9 @@ command intent。
 1. 选择首批 target architecture/chip；
 2. 列出设备现有 primitive 与缺失 primitive；
 3. 冻结 command/event schema、最大内存范围、timeout 和取消语义；
-4. 确认第一版是否只上传 ELF/firmware，还是也接受 source archive；
-5. 定义人工/LLM/危险操作权限矩阵；
-6. 确认 plugin 私有 DB 和 blob 存储部署方式；
+4. 第一版只上传 ELF/firmware，source archive/VCS 后置；**已确认**；
+5. 所有 destructive operation 均需人工逐次批准，LLM 不绕过 Human API approval；**已确认**；
+6. plugin 私有 blob 使用独立 PostgreSQL `bytea`，不引入 S3/object storage；**已确认**；
 7. 选定 plugin UI 独立 origin 与 bootstrap 流程。
 
 退出条件：协议测试向量、错误码和设备安全终态有文档；不存在“任意脚本”或通用 workflow。
