@@ -304,7 +304,10 @@ interface PluginCircuit {
   failures: number;
   openedAt: number;
   probeInProgress: boolean;
+  lastTouchedAt?: number;
 }
+
+const PLUGIN_CIRCUIT_IDLE_RETENTION_MS = 10 * 60_000;
 
 export class PluginManager {
   private readonly connections = new Map<string, PluginConnection>();
@@ -388,6 +391,7 @@ export class PluginManager {
     let uiGrants = 0;
     try {
       this.pruneExecutionCapabilities();
+      this.pruneCircuits();
       if (this.options.prisma) {
         const result = await expireDebugExecutions(this.options.prisma, Math.min(batchSize, 10_000));
         executions = result.executions;
@@ -2506,18 +2510,27 @@ export class PluginManager {
 
   private circuitAllows(key: string): boolean {
     const circuit = this.circuits.get(key);
-    if (!circuit || circuit.failures < 5) return true;
-    if (Date.now() - circuit.openedAt < 30_000) return false;
+    if (!circuit) return true;
+    const now = Date.now();
+    if (!circuit.probeInProgress && now - (circuit.lastTouchedAt ?? circuit.openedAt) >= PLUGIN_CIRCUIT_IDLE_RETENTION_MS) {
+      this.circuits.delete(key);
+      return true;
+    }
+    circuit.lastTouchedAt = now;
+    if (circuit.failures < 5) return true;
+    if (now - circuit.openedAt < 30_000) return false;
     if (circuit.probeInProgress) return false;
     circuit.probeInProgress = true;
     return true;
   }
 
   private circuitFailure(key: string): void {
-    const circuit = this.circuits.get(key) ?? { failures: 0, openedAt: 0, probeInProgress: false };
+    const now = Date.now();
+    const circuit = this.circuits.get(key) ?? { failures: 0, openedAt: 0, probeInProgress: false, lastTouchedAt: now };
     circuit.failures += 1;
     circuit.probeInProgress = false;
-    if (circuit.failures >= 5) circuit.openedAt = Date.now();
+    circuit.lastTouchedAt = now;
+    if (circuit.failures >= 5) circuit.openedAt = now;
     this.circuits.set(key, circuit);
   }
 
@@ -2527,7 +2540,18 @@ export class PluginManager {
 
   private circuitReleaseProbe(key: string): void {
     const circuit = this.circuits.get(key);
-    if (circuit) circuit.probeInProgress = false;
+    if (circuit) {
+      circuit.probeInProgress = false;
+      circuit.lastTouchedAt = Date.now();
+    }
+  }
+
+  private pruneCircuits(now = Date.now()): void {
+    for (const [key, circuit] of this.circuits) {
+      if (!circuit.probeInProgress && now - (circuit.lastTouchedAt ?? circuit.openedAt) >= PLUGIN_CIRCUIT_IDLE_RETENTION_MS) {
+        this.circuits.delete(key);
+      }
+    }
   }
 
   listCatalog(): CatalogEntry[] {

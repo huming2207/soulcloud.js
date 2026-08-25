@@ -441,6 +441,33 @@ describe("plugin event consumer", () => {
       "plugin manifest snapshot is unavailable",
     ]);
   });
+
+  test("prunes idle circuit entries without removing an active probe", () => {
+    const manager = new PluginManager({
+      endpoints: new Map(),
+      authToken: "x".repeat(32),
+      maxFrameBytes: 1024,
+      maxPendingRequests: 8,
+      backpressureBytes: 1024,
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+      reconnectMs: 1_000,
+    });
+    const now = 1_000_000;
+    const internals = manager as unknown as {
+      circuits: Map<string, { failures: number; openedAt: number; probeInProgress: boolean; lastTouchedAt?: number }>;
+      pruneCircuits(value: number): void;
+    };
+    internals.circuits.set("idle", { failures: 1, openedAt: 0, probeInProgress: false, lastTouchedAt: now - 600_001 });
+    internals.circuits.set("probe", { failures: 5, openedAt: now - 31_000, probeInProgress: true, lastTouchedAt: now - 600_001 });
+    internals.circuits.set("recent", { failures: 2, openedAt: 0, probeInProgress: false, lastTouchedAt: now - 1 });
+
+    internals.pruneCircuits(now);
+
+    expect(internals.circuits.has("idle")).toBe(false);
+    expect(internals.circuits.has("probe")).toBe(true);
+    expect(internals.circuits.has("recent")).toBe(true);
+  });
 });
 
 describe("plugin data retention", () => {
