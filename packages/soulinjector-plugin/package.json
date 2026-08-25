@@ -6,10 +6,12 @@
   "main": "src/index.ts",
   "dependencies": {
     "@soulcloud/plugin-sdk": "workspace:*",
+    "pg": "^8.22.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",
+    "@types/pg": "^8.20.4",
     "typescript": "^5"
   }
 }

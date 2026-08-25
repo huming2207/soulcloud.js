@@ -8,3 +8,5 @@ export {
   type DebuggerTarget,
   type TargetConfig,
 } from "./target-config";
+export { SoulInjectorRepository, type DebugArtifactRecord, type SaveArtifactInput, type SaveTargetConfigInput, type TargetConfigRecord } from "./repository";
+export { ArtifactValidationError, MAX_ARTIFACT_BYTES, validateArtifact, type DebugArtifactKind, type ValidatedArtifact } from "./artifact";
