@@ -162,6 +162,7 @@ export function createApp(
           parsed.data.command,
           {
             deliveryTimeoutSeconds: parsed.data.delivery_timeout_seconds,
+            provenance: { originType: "human", originUserId: authUser.user.id },
           },
         );
         set.status = 202;
@@ -209,6 +210,9 @@ function mapQueueError(
       case "invalid_device_uid":
         set.status = 422;
         return { error: "invalid_device_uid", message: error.message };
+      case "invalid_provenance":
+        set.status = 500;
+        return { error: "invalid_provenance", message: "command provenance is invalid" };
       default:
         console.error(`[soulcloudjs] command queue failure: ${error.message}`);
         set.status = 500;

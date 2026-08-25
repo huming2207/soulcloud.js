@@ -11,6 +11,7 @@ export type CommandQueueErrorKind =
   | "too_many_targets"
   | "missing_targets"
   | "invalid_device_uid"
+  | "invalid_provenance"
   | "invalid_sequence"
   | "lease_time_overflow"
   | "lease_conflict"

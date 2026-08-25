@@ -438,7 +438,16 @@ export class PluginManager {
         await tx.$queryRaw`SELECT id FROM devices WHERE id = ${input.deviceId}::uuid FOR UPDATE`;
         const binding = await tx.pluginDeviceBinding.findUnique({ where: { deviceId: input.deviceId }, select: { installationId: true } });
         if (!binding || binding.installationId !== installation.id) throw new Error("device is not bound to the plugin installation");
-        return enqueueBatchInTransaction(tx, [input.deviceId], { cmd: encoded.command, args });
+        return enqueueBatchInTransaction(tx, [input.deviceId], { cmd: encoded.command, args }, {
+          provenance: {
+            originType: "plugin",
+            originUserId: input.userId,
+            pluginInstallationId: installation.id,
+            pluginVersion: installation.pluginVersion,
+            manifestHash: installation.manifestHash.trim(),
+            correlationId: operationId,
+          },
+        });
       });
       return { batchId: batch.id, deviceCount: batch.deviceCount };
     } finally {

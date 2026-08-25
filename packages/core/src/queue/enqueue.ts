@@ -30,6 +30,20 @@ export interface EnqueuedBatch {
   deviceCount: number;
 }
 
+export type CommandOriginType = "human" | "plugin" | "llm_agent";
+
+/** Platform audit metadata for a queued command; never serialized to devices. */
+export interface CommandProvenance {
+  originType: CommandOriginType;
+  originUserId?: string;
+  pluginInstallationId?: string;
+  pluginVersion?: string;
+  manifestHash?: string;
+  executionId?: string;
+  correlationId?: string;
+  idempotencyKey?: string;
+}
+
 interface TargetRow {
   id: string;
   device_uid: string;
@@ -44,6 +58,7 @@ export interface EnqueueBatchOptions {
    * terminal state, releasing the per-device queue.
    */
   deliveryTimeoutSeconds?: number;
+  provenance?: CommandProvenance;
 }
 
 /** Transaction client used when a caller must commit commands with another effect. */
@@ -65,6 +80,7 @@ export async function enqueueBatchInTransaction(
   if (targetDeviceIds.length > MAX_BATCH_TARGETS) {
     throw new CommandQueueError("too_many_targets", "the command batch contains too many target devices");
   }
+  validateCommandProvenance(options.provenance);
 
   const batchId = randomUUID();
   const deviceCount = targetDeviceIds.length;
@@ -125,11 +141,52 @@ export async function enqueueBatchInTransaction(
         args: command.args,
       })),
       state: "queued",
+      originType: options.provenance?.originType ?? "human",
+      originUserId: options.provenance?.originUserId,
+      pluginInstallationId: options.provenance?.pluginInstallationId,
+      pluginVersion: options.provenance?.pluginVersion,
+      manifestHash: options.provenance?.manifestHash,
+      executionId: options.provenance?.executionId,
+      correlationId: options.provenance?.correlationId,
+      idempotencyKey: options.provenance?.idempotencyKey,
     };
   });
   await tx.deviceCommand.createMany({ data: rows });
   await tx.$executeRaw`SELECT pg_notify(${COMMAND_NOTIFY_CHANNEL}, ${batchId})`;
   return { id: batchId, deviceCount };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function validateCommandProvenance(provenance: CommandProvenance | undefined): void {
+  if (!provenance) return;
+  if (provenance.originType !== "human" && provenance.originType !== "plugin" && provenance.originType !== "llm_agent") {
+    throw new CommandQueueError("invalid_provenance", "command origin type is invalid");
+  }
+  if (provenance.originType !== "human" &&
+      (!provenance.pluginInstallationId || !provenance.pluginVersion || !provenance.manifestHash)) {
+    throw new CommandQueueError(
+      "invalid_provenance",
+      "plugin and llm_agent commands require plugin installation, version, and manifest hash",
+    );
+  }
+  for (const [field, value] of [
+    ["originUserId", provenance.originUserId],
+    ["pluginInstallationId", provenance.pluginInstallationId],
+    ["executionId", provenance.executionId],
+    ["correlationId", provenance.correlationId],
+  ] as const) {
+    if (value !== undefined && !UUID.test(value)) throw new CommandQueueError("invalid_provenance", `${field} must be a UUID`);
+  }
+  if (provenance.pluginVersion !== undefined && (provenance.pluginVersion.length < 1 || provenance.pluginVersion.length > 128)) {
+    throw new CommandQueueError("invalid_provenance", "pluginVersion must be between 1 and 128 characters");
+  }
+  if (provenance.manifestHash !== undefined && !/^[0-9a-f]{64}$/i.test(provenance.manifestHash)) {
+    throw new CommandQueueError("invalid_provenance", "manifestHash must be a SHA-256 hex digest");
+  }
+  if (provenance.idempotencyKey !== undefined && (provenance.idempotencyKey.length < 1 || provenance.idempotencyKey.length > 128)) {
+    throw new CommandQueueError("invalid_provenance", "idempotencyKey must be between 1 and 128 characters");
+  }
 }
 
 /**

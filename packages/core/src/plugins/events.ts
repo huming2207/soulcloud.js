@@ -308,7 +308,15 @@ export async function completePluginEventWithUpdates(
       if (intent.deviceId !== entityContext.deviceId) {
         throw new Error("plugin event command target does not match its routing snapshot");
       }
-      await enqueueBatchInTransaction(tx, [intent.deviceId], intent.command);
+      await enqueueBatchInTransaction(tx, [intent.deviceId], intent.command, {
+        provenance: {
+          originType: "plugin",
+          pluginInstallationId: entityContext.installationId,
+          pluginVersion: entityContext.pluginVersion,
+          manifestHash: entityContext.manifestHash,
+          correlationId: eventId,
+        },
+      });
     }
     const updated = await tx.$executeRaw`
       UPDATE plugin_events
