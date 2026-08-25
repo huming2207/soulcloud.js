@@ -307,6 +307,61 @@ describe("plugin catalog connection state", () => {
       .rejects.toThrow("execution.get is not granted");
   });
 
+  test("rejects an execution capability from a different manifest snapshot", async () => {
+    const operationToken = "operation-token-for-manifest-scope";
+    const executionToken = "execution-token-for-manifest-scope";
+    const executionId = "00000000-0000-4000-8000-000000000011";
+    const installationId = "00000000-0000-4000-8000-000000000012";
+    const deviceId = "00000000-0000-4000-8000-000000000013";
+    const row = {
+      id: executionId,
+      installation_id: installationId,
+      device_id: deviceId,
+      initiating_user_id: "00000000-0000-4000-8000-000000000014",
+      plugin_id: "example.plugin",
+      plugin_version: "1.0.0",
+      manifest_hash: "b".repeat(64),
+      allowed_capabilities: ["execution.get"],
+      state: "active",
+      device_lease_expires_at: new Date(Date.now() + 60_000),
+      expires_at: new Date(Date.now() + 120_000),
+      created_at: new Date(0),
+      updated_at: new Date(),
+      finished_at: null,
+    };
+    const manager = new PluginManager({
+      endpoints: new Map(), authToken: "x".repeat(32), maxFrameBytes: 1024,
+      maxPendingRequests: 8, backpressureBytes: 1024, heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 1000, reconnectMs: 1000,
+      prisma: { $queryRaw: async () => [row] } as never,
+    });
+    const operation = {
+      kind: "event" as const,
+      operationTokenHash: createHash("sha256").update(operationToken).digest(),
+      connectionId: "connection",
+      installationId,
+      projectId: "00000000-0000-4000-8000-000000000015",
+      pluginId: "example.plugin",
+      pluginVersion: "1.0.0",
+      manifestHash: "a".repeat(64),
+      deviceId,
+      deadline: performance.now() + 1_000,
+      state: "active" as const,
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set<() => void>(),
+    };
+    const internals = manager as unknown as {
+      operations: Map<string, typeof operation>;
+      reverseExecutionGet(input: object, signal: AbortSignal, connectionId: string): Promise<unknown>;
+    };
+    internals.operations.set("operation", operation);
+    await expect(internals.reverseExecutionGet({ operationId: "operation", operationToken, deadlineMs: 1_000, executionId, executionToken }, new AbortController().signal, "connection"))
+      .rejects.toThrow("outside the operation scope");
+  });
+
   test("does not let an execution capability bypass manifest human approval", async () => {
     const persisted: PluginManifest = {
       ...manifest("1.0.0"),

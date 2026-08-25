@@ -2336,6 +2336,7 @@ export class PluginManager {
       execution.installationId !== operation.installationId ||
       execution.pluginId !== operation.pluginId ||
       execution.pluginVersion !== operation.pluginVersion ||
+      execution.manifestHash.trim() !== operation.manifestHash ||
       (operation.deviceId !== undefined && execution.deviceId !== operation.deviceId)) {
       throw new Error("debug execution capability is outside the operation scope");
     }
