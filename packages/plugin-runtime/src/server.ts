@@ -113,6 +113,7 @@ function pluginUiInput(input: {
   routeId: string;
   params: UiRenderInput["params"];
   signal?: AbortSignal;
+  callPlugin?: (pluginId: string, procedure: string, input?: unknown) => Promise<unknown>;
 }): UiRenderInput {
   return {
     requestId: input.requestId,
@@ -122,6 +123,7 @@ function pluginUiInput(input: {
     routeId: input.routeId,
     params: input.params,
     signal: input.signal,
+    callPlugin: input.callPlugin,
   };
 }
 
@@ -248,6 +250,11 @@ function createRuntimeConnection(
 ): RuntimeConnection {
   const bridge = createBridge(ws, maxFrameBytes);
   const reverse = createContractClientFactory(new RPCLink({ connect: () => bridge, encodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX }, decodePeerMessage: { prefix: PLUGIN_TO_MANAGER_PREFIX } }))(pluginToManagerContract);
+  const invokePlugin = async (operationId: string, operationToken: string, deadlineMs: number, pluginId: string, procedure: string, input: unknown): Promise<unknown> => {
+    assertRpcValueBudget(input, budget);
+    const result = await reverse.context.plugins.callScoped({ operationId, operationToken, deadlineMs, pluginId, procedure, input: rpcBinaryToBlob(input) });
+    return rpcBinaryFromBlob(result);
+  };
   const implemented = implement(managerToPluginContract).$context<{ isHandshaken: () => boolean; markHandshaken: () => void }>();
   const router = {
     system: {
@@ -269,7 +276,15 @@ function createRuntimeConnection(
         if (!check.ok) rpcError("INVALID_ACTION_INPUT", check.failures.map((failure) => `${failure.field}: ${failure.error}`).join("; "));
         operations.running += 1;
         try {
-          const args = await runWithDeadline(input.deadlineMs, (signal) => encoder(input.input, { operationId: input.operationId, installationId: input.installationId, projectId: input.projectId, deviceId: input.deviceId, userId: input.userId, signal }));
+          const args = await runWithDeadline(input.deadlineMs, (signal) => encoder(input.input, {
+            operationId: input.operationId,
+            installationId: input.installationId,
+            projectId: input.projectId,
+            deviceId: input.deviceId,
+            userId: input.userId,
+            signal,
+            callPlugin: (pluginId, procedure, callInput) => invokePlugin(input.operationId, input.operationToken, input.deadlineMs, pluginId, procedure, callInput),
+          }));
           assertRpcValueBudget(args, budget);
           return { command: descriptor.wire.command, args: commandWire(args), schemaVersion: descriptor.wire.schemaVersion };
         }
@@ -360,7 +375,11 @@ function createRuntimeConnection(
         if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
         operations.running += 1;
         try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => renderer(pluginUiInput({ ...input, signal })));
+          const result = await runWithDeadline(input.deadlineMs, (signal) => renderer(pluginUiInput({
+            ...input,
+            signal,
+            callPlugin: (pluginId, procedure, callInput) => invokePlugin(input.operationId, input.operationToken, input.deadlineMs, pluginId, procedure, callInput),
+          })));
           assertRpcValueBudget(result, budget);
           const parsed = uiRenderOutputSchema.safeParse(result);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
@@ -376,7 +395,11 @@ function createRuntimeConnection(
         if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
         operations.running += 1;
         try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => actionHandler(input.action, pluginUiInput({ ...input, signal })) as { redirect?: string; errors?: { field: string; message: string }[] });
+          const result = await runWithDeadline(input.deadlineMs, (signal) => actionHandler(input.action, pluginUiInput({
+            ...input,
+            signal,
+            callPlugin: (pluginId, procedure, callInput) => invokePlugin(input.operationId, input.operationToken, input.deadlineMs, pluginId, procedure, callInput),
+          })) as { redirect?: string; errors?: { field: string; message: string }[] });
           assertRpcValueBudget(result, budget);
           const parsed = uiActionOutputSchema.safeParse(result);
           if (!parsed.success) rpcError("INVALID_PLUGIN_OUTPUT", parsed.error.message);
@@ -393,7 +416,16 @@ function createRuntimeConnection(
         if (operations.running >= operations.max) rpcError("OVERLOADED", "plugin operation limit reached");
         operations.running += 1;
         try {
-          const result = await runWithDeadline(input.deadlineMs, (signal) => asset({ requestId: input.requestId, installationId: input.installationId, projectId: input.projectId, user: input.user, routeId: input.routeId, assetPath: input.assetPath, signal }));
+          const result = await runWithDeadline(input.deadlineMs, (signal) => asset({
+            requestId: input.requestId,
+            installationId: input.installationId,
+            projectId: input.projectId,
+            user: input.user,
+            routeId: input.routeId,
+            assetPath: input.assetPath,
+            signal,
+            callPlugin: (pluginId, procedure, callInput) => invokePlugin(input.operationId, input.operationToken, input.deadlineMs, pluginId, procedure, callInput),
+          }));
           if (result.contentType !== descriptor.contentType) rpcError("INVALID_PLUGIN_OUTPUT", "UI asset content type differs from its manifest");
           if (await sha256BytesHex(result.body) !== descriptor.sha256) rpcError("INVALID_PLUGIN_OUTPUT", "UI asset bytes differ from its manifest hash");
           assertRpcValueBudget(result, budget);

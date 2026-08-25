@@ -141,6 +141,7 @@ export interface ActionEncodingContext {
   userId: string;
   /** Runtime cancellation/deadline signal; optional for source compatibility with pure encoders. */
   signal?: AbortSignal;
+  callPlugin?(pluginId: string, procedure: string, input?: unknown): Promise<unknown>;
 }
 export type ActionEncoder = (input: unknown, context: ActionEncodingContext) => CommandArgument[] | Promise<CommandArgument[]>;
 export interface UiRenderInput {
@@ -152,6 +153,7 @@ export interface UiRenderInput {
   params: Record<string, string | number | boolean>;
   /** Runtime cancellation/deadline signal; optional for pure renderers. */
   signal?: AbortSignal;
+  callPlugin?(pluginId: string, procedure: string, input?: unknown): Promise<unknown>;
 }
 export interface UiRenderOutput {
   html: string;
@@ -170,6 +172,7 @@ export interface UiAssetInput {
   assetPath: string;
   /** Runtime cancellation/deadline signal; optional for pure asset renderers. */
   signal?: AbortSignal;
+  callPlugin?(pluginId: string, procedure: string, input?: unknown): Promise<unknown>;
 }
 export interface UiAssetOutput {
   body: Uint8Array;
