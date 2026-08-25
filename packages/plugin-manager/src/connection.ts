@@ -59,7 +59,10 @@ export interface PluginConnectionOptions {
 }
 
 export class PluginConnectionError extends Error {}
-export class PluginConnectionTimeout extends PluginConnectionError {}
+export class PluginConnectionTimeout extends PluginConnectionError {
+  readonly status = 504;
+  readonly publicCode = "plugin_timeout" as const;
+}
 
 export class PluginConnection {
   private socket: WebSocket | null = null;

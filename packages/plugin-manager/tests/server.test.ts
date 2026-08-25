@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { pluginUiSessionCookieName, signPluginUiSession } from "@soulcloud/core";
 import type { PluginManifest } from "@soulcloud/plugin-sdk";
 import type { PluginManager } from "../src/manager";
+import { PluginConnectionTimeout } from "../src/connection";
 import { startPluginManagerServer } from "../src/server";
 
 const installationId = randomUUID();
@@ -400,6 +401,30 @@ describe("plugin SSR route", () => {
       expect(await response.json()).toMatchObject({ error: "plugin_ui_invalid_output" });
     } finally {
       await failingServer.stop();
+    }
+  });
+
+  test("maps plugin RPC timeouts to a 504 plugin timeout", async () => {
+    const timeoutManager = {
+      ...manager,
+      listTargetConfigs: async () => { throw new PluginConnectionTimeout("debugger.listTargetConfigs timed out"); },
+    } as unknown as PluginManager;
+    const timeoutServer = startPluginManagerServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      serviceToken: "internal-service-token",
+      manager: timeoutManager,
+    });
+    try {
+      const response = await fetch(`${timeoutServer.url}internal/plugins/debugger/target-configs`, {
+        method: "POST",
+        headers: { authorization: "Bearer internal-service-token", "content-type": "application/json" },
+        body: JSON.stringify({ installationId, projectId, userId: randomUUID() }),
+      });
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({ error: "plugin_timeout" });
+    } finally {
+      await timeoutServer.stop();
     }
   });
 
