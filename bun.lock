@@ -113,21 +113,6 @@
         "typescript": "^5",
       },
     },
-    "packages/soulinjector-plugin": {
-      "name": "@soulcloud/soulinjector-plugin",
-      "version": "0.1.0",
-      "dependencies": {
-        "@soulcloud/plugin-runtime": "workspace:*",
-        "@soulcloud/plugin-sdk": "workspace:*",
-        "pg": "^8.22.0",
-        "zod": "^4.4.3",
-      },
-      "devDependencies": {
-        "@types/bun": "1.4.0",
-        "@types/pg": "^8.20.4",
-        "typescript": "^5",
-      },
-    },
     "packages/plugin-sdk": {
       "name": "@soulcloud/plugin-sdk",
       "version": "0.1.0",
@@ -136,6 +121,25 @@
       },
       "devDependencies": {
         "@types/bun": "1.4.0",
+        "typescript": "^5",
+      },
+    },
+    "packages/soulinjector-plugin": {
+      "name": "@soulcloud/soulinjector-plugin",
+      "version": "0.1.0",
+      "dependencies": {
+        "@soulcloud/plugin-runtime": "workspace:*",
+        "@soulcloud/plugin-sdk": "workspace:*",
+        "pg": "^8.22.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+        "zod": "^4.4.3",
+      },
+      "devDependencies": {
+        "@types/bun": "1.4.0",
+        "@types/pg": "^8.20.4",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
         "typescript": "^5",
       },
     },
@@ -502,6 +506,8 @@
     "@soulcloud/plugin-runtime": ["@soulcloud/plugin-runtime@workspace:packages/plugin-runtime"],
 
     "@soulcloud/plugin-sdk": ["@soulcloud/plugin-sdk@workspace:packages/plugin-sdk"],
+
+    "@soulcloud/soulinjector-plugin": ["@soulcloud/soulinjector-plugin@workspace:packages/soulinjector-plugin"],
 
     "@soulcloud/web": ["@soulcloud/web@workspace:packages/web"],
 
@@ -1236,6 +1242,8 @@
     "@soulcloud/plugin-runtime/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@soulcloud/plugin-sdk/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@soulcloud/soulinjector-plugin/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@testing-library/dom/dom-accessibility-api": ["dom-accessibility-api@0.5.16", "", {}, "sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg=="],
 

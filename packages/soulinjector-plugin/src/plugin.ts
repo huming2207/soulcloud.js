@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { definePlugin, type ActionEncoder, type ActionEncodingContext, type EntityUpdate, type PluginDefinition, type PluginEventOutput, type PluginManifest } from "@soulcloud/plugin-sdk";
 import { DebugSessionNotAvailableError } from "./repository";
 import type { AppendDebugObservationInput, AppendDebugReportRevisionInput, CreateDebugCaseInput, CreateDebugReportInput, DebugArtifactRecord, DebugCaseRecord, DebugObservationRecord, DebugReportRecord, DebugSessionRecord, ReadArtifactChunkOutput, SoulInjectorRepository, StoreArtifactChunkOutput, TargetConfigRecord, TargetConfigSummary, UpdateDebugSessionStateInput } from "./repository";
 import { SOULINJECTOR_COMMAND, debugLogSchema, debugStatusSchema } from "./device-protocol";
 import { targetSelectionArgs } from "./target-selection";
 import { TargetConfigError } from "./target-config";
+import { renderDebuggerPage } from "./ui";
 
 export const SOULINJECTOR_PLUGIN_ID = "soulcloud.soulinjector-debugger";
 export const SOULINJECTOR_PLUGIN_VERSION = "0.1.0";
@@ -51,10 +53,12 @@ async function refreshCommandTimeline(){if(!(commandTimeline instanceof HTMLElem
 async function refreshDebuggerView(){await refreshDebugExecutionState();await refreshCommandTimeline();}
 if(commandTimeline instanceof HTMLElement){void refreshDebuggerView();window.setInterval(refreshDebuggerView,5000);}
 `;
-const CLIENT_BUNDLE_PATH = "/debugger/app.0568406c4899c73bf46e81386e6366cb2391fc36a5ef7b50aa0a6bb722623279.js";
-const CLIENT_BUNDLE_SHA256 = "0568406c4899c73bf46e81386e6366cb2391fc36a5ef7b50aa0a6bb722623279";
+// The asset path embeds the digest computed from the exact bytes this module
+// serves, so the manifest-declared hash can never drift from the served asset
+// (single source of truth) without requiring a separate build step.
+const CLIENT_BUNDLE_SHA256 = createHash("sha256").update(CLIENT_BUNDLE).digest("hex");
+const CLIENT_BUNDLE_PATH = `/debugger/app.${CLIENT_BUNDLE_SHA256}.js`;
 const MAX_TIMELINE_OBSERVATIONS = 16;
-const MAX_OBSERVATION_DATA_CHARS = 2_048;
 
 const targetRevision = { type: "integer" as const, required: true, min: 1, max: Number.MAX_SAFE_INTEGER };
 const targetId = { type: "string" as const, required: true, maxLength: 64 };
@@ -240,101 +244,6 @@ function executionStateForDeviceState(state: string): "completed" | "failed" | n
   return null;
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
-}
-
-function observationData(value: unknown): string {
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(value) ?? "";
-  } catch {
-    serialized = "[unserializable]";
-  }
-  return escapeHtml(serialized.length > MAX_OBSERVATION_DATA_CHARS ? `${serialized.slice(0, MAX_OBSERVATION_DATA_CHARS)}…` : serialized);
-}
-
-function latestSessionError(observations: DebugObservationRecord[]): string | null {
-  for (let index = observations.length - 1; index >= 0; index -= 1) {
-    const observation = observations[index]!;
-    if (observation.kind === "debug.status") {
-      const parsed = debugStatusSchema.safeParse(observation.structuredData);
-      if (parsed.success && parsed.data.error) return parsed.data.error;
-    }
-    if (observation.kind === "debug.log") {
-      const parsed = debugLogSchema.safeParse(observation.structuredData);
-      if (parsed.success && parsed.data.level === "error") return parsed.data.message;
-    }
-  }
-  return null;
-}
-
-function debuggerActionControls(input: { selectedSession: DebugSessionRecord | null }): string {
-  const session = input.selectedSession;
-  if (!session) return "<section><h2>Manual debugger actions</h2><p>Select a session before issuing a device command.</p></section>";
-  const commandTimeline = session.executionRef
-    ? `<section id="debug-command-timeline" data-execution-id="${escapeHtml(session.executionRef)}"><h2>Command timeline</h2><p>Loading command status…</p></section>`
-    : "";
-  if (session.state !== "active") {
-    return `${commandTimeline}<section><h2>Manual debugger actions</h2><p>Session is ${escapeHtml(session.state)}; device actions are disabled.</p></section>`;
-  }
-  const executionRef = session.executionRef;
-  if (executionRef === null) {
-    return `${commandTimeline}<section><h2>Manual debugger actions</h2><p>This session has no active execution lease; device actions are disabled.</p></section>`;
-  }
-  if (session.targetConfigRevision === null || session.targetId === null) {
-    return `${commandTimeline}<section><h2>Manual debugger actions</h2><p>This session has no target configuration snapshot; start a new session with one before issuing a device command.</p></section>`;
-  }
-  const actions = [
-    ["debug.identify", "Identify target", false],
-    ["debug.read_registers", "Read registers", false],
-    ["debug.halt", "Halt target (approval)", true],
-    ["debug.resume", "Resume target (approval)", true],
-    ["debug.reset", "Reset target (approval)", true],
-  ] as const;
-  const buttons = actions.map(([id, label, approval]) => `<button type="submit" data-debug-action="${id}">${label}${approval ? "" : ""}</button>`).join(" ");
-  return `${commandTimeline}<section><h2>Manual debugger actions</h2><p>Every button sends one bounded action through the authenticated plugin UI session and the current execution lease. Actions marked approval require this human click; the LLM cannot use this route.</p><button type="button" id="debug-release-execution" data-execution-id="${escapeHtml(executionRef)}">Release device lease</button><form id="debug-actions" data-device-id="${escapeHtml(session.soulcloudDeviceRef)}" data-execution-id="${escapeHtml(executionRef)}" data-target-config-revision="${session.targetConfigRevision}" data-target-id="${escapeHtml(session.targetId)}">${buttons}<label for="debug-memory-address">Memory address</label><input id="debug-memory-address" inputmode="text" maxlength="18" placeholder="0x20000000"><label for="debug-memory-length">Memory length (bytes)</label><input id="debug-memory-length" type="number" min="1" max="1048576" value="16"><button type="submit" data-debug-action="debug.read_memory">Read memory</button><label for="debug-start-mode">Start mode</label><select id="debug-start-mode"><option value="automatic">Automatic</option><option value="assisted">Assisted</option></select><button type="submit" data-debug-action="debug.start">Start target (approval)</button><p id="debug-action-status" role="status" aria-live="polite"></p></form></section>`;
-}
-
-function configForm(input: { installationId: string; yaml: string; cases: DebugCaseRecord[]; sessions: DebugSessionRecord[]; selectedSession: DebugSessionRecord | null; observations: DebugObservationRecord[]; targetConfigs: TargetConfigSummary[]; artifacts: DebugArtifactRecord[]; reports: DebugReportRecord[]; error?: string }): string {
-  const cases = input.cases.length === 0
-    ? "<p>No debugger cases yet.</p>"
-    : `<ul>${input.cases.map((item) => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(item.state)}${item.targetUnitRef ? ` — ${escapeHtml(item.targetUnitRef)}` : ""}</li>`).join("")}</ul>`;
-  const sessions = input.sessions.length === 0
-    ? "<p>No debugger sessions yet.</p>"
-    : `<ul>${input.sessions.map((item) => `<li><a href="?session_id=${encodeURIComponent(item.id)}"><code>${escapeHtml(item.id)}</code></a> — ${escapeHtml(item.state)} — device <code>${escapeHtml(item.soulcloudDeviceRef)}</code> — started ${escapeHtml(item.startedAt)}</li>`).join("")}</ul>`;
-  const timeline = !input.selectedSession
-    ? "<p>Select a debugger session to view its timeline.</p>"
-    : input.observations.length === 0
-      ? `<p>No observations recorded for session <code>${escapeHtml(input.selectedSession.id)}</code>.</p>`
-      : `<ol>${input.observations.map((item) => `<li><time datetime="${escapeHtml(item.createdAt)}">${escapeHtml(item.createdAt)}</time> — <strong>${escapeHtml(item.source)}:${escapeHtml(item.kind)}</strong><pre>${observationData(item.structuredData)}</pre></li>`).join("")}</ol>`;
-  const sessionError = input.selectedSession ? latestSessionError(input.observations) : null;
-  const errorView = input.selectedSession?.state === "failed"
-    ? `<section role="alert"><h2>Debugger error</h2><p>${escapeHtml(sessionError ?? "The debugger session failed without a diagnostic message.")}</p></section>`
-    : sessionError
-      ? `<section role="alert"><h2>Latest debugger error</h2><p>${escapeHtml(sessionError)}</p></section>`
-      : "";
-  const targetConfigs = input.targetConfigs.length === 0
-    ? "<p>No target configuration revisions yet.</p>"
-    : `<ul>${input.targetConfigs.map((item) => `<li><strong>Revision ${item.revision}</strong> — ${item.targetCount} target(s) — <code>${escapeHtml(item.sha256)}</code> — created ${escapeHtml(item.createdAt)}</li>`).join("")}</ul>`;
-  const artifacts = input.artifacts.length === 0
-    ? "<p>No ELF or firmware artifacts yet.</p>"
-    : `<ul>${input.artifacts.map((item) => `<li><strong>${escapeHtml(item.kind)}</strong> — ${escapeHtml(item.filename)} — ${item.size} bytes — <code>${escapeHtml(item.id)}</code> — SHA-256 <code>${escapeHtml(item.sha256)}</code> — ${observationData(item.metadata)}</li>`).join("")}</ul>`;
-  const artifactCases = `<option value="">No case association</option>${input.cases.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
-  const sessionCases = `<option value="">Select a case</option>${input.cases.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
-  const sessionTargets = `<option value="">No target snapshot</option>${input.targetConfigs.map((item) => `<option value="${escapeHtml(item.configId)}" data-revision="${item.revision}">Revision ${item.revision} (${item.targetCount} target(s))</option>`).join("")}`;
-  const sessionArtifacts = `<option value="">No artifact</option>${input.artifacts.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.kind)} — ${escapeHtml(item.filename)}</option>`).join("")}`;
-  const sessionForm = `<section><h2>Start debugger session</h2><p>This creates one human-scoped device lease; it does not send a debugger command.</p><form id="debug-session-create"><label for="debug-session-device">Soulcloud Device ID</label><br><input id="debug-session-device" maxlength="36" required><br><label for="debug-session-case">Case</label><br><select id="debug-session-case" required>${sessionCases}</select><br><label for="debug-session-target-config">Target configuration (optional)</label><br><select id="debug-session-target-config">${sessionTargets}</select><br><label for="debug-session-target-id">Target ID</label><br><input id="debug-session-target-id" maxlength="64"><br><label for="debug-session-artifact">Artifact (optional)</label><br><select id="debug-session-artifact">${sessionArtifacts}</select><br><button type="submit">Start debugger session</button><p id="debug-session-status" role="status" aria-live="polite"></p></form></section>`;
-  const reports = input.reports.length === 0
-    ? "<p>No report drafts yet.</p>"
-    : `<ul>${input.reports.map((item) => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(item.state)} — revision ${item.currentRevision} — case <code>${escapeHtml(item.caseId)}</code><form method="post"><input type="hidden" name="intent" value="finalize_report"><input type="hidden" name="reportId" value="${escapeHtml(item.id)}"><button type="submit"${item.state === "final" ? " disabled" : ""}>Finalize report</button></form></li>`).join("")}</ul>`;
-  const reportCases = `<option value="">Select a case</option>${input.cases.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
-  const reportOptions = `<option value="">Select a draft report</option>${input.reports.filter((item) => item.state === "draft").map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
-  const reportForm = `<section><h2>Reports</h2>${reports}<form method="post"><input type="hidden" name="intent" value="create_report"><label for="report-case">Case</label><br><select id="report-case" name="caseId" required>${reportCases}</select><br><label for="report-title">Report title</label><br><input id="report-title" name="reportTitle" maxlength="256" required><br><label for="report-content">Initial report content (max 64 KiB)</label><br><textarea id="report-content" name="reportContent" rows="12" cols="100" maxlength="65536"></textarea><br><button type="submit">Create report draft</button></form><form method="post"><input type="hidden" name="intent" value="append_report"><label for="report-revision">Draft report</label><br><select id="report-revision" name="reportId" required>${reportOptions}</select><br><label for="report-revision-content">New revision (max 64 KiB)</label><br><textarea id="report-revision-content" name="reportContent" rows="12" cols="100" maxlength="65536" required></textarea><br><button type="submit">Save report revision</button></form></section>`;
-  const error = input.error === "invalid_target_config" ? "<p role=\"alert\">Target configuration is invalid. Review the YAML schema and try again.</p>" : "";
-  return `<main><h1>SoulInjector debugger</h1>${error}${errorView}<section><h2>Cases</h2>${cases}<form method="post"><input type="hidden" name="intent" value="create_case"><label for="case-title">New case title</label><br><input id="case-title" name="title" maxlength="256" required><br><label for="target-unit-ref">Target unit reference</label><br><input id="target-unit-ref" name="targetUnitRef" maxlength="256"><br><button type="submit">Create case</button></form></section>${sessionForm}<section><h2>Sessions</h2>${sessions}</section><section><h2>Session timeline</h2>${timeline}</section>${debuggerActionControls({ selectedSession: input.selectedSession })}<section><h2>Artifacts</h2>${artifacts}<form id="artifact-upload" method="post" action="/plugins/${encodeURIComponent(input.installationId)}/debugger/artifacts"><label for="artifact-kind">Artifact type</label><br><select id="artifact-kind"><option value="elf">ELF</option><option value="firmware">Firmware</option></select><br><label for="artifact-case">Debugger case</label><br><select id="artifact-case">${artifactCases}</select><br><label for="artifact-file">Artifact file (max 64 MiB)</label><br><input id="artifact-file" type="file" accept=".elf,.bin,.img,application/octet-stream,application/x-elf" required><br><button type="submit">Upload artifact</button><p id="artifact-upload-status" role="status" aria-live="polite"></p></form></section>${reportForm}<section><h2>Target configuration</h2><p>Configure the target architecture, chip and required debugger primitives.</p><h3>Saved revisions</h3>${targetConfigs}<form method="post"><input type="hidden" name="intent" value="save_target"><label for="yaml-file">Load YAML file (最大 64 KiB)</label><br><input id="yaml-file" type="file" accept=".yaml,.yml,text/yaml,text/plain"><br><p id="yaml-file-status" role="status" aria-live="polite"></p><label for="yaml">Target YAML</label><br><textarea id="yaml" name="yaml" rows="24" cols="100" maxlength="65536" required>${escapeHtml(input.yaml)}</textarea><br><button type="submit">Save target configuration</button></form></section><script type="module" src="/plugins/${encodeURIComponent(input.installationId)}/assets${CLIENT_BUNDLE_PATH}" defer></script></main>`;
-}
-
 export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): PluginDefinition {
   return definePlugin({
     manifest,
@@ -465,7 +374,23 @@ export function createSoulInjectorPlugin(repository: SoulInjectorPluginStore): P
           ? await repository.listDebugObservations(selectedSession.id, input.installationId, input.projectId, MAX_TIMELINE_OBSERVATIONS)
           : [];
         const error = typeof input.params.error === "string" ? input.params.error : undefined;
-        return { html: configForm({ installationId: input.installationId, yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n", cases, sessions, selectedSession, observations, targetConfigs, artifacts, reports, error }), title: "SoulInjector debugger", cache: "no-store" };
+        return {
+          html: renderDebuggerPage({
+            installationId: input.installationId,
+            yaml: saved?.yaml ?? "version: 1\ntargets:\n  - id: example\n    displayName: Example target\n    architecture: cortex-m\n    chip: replace-me\n    transport: swd\n    requiredPrimitives:\n      - identify\n",
+            cases,
+            sessions,
+            selectedSession,
+            observations,
+            targetConfigs,
+            artifacts,
+            reports,
+            error,
+            clientBundlePath: CLIENT_BUNDLE_PATH,
+          }),
+          title: "SoulInjector debugger",
+          cache: "no-store",
+        };
       },
     },
     handleAction: {

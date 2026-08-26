@@ -448,6 +448,9 @@ describe("SoulInjector plugin", () => {
     const plugin = createSoulInjectorPlugin(store());
     const asset = plugin.manifest.ui?.assets?.[0];
     expect(asset).toBeDefined();
+    // The manifest path must embed the declared digest so content-hashed
+    // caching can never serve bytes under a stale name.
+    expect(asset!.path).toBe(`/debugger/app.${asset!.sha256}.js`);
     const renderAsset = plugin.assets?.[asset!.path];
     expect(renderAsset).toBeDefined();
     const result = await renderAsset!({
