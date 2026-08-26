@@ -46,7 +46,13 @@ export const manifestSchema = z.object({
     wire: z.object({ command: z.string().min(1).max(256), schemaVersion: z.number().int().positive() }).strict(),
     requiresHumanApproval: z.boolean().optional(),
   }).strict()).max(256),
-  events: z.array(z.object({ kind: z.string().min(1).max(256), schemaVersion: z.number().int().positive(), description: z.string().max(2048).optional() }).strict()).max(256),
+  // Declared event kinds must fit the device envelope's 128-byte kind bound so a
+  // manifest can never declare a kind that a device is unable to send.
+  events: z.array(z.object({
+    kind: z.string().min(1).max(128),
+    schemaVersion: z.number().int().positive(),
+    description: z.string().max(2048).optional(),
+  }).strict()).max(256),
   ui: z.object({ routes: z.array(z.object({
     id: z.string().min(1).max(128),
     path: z.string().regex(/^\/(?:[A-Za-z0-9._~-]+\/?)*$/).max(256)

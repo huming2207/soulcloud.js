@@ -52,7 +52,14 @@ export const handshakeOutput = z.object({
 }).strict();
 
 export const eventInput = operation.extend({
-  event: z.object({ id: z.string().min(1).max(128), seq: uint64, kind: z.string().min(1).max(256), schema: z.number().int().positive(), receivedAt: z.string().datetime({ offset: true }), payload: z.unknown() }).strict(),
+  // The kind bound stays identical to the device MessagePack envelope
+  // (128 UTF-8 bytes, plugin-architecture.md §4.1) and the plugin_events.kind column.
+  event: z.object({ id: z.string().min(1).max(128), seq: uint64,
+    kind: z.string().min(1).max(128),
+    schema: z.number().int().positive(),
+    receivedAt: z.string().datetime({ offset: true }),
+    payload: z.unknown(),
+  }).strict(),
   installation: z.object({ id: z.string().min(1).max(128), projectId: z.string().uuid(), pluginId: z.string().min(1).max(128), pluginVersion: z.string().min(1).max(128), config: z.unknown() }).strict(),
   device: z.object({ id: z.string().uuid(), uid: z.string().min(1).max(256), profileId: z.string().min(1).max(128), profileVersion: z.number().int().positive() }).strict(),
   execution: z.object({ executionId: z.string().uuid(), executionToken: z.string().min(32).max(256) }).strict().optional(),
