@@ -101,6 +101,30 @@ import {
   unavailable,
 } from "./helpers";
 
+/** Deadline for one SSR/UI RPC, configurable via PLUGIN_SSR_TIMEOUT_MS. */
+function ssrTimeoutMs(manager: PluginManager): number {
+  return manager.options.ssrTimeoutMs ?? 30_000;
+}
+
+/**
+ * Run one SSR/UI RPC inside the dedicated SSR concurrency budget.
+ * Fail-fast when the budget is exhausted instead of queueing unboundedly;
+ * the error maps to 503 with a distinct public code so callers can tell SSR
+ * overload apart from plugin failures (see plugin-rpc-protocol.md error table).
+ */
+async function withSsrSlot<T>(manager: PluginManager, run: () => Promise<T>): Promise<T> {
+  const limit = manager.options.ssrMaxConcurrency ?? 8;
+  if (manager.ssrInFlight >= limit) {
+    throw publicError("plugin UI render concurrency limit reached", 503, "ssr_overloaded");
+  }
+  manager.ssrInFlight += 1;
+  try {
+    return await run();
+  } finally {
+    manager.ssrInFlight -= 1;
+  }
+}
+
 export async function renderPluginUiImpl(manager: PluginManager, session: PluginUiSession, requestId: string, params: Record<string, string | number | boolean>): Promise<unknown> {
   return manager.callUi(session, "ui.render", { requestId, params });
 }
@@ -153,55 +177,58 @@ export async function getPluginUiAssetImpl(manager: PluginManager, session: Plug
   const descriptor = manifest?.ui?.assets?.find((asset) => asset.path === assetPath);
   if (!descriptor) throw Object.assign(new Error("plugin UI asset is not declared"), { status: 404 });
   const { connection } = manager.requireConnectedManifest(session.pluginId, session.pluginVersion, session.manifestHash);
-  const operationId = crypto.randomUUID();
-  const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-  manager.registerOperation(operationId, {
-    kind: "ui",
-    operationTokenHash: hashOperationToken(operationToken),
-    connectionId: connection.id,
-    installationId: session.installationId,
-    projectId: session.projectId,
-    pluginId: session.pluginId,
-    pluginVersion: session.pluginVersion,
-    userId: session.sub,
-    deadline: performance.now() + 30_000,
-    state: "active",
-    reverseCalls: 0,
-    inFlightReverseCalls: 0,
-    stagedCommandCount: 0,
-    stagedCommandBytes: 0,
-    reverseSettledWaiters: new Set(),
-  });
-  try {
-    const result = await connection.request("ui.asset", {
-      operationId,
-      operationToken,
-      requestId,
-      assetPath,
-      routeId: session.routeId,
+  return withSsrSlot(manager, async () => {
+    const deadlineMs = ssrTimeoutMs(manager);
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    manager.registerOperation(operationId, {
+      kind: "ui",
+      operationTokenHash: hashOperationToken(operationToken),
+      connectionId: connection.id,
       installationId: session.installationId,
       projectId: session.projectId,
-      user: { id: session.sub, locale: session.locale, permissions: session.permissions },
-    }, 30_000);
-    assertRpcValueBudget(result, manager.valueBudget);
-    let parsed: ReturnType<typeof uiAssetOutput.parse>;
+      pluginId: session.pluginId,
+      pluginVersion: session.pluginVersion,
+      userId: session.sub,
+      deadline: performance.now() + deadlineMs,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set(),
+    });
     try {
-      parsed = uiAssetOutput.parse(result);
-    } catch (error) {
-      throw publicError(`plugin UI asset output is invalid: ${(error as Error).message}`, 502, "plugin_ui_invalid_output");
+      const result = await connection.request("ui.asset", {
+        operationId,
+        operationToken,
+        requestId,
+        assetPath,
+        routeId: session.routeId,
+        installationId: session.installationId,
+        projectId: session.projectId,
+        user: { id: session.sub, locale: session.locale, permissions: session.permissions },
+      }, deadlineMs);
+      assertRpcValueBudget(result, manager.valueBudget);
+      let parsed: ReturnType<typeof uiAssetOutput.parse>;
+      try {
+        parsed = uiAssetOutput.parse(result);
+      } catch (error) {
+        throw publicError(`plugin UI asset output is invalid: ${(error as Error).message}`, 502, "plugin_ui_invalid_output");
+      }
+      if (parsed.contentType !== descriptor.contentType) {
+        throw publicError("plugin UI asset content type differs from its manifest", 502, "plugin_ui_invalid_output");
+      }
+      if (await sha256BytesHex(parsed.body) !== descriptor.sha256) {
+        throw publicError("plugin UI asset bytes differ from its manifest hash", 502, "plugin_ui_invalid_output");
+      }
+      await manager.sealOperation(operationId);
+      await manager.assertUiSessionCurrent(session);
+      return parsed;
+    } finally {
+      manager.finishOperation(operationId);
     }
-    if (parsed.contentType !== descriptor.contentType) {
-      throw publicError("plugin UI asset content type differs from its manifest", 502, "plugin_ui_invalid_output");
-    }
-    if (await sha256BytesHex(parsed.body) !== descriptor.sha256) {
-      throw publicError("plugin UI asset bytes differ from its manifest hash", 502, "plugin_ui_invalid_output");
-    }
-    await manager.sealOperation(operationId);
-    await manager.assertUiSessionCurrent(session);
-    return parsed;
-  } finally {
-    manager.finishOperation(operationId);
-  }
+  });
 }
 
 export async function callUiImpl(manager: PluginManager, session: PluginUiSession, method: "ui.render" | "ui.handleAction", input: { requestId: string; params: Record<string, string | number | boolean>; action?: unknown }): Promise<unknown> {
@@ -215,63 +242,66 @@ export async function callUiImpl(manager: PluginManager, session: PluginUiSessio
   const manifest = manager.getManifest(session.pluginId, session.pluginVersion);
   if (!manifest?.ui?.routes.some((route) => route.id === session.routeId)) throw new Error("plugin UI route is not declared");
   const { connection } = manager.requireConnectedManifest(session.pluginId, session.pluginVersion, session.manifestHash);
-  const operationId = crypto.randomUUID();
-  const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-  manager.registerOperation(operationId, {
-    kind: "ui",
-    operationTokenHash: hashOperationToken(operationToken),
-    connectionId: connection.id,
-    installationId: session.installationId,
-    projectId: session.projectId,
-    pluginId: session.pluginId,
-    pluginVersion: session.pluginVersion,
-    userId: session.sub,
-    deadline: performance.now() + 30_000,
-    state: "active",
-    reverseCalls: 0,
-    inFlightReverseCalls: 0,
-    stagedCommandCount: 0,
-    stagedCommandBytes: 0,
-    reverseSettledWaiters: new Set(),
-  });
-  try {
-    let result: unknown;
+  return withSsrSlot(manager, async () => {
+    const deadlineMs = ssrTimeoutMs(manager);
+    const operationId = crypto.randomUUID();
+    const operationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    manager.registerOperation(operationId, {
+      kind: "ui",
+      operationTokenHash: hashOperationToken(operationToken),
+      connectionId: connection.id,
+      installationId: session.installationId,
+      projectId: session.projectId,
+      pluginId: session.pluginId,
+      pluginVersion: session.pluginVersion,
+      userId: session.sub,
+      deadline: performance.now() + deadlineMs,
+      state: "active",
+      reverseCalls: 0,
+      inFlightReverseCalls: 0,
+      stagedCommandCount: 0,
+      stagedCommandBytes: 0,
+      reverseSettledWaiters: new Set(),
+    });
     try {
-      result = await connection.request(method, {
-        operationId,
-        operationToken,
-        requestId: input.requestId,
-        routeId: session.routeId,
-        installationId: session.installationId,
-        projectId: session.projectId,
-        user: { id: session.sub, locale: session.locale, permissions: session.permissions },
-        params: input.params,
-        ...(method === "ui.handleAction" ? { action: input.action } : {}),
-      }, 30_000);
+      let result: unknown;
       try {
-        assertRpcValueBudget(result, manager.valueBudget);
+        result = await connection.request(method, {
+          operationId,
+          operationToken,
+          requestId: input.requestId,
+          routeId: session.routeId,
+          installationId: session.installationId,
+          projectId: session.projectId,
+          user: { id: session.sub, locale: session.locale, permissions: session.permissions },
+          params: input.params,
+          ...(method === "ui.handleAction" ? { action: input.action } : {}),
+        }, deadlineMs);
+        try {
+          assertRpcValueBudget(result, manager.valueBudget);
+        } catch (error) {
+          throw new Error(`INVALID_PLUGIN_OUTPUT: ${(error as Error).message}`);
+        }
       } catch (error) {
-        throw new Error(`INVALID_PLUGIN_OUTPUT: ${(error as Error).message}`);
+        const message = error instanceof Error ? error.message : String(error);
+        if (/INVALID_PLUGIN_OUTPUT/.test(message)) throw publicError(message, 502, "plugin_ui_invalid_output");
+        throw error;
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (/INVALID_PLUGIN_OUTPUT/.test(message)) throw publicError(message, 502, "plugin_ui_invalid_output");
-      throw error;
+      let parsed: ReturnType<typeof uiRenderOutput.parse> | ReturnType<typeof uiActionOutput.parse>;
+      try {
+        parsed = method === "ui.render" ? uiRenderOutput.parse(result) : uiActionOutput.parse(result);
+      } catch (error) {
+        throw publicError(`plugin UI output is invalid: ${(error as Error).message}`, 502, "plugin_ui_invalid_output");
+      }
+      await manager.sealOperation(operationId);
+      // Do not return a page rendered from a snapshot that was disabled or
+      // migrated while the plugin call was in flight.
+      await manager.assertUiSessionCurrent(session);
+      return parsed;
+    } finally {
+      manager.finishOperation(operationId);
     }
-    let parsed: ReturnType<typeof uiRenderOutput.parse> | ReturnType<typeof uiActionOutput.parse>;
-    try {
-      parsed = method === "ui.render" ? uiRenderOutput.parse(result) : uiActionOutput.parse(result);
-    } catch (error) {
-      throw publicError(`plugin UI output is invalid: ${(error as Error).message}`, 502, "plugin_ui_invalid_output");
-    }
-    await manager.sealOperation(operationId);
-    // Do not return a page rendered from a snapshot that was disabled or
-    // migrated while the plugin call was in flight.
-    await manager.assertUiSessionCurrent(session);
-    return parsed;
-  } finally {
-    manager.finishOperation(operationId);
-  }
+  });
 }
 
 export async function assertUiSessionCurrentImpl(manager: PluginManager, session: Pick<PluginUiSession, "installationId" | "projectId" | "sub" | "pluginId" | "pluginVersion" | "manifestHash">,

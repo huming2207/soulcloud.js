@@ -36,6 +36,12 @@ const envSchema = z.object({
   PLUGIN_UI_SESSION_TTL_SECONDS: z.coerce.number().int().positive().max(900).default(300),
   PLUGIN_ARTIFACT_MAX_BYTES: z.coerce.number().int().positive().max(64 * 1024 * 1024).default(64 * 1024 * 1024),
   PLUGIN_ARTIFACT_UPLOAD_TIMEOUT_MS: z.coerce.number().int().positive().max(1_800_000).default(600_000),
+  /** Render deadline for one SSR/UI RPC (ui.render, ui.handleAction, ui.asset). */
+  PLUGIN_SSR_TIMEOUT_MS: z.coerce.number().int().positive().max(600_000).default(30_000),
+  /** Independent SSR concurrency budget; kept separate from the event
+   *  consumer and internal API operation limits so one slow page cannot
+   *  exhaust them. */
+  PLUGIN_SSR_MAX_CONCURRENCY: z.coerce.number().int().positive().max(256).default(8),
   PLUGIN_EVENT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   PLUGIN_EVENT_LEASE_MS: z.coerce.number().int().min(1_000).default(60_000),
   PLUGIN_EVENT_BATCH_SIZE: z.coerce.number().int().positive().max(256).default(32),

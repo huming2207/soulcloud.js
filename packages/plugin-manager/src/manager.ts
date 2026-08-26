@@ -128,6 +128,11 @@ export interface PluginManagerOptions {
   retentionMaxBatches?: number;
   /** Absolute wall-clock budget for reading and forwarding one artifact body. */
   artifactUploadTimeoutMs?: number;
+  /** Render deadline for one SSR/UI RPC (ui.render, ui.handleAction, ui.asset). */
+  ssrTimeoutMs?: number;
+  /** Independent SSR concurrency budget; a slow page must not consume the
+   *  event-consumer or internal-API operation budgets. */
+  ssrMaxConcurrency?: number;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -248,6 +253,8 @@ export class PluginManager {
   maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   maintenanceRunning: Promise<void> | null = null;
   stopping = false;
+  /** In-flight SSR/UI RPC count guarded by options.ssrMaxConcurrency. */
+  ssrInFlight = 0;
   readonly log: (message: string, fields?: Record<string, unknown>) => void;
   readonly valueBudget: RpcValueBudget;
 

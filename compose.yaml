@@ -144,6 +144,8 @@ services:
       PLUGIN_RETENTION_MAX_BATCHES: ${PLUGIN_RETENTION_MAX_BATCHES:-8}
       PLUGIN_ARTIFACT_MAX_BYTES: ${PLUGIN_ARTIFACT_MAX_BYTES:-67108864}
       PLUGIN_ARTIFACT_UPLOAD_TIMEOUT_MS: ${PLUGIN_ARTIFACT_UPLOAD_TIMEOUT_MS:-600000}
+      PLUGIN_SSR_TIMEOUT_MS: ${PLUGIN_SSR_TIMEOUT_MS:-30000}
+      PLUGIN_SSR_MAX_CONCURRENCY: ${PLUGIN_SSR_MAX_CONCURRENCY:-8}
     # Keep the independent Plugin Manager service bounded as well.  Its
     # application budgets protect individual operations; these deployment
     # limits protect the host when a plugin floods events or responses.
