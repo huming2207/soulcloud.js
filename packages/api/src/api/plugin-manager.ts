@@ -426,8 +426,15 @@ export function createPluginManagerRoutes(prisma: PrismaClient, jwt: JwtConfig, 
       const route = manifest?.ui?.routes?.find((item) => item.id === params.routeId);
       if (!snapshot || snapshot.manifestHash.trim() !== installation.manifestHash.trim() || !route) { set.status = 404; return { error: "not_found", message: "plugin UI route not found" }; }
       const locale = typeof query?.locale === "string" && query.locale.length <= 32 ? query.locale : "en";
+      // The permission snapshot is a read-only claim for the plugin's own UI
+      // rendering; platform authorization stays here and in the Manager. The
+      // platform has no role model yet (user_projects is membership-only), so
+      // sessions carry the generic base permission granted to every verified
+      // project member instead of an empty snapshot. Product-specific
+      // permissions (debug.case.view etc.) replace or extend this list once a
+      // role/permission source exists.
       const ttlSeconds = options.uiSessionTtlSeconds ?? 300;
-      const session = signPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds }, { sub: user.user.id, projectId: installation.projectId, installationId, pluginId: installation.pluginId, pluginVersion: installation.pluginVersion, manifestHash: installation.manifestHash.trim(), routeId: params.routeId, permissions: [], locale });
+      const session = signPluginUiSession({ secret: options.uiSessionSecret, ttlSeconds }, { sub: user.user.id, projectId: installation.projectId, installationId, pluginId: installation.pluginId, pluginVersion: installation.pluginVersion, manifestHash: installation.manifestHash.trim(), routeId: params.routeId, permissions: ["plugin_ui.render"], locale });
       const uiOrigin = options.uiOrigin?.replace(/\/$/, "");
       if (!uiOrigin) { set.status = 503; return { error: "plugin_ui_unavailable", message: "plugin UI origin is not configured" }; }
       return { bootstrap_url: `${uiOrigin}/bootstrap`, bootstrap_token: session, path: `/plugins/${installationId}${route.path}`, expires_in: ttlSeconds };
