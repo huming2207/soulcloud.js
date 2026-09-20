@@ -176,16 +176,16 @@ export function attachDispatch(
     guards?.workCapacity ?? DEFAULT_WORK_CAPACITY,
     guards?.workMaxBytes ?? DEFAULT_WORK_MAX_BYTES,
   );
-  const preHandledEvents = new WeakSet<object>();
+  const preHandledUplinks = new WeakSet<object>();
   const authorizePublish = aedes.authorizePublish.bind(aedes);
 
   // Aedes writes a QoS 1 PUBACK before emitting its `publish` event. Gate the
-  // generic /event path here so a valid event is durable before ACK. Invalid
+  // events and terminal results here so they are durable before ACK. Invalid
   // device data is deliberately acknowledged and dropped; a database failure
   // is returned to Aedes so the device retransmits instead of losing data.
   aedes.authorizePublish = (client, packet, callback) => {
     authorizePublish(client, packet, (authorizationError) => {
-      if (authorizationError || !client || !isOwnEventTopic(client.id, packet.topic)) {
+      if (authorizationError || !client || !isOwnDurableTopic(client.id, packet.topic)) {
         callback(authorizationError);
         return;
       }
@@ -194,14 +194,13 @@ export function attachDispatch(
         : (packet.payload ?? Buffer.alloc(0));
       if (guards && payload.length > guards.maxPacketBytes) {
         log.warn("dropped oversized uplink packet", { deviceUid: client.id, payloadBytes: payload.length, maxBytes: guards.maxPacketBytes });
-        preHandledEvents.add(packet);
+        preHandledUplinks.add(packet);
         callback(null);
         return;
       }
       if (limiter && !limiter.tryConsume(client.id, 1)) {
         log.warn("dropped uplink packet over rate limit", { deviceUid: client.id });
-        preHandledEvents.add(packet);
-        callback(null);
+        callback(new Error("broker uplink rate limit reached"));
         return;
       }
       const accepted = workQueue.enqueue({
@@ -209,8 +208,8 @@ export function attachDispatch(
         byteSize: payload.length,
         run: async () => {
           try {
-            await persistDeviceEvent(prisma, client.id, payload, log);
-            preHandledEvents.add(packet);
+            await handleUplink(prisma, client.id, packet.topic, payload, log);
+            preHandledUplinks.add(packet);
             callback(null);
           } catch (error) {
             callback(error instanceof Error ? error : new Error(String(error)));
@@ -223,7 +222,7 @@ export function attachDispatch(
 
   aedes.on("publish", (packet, client) => {
     if (!client) return; // server-side or internal publishes
-    if (preHandledEvents.delete(packet)) return;
+    if (preHandledUplinks.delete(packet)) return;
     // defensive: mqtt-packet always produces a payload for PUBLISH, but a
     // missing one must never crash the broker via the sync event listener
     const payload =
@@ -328,22 +327,8 @@ async function handleUplink(
       await handleLog(prisma, deviceUid, payload, log, parsedLog);
       break;
     case "event":
-      await handleEvent(prisma, deviceUid, payload, log);
+      await persistDeviceEvent(prisma, deviceUid, payload, log);
       break;
-  }
-}
-
-async function handleEvent(
-  prisma: PrismaClient,
-  deviceUid: string,
-  payload: Uint8Array,
-  log: DispatchLog,
-): Promise<void> {
-  try {
-    await persistDeviceEvent(prisma, deviceUid, payload, log);
-  } catch {
-    // This fallback path runs after ACK (for direct/event-emitter callers).
-    // The real MQTT path is gated in authorizePublish and propagates failure.
   }
 }
 
@@ -394,10 +379,11 @@ async function persistDeviceEvent(
   }
 }
 
-function isOwnEventTopic(deviceUid: string, topic: string): boolean {
+function isOwnDurableTopic(deviceUid: string, topic: string): boolean {
   try {
     const parsed = parseDeviceTopic(topic);
-    return parsed.deviceUid === deviceUid && parsed.kind === "event";
+    return parsed.deviceUid === deviceUid &&
+      (parsed.kind === "event" || parsed.kind === "cmd/result" || parsed.kind === "ota/result");
   } catch {
     return false;
   }
@@ -442,6 +428,7 @@ async function handleCommandResult(
         deviceUid,
         error: (error as Error).message,
       });
+      throw error;
     }
   }
 }
@@ -492,6 +479,7 @@ async function handleOtaResult(
       jobId: result.job_id,
       error: (error as Error).message,
     });
+    throw error;
   }
 }
 
