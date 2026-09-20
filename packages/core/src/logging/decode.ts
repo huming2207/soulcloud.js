@@ -131,15 +131,10 @@ export function summarizeArgs(packetBytes: Uint8Array): DecodedArgsSummary | nul
  * N+1 query storm of per-event lookups): dictionaries are loaded once per
  * artifact, then events are matched in memory.
  */
-/**
- * Decodes a page of events with bounded dictionary queries (avoids the
- * N+1 query storm of per-event lookups): dictionaries are loaded once per
- * artifact, then events are matched in memory.
- */
 
 /** TTL for the decoded-dictionary cache (ms). */
 const DICTIONARY_TTL_MS = 60_000;
-/** Above this many cached artifacts, expired entries are evicted lazily. */
+/** Hard maximum of cached artifact dictionaries. */
 const DICTIONARY_CACHE_MAX = 200;
 
 interface DictionaryCacheEntry {
@@ -183,13 +178,15 @@ export async function decodeEventsBatch(
       }
       entry = { map, expiresAt: Date.now() + DICTIONARY_TTL_MS };
       dictionaryCache.set(artifactId, entry);
-      // bounded memory: lazily evict expired entries (artifacts can
-      // accumulate over the process lifetime; a stale entry is only
-      // ever re-fetched, but the Map must not grow unbounded)
+      // Evict expired entries first, then oldest insertions. A TTL alone
+      // cannot bound a burst of distinct, still-fresh dictionaries.
       if (dictionaryCache.size > DICTIONARY_CACHE_MAX) {
         const now = Date.now();
         for (const [id, e] of dictionaryCache) {
           if (e.expiresAt < now) dictionaryCache.delete(id);
+        }
+        while (dictionaryCache.size > DICTIONARY_CACHE_MAX) {
+          dictionaryCache.delete(dictionaryCache.keys().next().value!);
         }
       }
     }
