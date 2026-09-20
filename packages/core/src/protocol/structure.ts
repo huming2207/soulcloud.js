@@ -83,7 +83,10 @@ class Reader {
   }
 
   byte(): number {
-    return this.take(1)[0]!;
+    // Reuse the existing truncation error, but avoid allocating a view
+    // for every marker/length byte on the normal decoding path.
+    if (this.pos >= this.buf.length) this.take(1);
+    return this.buf[this.pos++]!;
   }
 }
 

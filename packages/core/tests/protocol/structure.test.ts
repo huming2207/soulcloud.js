@@ -29,3 +29,19 @@ describe("structure depth limit (M4)", () => {
     expect(() => validateMessagePackStructure(deep)).toThrow(/nesting exceeds limit/);
   });
 });
+
+describe("byte reads", () => {
+  test("truncated markers and length prefixes keep typed, precise errors", () => {
+    for (const [bytes, offset] of [[[], 0], [[0x91], 1], [[0xd9], 1], [[0xc4], 1]] as const) {
+      expect(() => validateMessagePackStructure(Uint8Array.from(bytes))).toThrow(
+        `truncated MessagePack payload: need 1 bytes at offset ${offset}, have 0`,
+      );
+    }
+  });
+
+  test("validates only the bytes of a nonzero-offset view", () => {
+    const backing = Uint8Array.from([0xc1, 0x92, 0x01, 0xc0, 0xc1]);
+    expect(() => validateMessagePackStructure(backing.subarray(1, 4))).not.toThrow();
+    expect(() => validateMessagePackStructure(backing.subarray(1, 3))).toThrow(/truncated/);
+  });
+});
